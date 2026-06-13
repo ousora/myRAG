@@ -18,6 +18,7 @@ Your task is to clean and structure this content into the following output:
 4. **Chunks** — Split the body content into semantically coherent chunks (max 512 characters each):
    - Each chunk has an id (starting from 1) and a `section_path` array representing the full hierarchical path of this section's title: e.g., ["Introduction"] for flat, or ["CNAPS2概览", "SAPS系统", "账户分类"] for nested headings. Use simple "section": "Introduction" for flat documents without clear hierarchy.
    - Preserve original line breaks and formatting within chunks
+   - Do NOT include section headers in the text — they are captured separately via `section_path` metadata only
 
 Rules:
 - Remove ads, navigation bars, footers, sidebars, comments sections, and other non-content elements

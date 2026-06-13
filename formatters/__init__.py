@@ -2,6 +2,7 @@
 
 
 import json
+import re
 from concurrent.futures import ThreadPoolExecutor, Future
 from typing import Any, Dict
 
@@ -64,10 +65,13 @@ def format_text(raw: str, source_type: str = "web") -> Dict[str, Any]:
         raise RuntimeError(f"LLM API request failed: {e}") from e
 
     try:
-        content = response.json()["choices"][0]["message"]["content"]
+        raw_content = response.json()["choices"][0]["message"]["content"]
     except (KeyError, IndexError) as e:
         raise ValueError(f"LLM returned invalid format: {e}") from e
 
+    # Strip code block markers from LLM response
+    content = re.sub(r'^```(?:json)?\s*\n', '', raw_content).strip() if isinstance(raw_content, str) else raw_content
+    
     try:
         result = json.loads(content)
     except json.JSONDecodeError as e:
