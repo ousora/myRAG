@@ -53,6 +53,25 @@ import myrag.parsers  # noqa: F401 — loads dispatcher (MarkItDown + Trafilatur
 logger = logging.getLogger(__name__)
 
 
+def _render_markdown_with_sections(result: dict) -> str:
+    """Build markdown text with proper ##/### headers from metadata.sections.
+
+    The LLM formatter's body field may or may not contain markdown headers
+    (it's non-deterministic). This function guarantees headers by rendering
+    them from metadata.sections, which is the reliable structured source.
+    """
+    lines = [f"# {result.get('title', 'Untitled')}"]
+
+    for section in result.get("metadata", {}).get("sections", []):
+        level = section.get("level", 2)
+        prefix = "#" * level
+        lines.append(f"{prefix} {section['title']}")
+
+    lines.append("")
+    lines.append(result.get("body", ""))
+    return "\n\n".join(lines) + "\n"
+
+
 def _resolve_parser(filepath: str):
     from myrag.parsers.dispatcher import resolve_parser as rp
     return rp(filepath)
@@ -77,73 +96,18 @@ class TextCleaner:
 
 
 class Chunker:
-    """Split text into overlapping chunks with semantic context.
+    """Facade — delegates to chunkers module for all chunking logic.
 
-    Accepts section_path from LLM formatter to generate proper headers.
-    Each output dict contains the chunked text along with its semantic context.
+    Kept in pipeline.py for backward compatibility with existing callers.
+    The canonical implementation lives in chunkers/__init__.py.
     """
+    from myrag.chunkers import Chunker as _RealChunker
 
-    def __init__(self, *, max_chars=512, min_chunk_chars=3, overlap_chars=64):
-        self.max_chars = max_chars
-        self.min_chunk_chars = min_chunk_chars
-        self.overlap_chars = overlap_chars
-
-    def _render_section_header(self, section_path: list[str]) -> str:
-        """Render a markdown header from the section path."""
-        if not section_path:
-            return ""
-        
-        # Use H3 for section-level headers (H2 is reserved for document title)
-        prefix = "##" if len(section_path) == 1 else f"{'# ' * min(len(section_path), 4).rstrip()}"
-        return "\n\n".join(f"{prefix} {s}" for s in section_path)
-
-    def chunk(self, text: str, *, section_path=None) -> list[dict]:
-        """Split text into chunks with semantic context.
-
-        Args:
-            text: Raw text content to split
-            section_path: List of section titles from LLM formatter
-                         e.g., ["What Is Changing?", "Structured Address"]
-
-        Returns:
-            List of dicts with 'text' and 'section_path' keys.
-        """
-        if not isinstance(text, str) or len(text.strip()) < self.min_chunk_chars:
-            return []
-
-        header = self._render_section_header(section_path) if section_path else ""
-        prefix_text = f"{header}\n\n" if header else ""
-        
-        # Build list of (chunk_index, chunk_text) pairs
-        chunks: list[dict] = []
-        start = 0
-        
-        while start + self.max_chars < len(text):
-            end = min(start + self.max_chars, len(text))
-            raw_chunk = text[start:end].strip()
-            
-            if len(raw_chunk) >= self.min_chunk_chars:
-                chunk_text = f"{prefix_text}{raw_chunk}"
-                chunks.append({
-                    "text": chunk_text,
-                    "section_path": section_path or ["General"],
-                })
-            
-            start += max(self.max_chars - self.overlap_chars, 1)
-
-        # Handle remaining text
-        remaining = text[start:].strip()
-        if remaining and len(remaining) >= self.min_chunk_chars:
-            chunk_text = f"{prefix_text}{remaining}"
-            chunks.append({
-                "text": chunk_text,
-                "section_path": section_path or ["General"],
-            })
-
-        return chunks
+    def __new__(cls, **kwargs):
+        return cls._RealChunker(**kwargs)
 
 
-def process_file(filepath: str, *, remove_page_breaks=True, collapse_whitespace=True, max_chars=512) -> list[dict]:
+def process_file(filepath: str, *, remove_page_breaks=True, collapse_whitespace=True, chunk_size=512) -> list[dict]:
     """Parse a single file and return structured chunks (traditional RAG).
 
     Pipeline: parser → cleaner → chunker → output dict list.
@@ -159,7 +123,7 @@ def process_file(filepath: str, *, remove_page_breaks=True, collapse_whitespace=
 
     raw_text = parser.parse(filepath)
     cleaned = TextCleaner(remove_page_breaks=remove_page_breaks, collapse_whitespace=collapse_whitespace).clean(raw_text)
-    chunks = Chunker(max_chars=max_chars).chunk(cleaned)
+    chunks = Chunker(chunk_size=chunk_size).chunk(cleaned)
 
     result = [
         {"text": chunk["text"], "metadata": {"source": filepath}}
@@ -170,15 +134,20 @@ def process_file(filepath: str, *, remove_page_breaks=True, collapse_whitespace=
 
 
 def process_file_hybrid(filepath: str, *, doc_id="doc_0", remove_page_breaks=True, 
-                        collapse_whitespace=True, max_chars=512):
-    """Parse file with LLM formatter → chunker → embedder (Hybrid A+B indexing).
+                        collapse_whitespace=True, chunk_size=512, store_path=None):
+    """Parse file with LLM formatter → chunker → embedder → sqlite-vec (Hybrid A+B).
 
-    Returns dict with two indexes ready for FAISS/Milvus:
+    Args:
+        filepath: Path to the document file.
+        doc_id: Unique identifier for this document in the index.
+        chunk_size: Max characters per chunk (LangChain splitter).
+        store_path: Optional path to sqlite-vec database. If provided, chunk
+                    vectors are persisted for later retrieval.
+
+    Returns dict with:
         chunks  — list of dicts with embedding data (A - fine-grained)
         document — single dict with summary + embedding (B - coarse-grained)
-    
-    Note: Embeddings require bge-m3 endpoint configured in embedders/bge_m3.py.
-          Set base_url to your local service before calling this function.
+        db_path  — path to sqlite-vec DB if store_path was provided, else None
     """
     from myrag.formatters import format_text_async
     
@@ -197,24 +166,17 @@ def process_file_hybrid(filepath: str, *, doc_id="doc_0", remove_page_breaks=Tru
     
     metadata = result.get("metadata", {})
     
-    # 3. Chunk with section headers
-    chunker = Chunker(max_chars=max_chars)
-    chunks_with_headers = []
+    # 3. Render markdown with headers from metadata.sections, then chunk
+    formatted_md = _render_markdown_with_sections(result)
+    chunker = Chunker(chunk_size=chunk_size)
+    all_chunks = chunker.chunk(formatted_md)
     
-    for section in metadata.get("sections", []):
-        title = section["title"] if isinstance(section, dict) else section
-        
-        # Find text belonging to this section (simplified — real impl would parse from result["chunks"])
-        pass  # TODO: Map sections to actual text ranges
-    
-    # For now, chunk the full cleaned text with a generic header
-    all_chunks = chunker.chunk(cleaned, section_path=["General"])
-    
-    # 4. Store in embedder (requires bge-m3 endpoint)
+    # 4. Embed + optionally persist to sqlite-vec
+    db_path = None
     try:
         from myrag.embedders import Embedder
     
-        e = Embedder()  # Uses default base_url: http://192.168.191.112:11435/v1 (bge-m3)
+        e = Embedder()
         stored_chunks = e.store_chunks(all_chunks, doc_id=doc_id)
         
         # Document-level index (B)
@@ -226,15 +188,37 @@ def process_file_hybrid(filepath: str, *, doc_id="doc_0", remove_page_breaks=Tru
             source_file=filepath,
             total_chunks=len(stored_chunks),
         )
+
+        # Persist to sqlite-vec if requested
+        if store_path:
+            from myrag.storage.sqlite_vec import SQLiteVecStore
+            db = SQLiteVecStore(store_path)
+            
+            # Store chunks with embeddings
+            db.upsert_chunks(stored_chunks, doc_id=doc_id)
+            
+            # Store document-level record
+            doc_embedding = stored_doc.get("embedding")
+            db.upsert_document(
+                title=result.get("title", "Untitled"),
+                tags=result.get("tags", []),
+                text_summary=summary_text,
+                source_file=filepath,
+                total_chunks=len(stored_chunks),
+                embedding=doc_embedding,
+            )
+            
+            db_path = store_path
+            logger.info("  → Persisted %d chunks + 1 doc to %s", len(stored_chunks), store_path)
         
     except Exception as exc:
-        logger.warning("Embedding failed (bge-m3 endpoint not configured): %s", exc)
+        logger.warning("Embedding/storage failed: %s", exc)
         stored_chunks = [{"text": c["text"], "section_path": c.get("section_path", ["General"]), 
                           "source_doc_id": doc_id, "chunk_index": i} for i, c in enumerate(all_chunks)]
         stored_doc = {
             "title": result.get("title", "Untitled"),
             "tags": result.get("tags", []),
-            "text_summary": summary_text[:500],
+            "text_summary": summary_text[:500] if 'summary_text' in dir() else "",
             "source_file": filepath,
             "total_chunks": len(stored_chunks),
         }
@@ -243,7 +227,8 @@ def process_file_hybrid(filepath: str, *, doc_id="doc_0", remove_page_breaks=Tru
         "chunks": stored_chunks,       # A - fine-grained index
         "document": stored_doc,         # B - coarse-grained index
         "format_result": result,        # Original LLM output (for metadata)
-        "md_path": None,                # TODO: write_to_md() if configured
+        "md_path": None,               # TODO: write_to_md() if configured
+        "db_path": db_path,             # sqlite-vec DB path (None if not persisted)
     }
 
 
@@ -276,7 +261,7 @@ def process_file_with_md(filepath: str, *, output_dir="./output/", **kwargs):
     return md_path
 
 
-def process_directory(dirpath: str, *, extensions=None, **kwargs) -> list[dict]:
+def process_directory(dirpath: str, *, extensions=None, chunk_size=512, **kwargs) -> list[dict]:
     """Walk a directory and process all supported files (traditional RAG)."""
     path = Path(dirpath)
 
@@ -307,17 +292,18 @@ def main():
     # process_file command (traditional)
     file_parser = subparsers.add_parser("process-file", help="Process a single file (traditional)")
     file_parser.add_argument("input", help="file to process")
-    file_parser.add_argument("--max-chars", type=int, default=512)
+    file_parser.add_argument("--chunk-size", type=int, default=512)
     
     # process_directory command (batch traditional)
     dir_parser = subparsers.add_parser("process-directory", help="Process all files in directory")
     dir_parser.add_argument("input", help="directory to process")
-    dir_parser.add_argument("--max-chars", type=int, default=512)
+    dir_parser.add_argument("--chunk-size", type=int, default=512)
     
     # hybrid command (A+B indexing)
     hybrid_parser = subparsers.add_parser("hybrid", help="Process with LLM formatter + Hybrid A+B indexing")
     hybrid_parser.add_argument("input", help="file to process")
     hybrid_parser.add_argument("--doc-id", default="doc_0", help="Document ID for storage")
+    hybrid_parser.add_argument("--store", default=None, help="Path to sqlite-vec database for persistence")
     
     # md command (generate markdown output)
     md_parser = subparsers.add_parser("md", help="Generate structured markdown output")
@@ -329,16 +315,18 @@ def main():
     logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 
     if args.command == "process-file":
-        chunks = process_file(args.input, max_chars=args.max_chars)
+        chunks = process_file(args.input, chunk_size=args.chunk_size)
         print(json.dumps(chunks, indent=2, ensure_ascii=False))
         
     elif args.command == "process-directory":
-        chunks = process_directory(args.input, max_chars=args.max_chars)
+        chunks = process_directory(args.input, chunk_size=args.chunk_size)
         print(json.dumps(chunks, indent=2, ensure_ascii=False))
         
     elif args.command == "hybrid":
-        result = process_file_hybrid(args.input, doc_id=args.doc_id)
+        result = process_file_hybrid(args.input, doc_id=args.doc_id, store_path=args.store)
         print(f"Chunks: {len(result['chunks'])}")
+        if result.get("db_path"):
+            print(f"DB:     {result['db_path']}")
         print(f"Document index created")
         if result["format_result"]:
             print(f"Title: {result['format_result'].get('title', 'N/A')}")

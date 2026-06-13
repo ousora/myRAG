@@ -31,9 +31,12 @@ build/
 # Generated output
 output/
 
+# Vector database files (local sqlite-vec)
+data/
+
 # Test artifacts (not tracked in git)
 .test/
 
 # Local config (if any secrets)
-config.yaml
+conf/config.yaml
 .env

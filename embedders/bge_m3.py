@@ -30,12 +30,21 @@ Schema:
 
 
 class Embedder:
-    """Wrap a local bge-m3 API server."""
+    """Wrap a local bge-m3 API server.
 
-    def __init__(self, *, base_url="http://192.168.191.112:11435", model="bge-m3"):
+    If no base_url is provided, reads from config (config/config.yaml).
+    """
+
+    def __init__(self, *, base_url: str = "", model: str = ""):
         import httpx
-        
-        self.client = httpx.Client(base_url=base_url, timeout=60)
+
+        # Load config defaults, then override with explicit params
+        from myrag.config import get_config
+        cfg = get_config()
+        base_url = base_url or cfg.embedding_base_url
+        model = model or cfg.embedding_model
+
+        self.client = httpx.Client(base_url=base_url, timeout=cfg.embedding_timeout)
         self.model = model
 
     def embed(self, text: str | list[str]) -> list[list[float]]:

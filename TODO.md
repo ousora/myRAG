@@ -1,42 +1,33 @@
 # myRAG — TODO (Persistent Task Tracker)
 
-## ✅ Completed
+## ✅ Completed (2026-06-14 Session)
 
-### Parsers & Cleaners
-- [x] PDF parser (PyMuPDF) — ISO 20022 document verified
-- [x] DOCX, HTML, Markdown, TXT parsers with dispatcher + decorator registry
-- [x] TextCleaner: control chars (\x07), page breaks, whitespace collapse
-- [x] Cleaner tests (5 passed)
+### Core Architecture
+- [x] LangChain MarkdownHeaderTextSplitter + RecursiveCharacterTextSplitter chunking
+- [x] sqlite-vec vector storage integrated (process_file_hybrid store_path=...)
+- [x] All endpoints centralized in conf/config.yaml + config.py loader
+- [x] Formatter prompt v2 with few-shot example + body completeness constraint
+- [x] Plain-text fallback when no markdown headers detected
 
-### Formatter & Writer
-- [x] LLM formatter (`format_text_async`) — max_tokens=8192, timeout=180s
-- [x] System prompt with nested `section_path` arrays + metadata sections with level
-- [x] Markdown writer with `_render_section_path()` auto H2-H5 indentation
-- [x] Formatter tests (10 passed)
+### Pipeline Fixes
+- [x] process_file_hybrid() chunks rendered markdown (from metadata.sections)
+- [x] sqlite-vec commit bug fixed (documents table was always 0 rows)
+- [x] Chunker H1 metadata bug fixed (docs without H1 returned ["General"])
+- [x] writer.py H1 collision + hardcoded Chinese filter removed
 
-### Pipeline & Docs
-- [x] `pipeline.py` — Scheme C documented: parser → cleaner → formatter → chunker → embedder
-- [x] README.md — architecture + directory structure + usage examples
-- [x] CHANGELOG.md, LICENSE (MIT), .gitignore
-- [x] `.github/copilot-clause.md`, `.github/copilot-instructions.md`
-- [x] `.test/` directory with `scripts/run_pdf_test.py` and `output/`
-
-### Git Setup
-- [x] Initialized git, pushed to github.com/ousora/myRAG.git (main)
-
-## 🚧 Pending — Tests (High Priority)
-- [ ] **parsers/tests** — unit tests for each parser (rules.md requirement)
-- [ ] **chunkers/tests** — chunker logic validation
-- [ ] **embedders/tests** — bge-m3 client mock test
-- [ ] **pipeline integration test** — end-to-end pipeline verification
-
-## 🚧 Pending — Core Features
-- [ ] Configure embedder `base_url` (bge-m3 endpoint)
-- [ ] Enable PaddleOCR support in pdf.py (pending dependency install)
-- [ ] Vector DB integration: embedders → FAISS/Milvus store
-
-## 🚧 Pending — Configuration
-- [ ] `.editorconfig` for consistent indentation/line endings
+### Tests
+- [x] Chunker: 8 unit tests (header split, metadata, oversized, plain-text fallback)
+- [x] All 22 tests pass (chunkers 8 + formatters 9 + cleaners 5)
 
 ---
-*Created 2026-06-13. Updated after formatter + cleaner fixes.*
+
+## 🚧 Pending
+
+### Tests
+- [ ] parser integration test — end-to-end from file to chunks
+- [ ] embedder mock test — verify bge-m3 client without real endpoint
+
+### Features
+- [ ] Hybrid search API — expose SQLiteVecStore.hybrid_search() as CLI/HTTP endpoint
+- [ ] Reranker integration — add cross-encoder reranking on top of vector search
+- [ ] Batch processing — process_directory() with sqlite-vec storage

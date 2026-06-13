@@ -64,24 +64,19 @@ def _render_section_path(path):
     if not path:
         return ""
     
-    # Clean up section names: skip empty entries and generic container wrappers
+    # Clean up section names: skip empty entries
     cleaned = []
-    import re
     for s in path:
         clean = s.strip()
         if not clean:
             continue
-        
-        # Skip generic container sections that LLM uses as wrappers
-        if clean.lower().startswith('cnaps概览') or clean.lower().startswith('cnaps子系统详解'):
-            continue
-            
         cleaned.append(clean)
     
     if not cleaned:
         return ""
-        
-    prefix = "##" if len(cleaned) == 1 else f"#{'#' * (len(cleaned)-2)}"
+    
+    # H2 for single-level, H3+ for nested (H1 is reserved for document title)
+    prefix = '#' * (len(cleaned) + 1)
     return "\n\n".join(f"{prefix} {s}" for s in cleaned)
 
 

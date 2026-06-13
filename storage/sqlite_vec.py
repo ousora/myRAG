@@ -92,6 +92,7 @@ class SQLiteVecStore:
             result = self.upsert_chunk(chunk, doc_id=doc_id, embedding=chunk["embedding"], 
                                        chunk_index=i)
             results.append(result)
+        self.conn.commit()
         return results
 
     def _parse_section_path(self, raw: str) -> list[str]:
@@ -162,11 +163,12 @@ class SQLiteVecStore:
         created_at = datetime.now(timezone.utc).isoformat()
 
         cursor = self.conn.execute(
-            """INSERT OR REPLACE INTO documents (title, tags, text_summary, source_file, 
-                                              total_chunks, created_at)
+            """INSERT INTO documents (title, tags, text_summary, source_file, 
+                                      total_chunks, created_at)
                VALUES (?, ?, ?, ?, ?, ?)""",
             (title, tags_json, text_summary[:1000], source_file, total_chunks, created_at)
         )
+        self.conn.commit()
 
         return {
             "id": cursor.lastrowid or 1,
@@ -285,4 +287,5 @@ class SQLiteVecStore:
 
     def close(self):
         """Close the database connection."""
+        self.conn.commit()
         self.conn.close()

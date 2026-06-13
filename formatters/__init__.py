@@ -11,8 +11,11 @@ import httpx
 from .prompts import get_system_prompt
 
 
-ENDPOINT = "http://192.168.191.112:8081/v1/chat/completions"
-MODEL = "Qwen/QwQ-32B-A3B-Claude-4.7-Opus-Reasoning-Distilled-APEX-I-Compact.gguf"
+def _get_config():
+    """Lazy-load config on first call."""
+    from myrag.config import get_config
+    return get_config()
+
 
 _executor = None
 
@@ -45,19 +48,21 @@ def format_text(raw: str, source_type: str = "web") -> Dict[str, Any]:
 
     prompt = get_system_prompt(source_type)
 
+    cfg = _get_config()
+
     try:
         response = httpx.post(
-            ENDPOINT,
+            cfg.llm_endpoint,
             json={
-                "model": MODEL,
+                "model": cfg.llm_model,
                 "messages": [
                     {"role": "system", "content": prompt},
                     {"role": "user", "content": raw.strip()},
                 ],
-                "temperature": 0.3,
-                "max_tokens": 8192,
+                "temperature": cfg.llm_temperature,
+                "max_tokens": cfg.llm_max_tokens,
             },
-            timeout=180,
+            timeout=cfg.llm_timeout,
         )
 
         response.raise_for_status()

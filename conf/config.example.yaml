@@ -1,0 +1,22 @@
+# myRAG Configuration
+# ===================
+# Copy this file to config.yaml and fill in your actual endpoints.
+# config.yaml is gitignored — safe for local IPs and secrets.
+# This example file IS committed to git for documentation.
+
+# ── LLM Service (formatters) ─────────────────────────────────────────
+llm:
+  # OpenAI-compatible chat completions endpoint
+  endpoint: "http://localhost:8081/v1/chat/completions"
+  model: "Qwen/QwQ-32B-A3B-Claude-4.7-Opus-Reasoning-Distilled-APEX-I-Compact.gguf"
+  # Generation parameters
+  temperature: 0.3
+  max_tokens: 8192
+  timeout: 180               # seconds for HTTP request
+
+# ── Embedding Service (embedders) ────────────────────────────────────
+embedding:
+  # OpenAI-compatible embeddings endpoint (bge-m3 via vLLM / Ollama)
+  base_url: "http://localhost:11435"
+  model: "bge-m3"
+  timeout: 60                # seconds for HTTP request
