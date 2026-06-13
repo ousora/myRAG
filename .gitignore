@@ -31,6 +31,9 @@ build/
 # Generated output
 output/
 
+# Test artifacts (not tracked in git)
+.test/
+
 # Local config (if any secrets)
 config.yaml
 .env
