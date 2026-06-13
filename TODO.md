@@ -1,33 +1,42 @@
-# myRAG — TODO (Persistent Task Tracker)
+# myRAG — TODO
 
-## ✅ Completed (2026-06-14 Session)
+## ✅ 已完成：Ingest 管线
 
-### Core Architecture
-- [x] LangChain MarkdownHeaderTextSplitter + RecursiveCharacterTextSplitter chunking
-- [x] sqlite-vec vector storage integrated (process_file_hybrid store_path=...)
-- [x] All endpoints centralized in conf/config.yaml + config.py loader
-- [x] Formatter prompt v2 with few-shot example + body completeness constraint
-- [x] Plain-text fallback when no markdown headers detected
+```
+.doc/file → parse → clean → format → chunk → embed → sqlite-vec
+```
 
-### Pipeline Fixes
-- [x] process_file_hybrid() chunks rendered markdown (from metadata.sections)
-- [x] sqlite-vec commit bug fixed (documents table was always 0 rows)
-- [x] Chunker H1 metadata bug fixed (docs without H1 returned ["General"])
-- [x] writer.py H1 collision + hardcoded Chinese filter removed
-
-### Tests
-- [x] Chunker: 8 unit tests (header split, metadata, oversized, plain-text fallback)
-- [x] All 22 tests pass (chunkers 8 + formatters 9 + cleaners 5)
+| 模块 | 状态 |
+|------|------|
+| 多格式解析 (PDF/DOCX/HTML/MD/TXT) | ✅ MarkItDown + Trafilatura |
+| 文本清洗 (control chars, page breaks, whitespace) | ✅ TextCleaner + YAML rules |
+| LLM 结构化 (title, tags, sections) | ✅ format_text_async() |
+| Markdown 渲染 + 输出 | ✅ write_to_md() / format_md() |
+| LangChain chunking (header-aware + oversized split + plain-text fallback) | ✅ |
+| bge-m3 嵌入 | ✅ Embedder |
+| sqlite-vec 持久化 (chunks + doc + FTS5) | ✅ process_file_hybrid(store_path=...) |
+| 配置集中管理 | ✅ conf/config.yaml + config.py |
+| 端到端验证 (cncc.txt) | ✅ 20 chunks, 向量检索准确 |
+| 单元测试 | ✅ 22 passed |
 
 ---
 
-## 🚧 Pending
+## 🚧 缺口：Query 端
 
-### Tests
-- [ ] parser integration test — end-to-end from file to chunks
-- [ ] embedder mock test — verify bge-m3 client without real endpoint
+ingest 把数据存进去了，但没有取出来的统一接口。
 
-### Features
-- [ ] Hybrid search API — expose SQLiteVecStore.hybrid_search() as CLI/HTTP endpoint
-- [ ] Reranker integration — add cross-encoder reranking on top of vector search
-- [ ] Batch processing — process_directory() with sqlite-vec storage
+| 缺口 | 说明 |
+|------|------|
+| **RAG 查询函数** | `rag_query(question, db_path)` — 检索 → 拼 context → 调 LLM 生成答案 |
+| **CLI search 命令** | `python -m myrag.pipeline search "question" --db data/cncc.db` |
+| **重新索引** | 同一 doc_id 重复 ingest 时的去重/更新策略 |
+| **批量摄入 + 存储** | `process_directory()` 目前不走 sqlite-vec |
+
+---
+
+## 📋 待办（按优先级）
+
+1. **[P0] RAG 查询接口** — 闭环：用户提问 → 检索 → 生成答案
+2. **[P1] CLI search 子命令** — 终端直接查
+3. **[P2] 批量摄入进 sqlite-vec** — process_directory 接入 storage
+4. **[P3] 去重/更新** — 同一 doc_id 重复索引的处理
