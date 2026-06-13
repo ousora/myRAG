@@ -1,0 +1,6 @@
+# Development dependencies for myRAG — installs everything in requirements.txt + dev extras
+-r requirements.txt
+
+pytest>=7.4           # Test runner
+ruff>=0.3             # Fast Python linter/formatter
+mypy>=1.8             # Type checking (optional)
