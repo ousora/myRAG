@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "myrag-pipeline"
+version = "0.1.0"
+description = "RAG data cleanup pipeline with multi-format parsers and bge-m3 embedding service."
+requires-python = ">=3.10"
+dependencies = [
+    "pymupdf>=1.24",           # PDF parsing (fast, supports OCR)
+    "python-docx>=1.1",        # DOCX parsing
+    "beautifulsoup4>=4.12",     # HTML parsing
+    "readability-lxml>=0.7",   # HTML content extraction
+    "markdown>=3.5",           # Markdown parsing
+    "paddleocr>=2.8",          # Image OCR (optional)
+    "tiktoken>=0.6",           # Token counting for chunking
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.4",
+    "ruff>=0.3",
+]
