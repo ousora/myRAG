@@ -13,7 +13,6 @@ dependencies = [
     "beautifulsoup4>=4.12",     # HTML parsing
     "readability-lxml>=0.7",   # HTML content extraction
     "markdown>=3.5",           # Markdown parsing
-    "paddleocr>=2.8",          # Image OCR (optional)
     "tiktoken>=0.6",           # Token counting for chunking
 ]
 
@@ -22,3 +21,4 @@ dev = [
     "pytest>=7.4",
     "ruff>=0.3",
 ]
+sqlite-vec = ["sqlite-vec"]  # Local vector storage (lightweight, single-file)

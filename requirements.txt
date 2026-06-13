@@ -8,3 +8,4 @@ tiktoken>=0.6              # Token counting for chunking
 
 # Optional (install via extras)
 paddleocr>=2.8             # Image OCR — install with: pip install myrag[pdf]
+sqlite-vec                 # Local vector DB — install with: pip install myrag[sqlite-vec]
