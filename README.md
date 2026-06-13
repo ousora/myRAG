@@ -1,9 +1,8 @@
 # myRAG — RAG Pipeline
 
 ```
-.doc/file → parse → clean → format → chunk → embed → sqlite-vec
-                                                       ↓
-                                                  可读 .md 输出
+.doc/file → parse → clean → format ─┬→ write_to_md()  → 可读 .md
+                                    └→ chunk → embed → sqlite-vec
 ```
 
 ## Architecture
