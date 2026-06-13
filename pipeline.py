@@ -228,8 +228,8 @@ def process_file_hybrid(filepath: str, *, doc_id="doc_0", remove_page_breaks=Tru
     # 4. Store in embedder (requires bge-m3 endpoint)
     try:
         from myrag.embedders import Embedder
-        
-        e = Embedder()
+    
+        e = Embedder()  # Uses default base_url: http://192.168.191.112:11435/v1 (bge-m3)
         stored_chunks = e.store_chunks(all_chunks, doc_id=doc_id)
         
         # Document-level index (B)

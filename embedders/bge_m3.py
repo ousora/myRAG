@@ -32,7 +32,7 @@ Schema:
 class Embedder:
     """Wrap a local bge-m3 API server."""
 
-    def __init__(self, *, base_url="http://127.0.0.1:8000", model="bge-m3"):
+    def __init__(self, *, base_url="http://192.168.191.112:11435", model="bge-m3"):
         import httpx
         
         self.client = httpx.Client(base_url=base_url, timeout=60)
