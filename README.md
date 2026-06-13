@@ -12,12 +12,12 @@
 Raw file (.pdf/.docx/.html/.md/.txt)
     ↓ parser.parse()              # MarkItDown / Trafilatura → text
     ↓ cleaner.clean()             # TextCleaner: noise removal
-    ↓ formatter.format_text()     # LLM → title, tags, sections[]
-        → write_to_md(result)     # human-readable .md
-    ↓ _render_markdown_with_sections(result)
-    ↓ chunker.chunk(md)           # LangChain MarkdownHeaderTextSplitter
-    ↓ embedder.store_chunks()     # bge-m3 → 1024-d vectors
-    ↓ SQLiteVecStore              # sqlite-vec: chunks + FTS5 + documents
+    ↓ formatter.format_text()     # LLM → {title, tags, sections, body}
+    ├→ write_to_md(result)        # 可读 .md 文件
+    └→ _render_markdown_with_sections(result)
+        ↓ chunker.chunk(md)       # LangChain MarkdownHeaderTextSplitter
+        ↓ embedder.store_chunks() # bge-m3 → 1024-d vectors
+        ↓ SQLiteVecStore          # sqlite-vec: chunks + FTS5 + documents
 ```
 
 ## Pipeline Components
