@@ -69,9 +69,14 @@ def format_text(raw: str, source_type: str = "web") -> Dict[str, Any]:
     except (KeyError, IndexError) as e:
         raise ValueError(f"LLM returned invalid format: {e}") from e
 
-    # Strip code block markers from LLM response
+     # Strip code block markers from LLM response
     content = re.sub(r'^```(?:json)?\s*\n', '', raw_content).strip() if isinstance(raw_content, str) else raw_content
     
+    # Extract the first valid JSON object — handles cases where LLM outputs extra text after JSON
+    json_match = re.search(r'\{.*\}', content, re.DOTALL)
+    if json_match:
+        content = json_match.group(0)
+
     try:
         result = json.loads(content)
     except json.JSONDecodeError as e:

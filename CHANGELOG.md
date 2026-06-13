@@ -1,29 +1,30 @@
-# Changelog — myrag-pipeline
+# Changelog — myRAG Pipeline
 
 ## [Unreleased]
 
-### Changed
-- **Cleaners module refactored** (`cleaners/`):
-    - Added control character removal (e.g., `\x07` BELL chars from PDFs) via `re.sub(r"[\x00-\x1f\x7f]", " ", text)`
-    - Improved page break regex to handle converted whitespace patterns: `-=_*\s+PAGE N\s+-=_*`
-    - `clean_text()` now accepts optional params (`remove_page_breaks`, `collapse_whitespace`) instead of using defaults
-- **Formatter prompts updated** (`formatters/prompts.py`):
-    - `sections`: changed from flat list `["Section 1"]` to structured objects `[{"level": 2, "title": "..."}]` with heading hierarchy levels
-    - `chunks.section`: renamed to `section_path: ["Introduction"]` (array representing full hierarchical path)
-- **Formatter writer enhanced** (`formatters/writer.py`):
-    - Added `_render_section_path()` helper — maps section depth to markdown header level (H2–H6)
-    - Sections list now renders with indentation based on `level` field
-    - Output metadata block includes `**Total words:** N | **Chunks:** M` summary line
-- **pipeline.py docstring**: clarified full Scheme C pipeline flow (parser → cleaner → formatter → chunker/embedder)
+### Changed (MarkItDown Migration)
+
+- **Unified parser backend** (`parsers/dispatcher.py`): replaced individual parsers with MarkItDownParser (pdf, docx, md, txt) and TrafilaturaParser (html). Registration via module-level `register()` calls instead of importlib.
+- **TextCleaner reorganized**: moved from inline class in `pipeline.py` + legacy `cleaners/` to dedicated `parsers/text_cleaner.py` (~120 lines) with YAML config support (`rules_config="custom.yaml"`). Old `cleaners/__init__.py` kept as backward-compat facade.
+- **Formatter prompt updated**: removed chunks section from LLM output; added `body` field (raw cleaned text for downstream chunking). Fixed `.format()` brace conflicts in JSON examples using double-brace escaping (`{{"level": 2}}`).
+- **Chunker redesigned** (`chunkers/__init__.py`): `chunk(text)` no longer accepts external `section_path`. Now auto-parses markdown headers (##, ###) via `_parse_sections()` regex and assigns semantic context per chunk. Falls back to ["General"] when no sections found.
+- **Writer simplified**: body written directly from LLM response — MarkItDown already produces properly formatted markdown with hierarchical headers. Removed duplicate header re-parsing logic.
+- **LLM output robustness** (`formatters/__init__.py`): added `re.search(r'\{.*\}', content, re.DOTALL)` to extract first valid JSON object from LLM responses that may include extra text (e.g., thinking process leakage).
 
 ### Added
-- **Tests: cleaners module** (`cleaners/tests/test_cleaner.py`) — unit tests for control char removal, page break detection, whitespace normalization, and empty input handling
+
+- `[tool.setuptools.packages.find] include = ["myrag*"]` in pyproject.toml for flat-layout editable install support.
+
+### Removed
+
+- Old parser files: `pdf.py`, `docx.py`, `html.py`, `md_parser.py`, `txt.py`.
+- Chunks section from formatter prompt and test assertions (chunking is now a downstream concern).
 
 ## [0.2.0] — 2026-06-13
 
 ### Added
 - **Formatters module** (`formatters/`): LLM-powered text formatting for raw copied content
-  - `format_text()` / `format_text_async()`: Clean and structure raw web/text into title, tags, metadata, chunks via local Qwen model
+  - `format_text()` / `format_text_async()`: Clean and structure raw web/text into title, tags, metadata via local Qwen model
   - `write_to_md()` / `format_md()`: Write structured results to markdown files or return as string
   - `prompts.py`: Configurable system prompts for different source types (`web`, `markdown`, `pdf_clip`)
 - **Tests**: Unit tests for formatters module (mocked httpx responses)

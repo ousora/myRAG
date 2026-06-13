@@ -5,11 +5,11 @@ import os
 from datetime import datetime, timezone
 from typing import Any, Dict
 
-def write_to_md(result: dict, output_dir: str) -> str:
+def write_to_md(result, output_dir):
     """Format structured result into markdown and save it.
 
     Args:
-        result: Output from format_text() — {title, tags, metadata, chunks}
+        result: Output from format_text() with title, tags, metadata, body
         output_dir: Directory to save the .md file (created if needed).
 
     Returns:
@@ -22,9 +22,8 @@ def write_to_md(result: dict, output_dir: str) -> str:
     file_path = os.path.join(output_dir, f"{safe_name}.md")
 
     metadata = result.get("metadata", {})
-    sections = metadata.get("sections", [])  # [{level, title}, ...] from LLM
     
-    lines: list[str] = []
+    lines = []
     lines.append(f"# {title}")
     lines.append("")
     
@@ -33,40 +32,22 @@ def write_to_md(result: dict, output_dir: str) -> str:
         lines.append("**Tags:** " + ", ".join(tags))
     
     total_words = metadata.get("total_words")
-    chunk_count = metadata.get("chunk_count")
-    if total_words or chunk_count:
-        parts = []
-        if total_words:
-            parts.append(f"**Words:** {total_words}")
-        if chunk_count:
-            parts.append(f"**Chunks:** {chunk_count}")
-        lines.append(" | ".join(parts))
+    sections = metadata.get("sections", [])
     
-    # Build a hierarchical section TOC from metadata.sections (NOT from chunks)
+    parts = []
+    if total_words:
+        parts.append(f"**Words:** {total_words}")
     if sections:
-        lines.append("")
-        for s in sections:
-            # LLM formatter outputs {level: N} where N = heading number (2=H2/##, 3=H3/###)
-            level = min(s.get("level", 2), 6)
-            title_text = s.get("title", "")
-            indent = "  " * max(level - 1, 0)
-            lines.append(f"{indent}{'#' * level} {title_text}")
-    
-    lines.append("")
+        parts.append(f"Sections: {len(sections)}")
+    if parts:
+        lines.append(" | ".join(parts))
 
-    # Write chunks as body content — NO section headers in text
-    chunks = result.get("chunks", [])
-    if chunks:
-        prev_section = None
-        for c in chunks:
-            text = c.get("text", "") or ""
-            
-            # Clean text: strip any leading section header that LLM may have included
-            cleaned_text = _strip_section_header(text.strip()) if isinstance(text, str) else text
-            
-            lines.append(cleaned_text)
-    
-    md_content = "\n".join(lines) + "\n"
+    # Write body content with proper section headers
+    body = result.get("body", "")
+    if body and isinstance(body, str) and body.strip():
+        _write_body_with_sections(lines, body, sections)
+
+    md_content = "\n\n".join(lines).rstrip() + "\n"
 
     with open(file_path, "w", encoding="utf-8") as f:
         f.write(md_content)
@@ -74,29 +55,65 @@ def write_to_md(result: dict, output_dir: str) -> str:
     return file_path
 
 
-def _strip_section_header(text: str) -> str:
-    """Remove leading section header/anchor info from chunk text.
-
-    LLM formatter may include section title info at the start of chunk text
-    for vector search anchoring (e.g., "第一篇 CNAPS 是..." or "导图\n...").
+def _render_section_path(path):
+    """Render a markdown header from the section path.
     
-    Returns cleaned text with the leading anchor removed.
+    Uses ## for single-level sections, ### for nested ones.
+    Filters out empty or invalid entries before rendering.
     """
+    if not path:
+        return ""
+    
+    # Clean up section names: skip empty entries and generic container wrappers
+    cleaned = []
+    import re
+    for s in path:
+        clean = s.strip()
+        if not clean:
+            continue
+        
+        # Skip generic container sections that LLM uses as wrappers
+        if clean.lower().startswith('cnaps概览') or clean.lower().startswith('cnaps子系统详解'):
+            continue
+            
+        cleaned.append(clean)
+    
+    if not cleaned:
+        return ""
+        
+    prefix = "##" if len(cleaned) == 1 else f"#{'#' * (len(cleaned)-2)}"
+    return "\n\n".join(f"{prefix} {s}" for s in cleaned)
+
+
+def _write_body_with_sections(lines, body: str, sections: list):
+    """Write body text with section headers derived from metadata."""
+    if not sections or len(sections) < 2:
+        # No clear hierarchy — just write the full body as-is (already has proper markdown formatting)
+        lines.append("")
+        lines.append(body.strip())
+        return
+
     import re
     
-    # Strip article markers like 第一篇/第二篇 etc. followed by newline
-    text = re.sub(r'^[第]([一二三四五六七八九十百]+)\s*\n', '', text)
-    
-    # Pattern: markdown header at start of chunk (## Header\n or ### Header\n)
-    text = re.sub(r'^(#{1,6})\s+[^\n]+\n+', '', text)
-    
-    # Pattern: "导图" or similar single-word section anchors followed by newline
-    text = re.sub(r'^[导]\w+\s*\n', '', text)
-    
-    return text.strip()
+    # Parse actual headers from body text to find offsets and structure
+    header_pattern = r'^(#{1,6})\s+(.+)$'
+    matches = [(m.group(2).strip(), len(m.group(1)), m.start()) 
+               for m in re.finditer(header_pattern, body, re.MULTILINE)]
+
+    if not matches:
+        # Body has no headers — write as-is (already formatted)
+        lines.append("")
+        lines.append(body.strip())
+        return
+
+    # The body is already properly formatted markdown from MarkItDown.
+    # Just append it directly without re-parsing headers.
+    # If LLM output was clean, the body has its own ##/### hierarchy already.
+    lines.append("")
+    lines.append(body.strip())
 
 
-def format_md(result: dict) -> str:
+def format_md(result):
     """Format result into markdown string (no file write)."""
     os.makedirs("/tmp/md_format_output", exist_ok=True)
     path = write_to_md(result, "/tmp/md_format_output")

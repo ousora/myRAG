@@ -19,15 +19,10 @@ VALID_RESPONSE = {
     "metadata": {
         "source_type": "web",
         "total_words": 150,
-        "chunk_count": 2,
         "sections": [{"level": 2, "title": "Introduction"}, {"level": 3, "title": "Usage"}],
         "created_at": "2026-06-13T14:30:00Z",
         "modified_date": None,
     },
-    "chunks": [
-        {"id": 1, "section_path": ["Introduction"], "text": "First chunk content."},
-        {"id": 2, "section_path": ["Usage"], "text": "Second chunk content."},
-    ],
 }
 
 
@@ -64,22 +59,6 @@ class TestFormatText:
         assert "title" in result
         assert "tags" in result
         assert "metadata" in result
-        assert "chunks" in result
-        assert len(result["chunks"]) == 2
-        assert result["chunks"][0]["id"] == 1
-
-    def test_short_text_single_chunk(self):
-        """Short text (<50 words) should produce a single chunk."""
-        short_raw = "A brief note."
-
-        # LLM will respond with 1 chunk for short input
-        response_data = {**VALID_RESPONSE, "metadata": {**VALID_RESPONSE["metadata"], "chunk_count": 1}}
-        response_data["chunks"] = [{"id": 1, "section_path": ["Note"], "text": "A brief note."}]
-
-        with patch("myrag.formatters.httpx.post", _mock_response(response_data)):
-            result = format_text(short_raw, source_type="web")
-
-        assert len(result["chunks"]) == 1
 
     def test_empty_input_raises_valueerror(self):
         """Empty input should raise ValueError."""

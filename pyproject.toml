@@ -22,3 +22,6 @@ dev = [
     "ruff>=0.3",
 ]
 sqlite-vec = ["sqlite-vec"]  # Local vector storage (lightweight, single-file)
+
+[tool.setuptools.packages.find]
+include = ["myrag*"]

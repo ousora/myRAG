@@ -2,8 +2,8 @@
 
 Pipeline flow:
     Raw file (.pdf/.docx/.txt)
-        ↓ parser.parse_file()     # Extract text from binary formats
-        ↓ cleaner.clean_text()    # Regex-based noise removal
+        ↓ parser.parse_file()     # Unified backend: MarkItDown + Trafilatura
+        ↓ cleaner.clean_text()    # Deterministic regex-based noise removal
         ↓ formatter.format_text()  # LLM semantic structuring → title/tags/chunks
             → write_to_md(result, output_dir/)   [human-readable .md]
         ↓ chunker.chunk(section_path=...)     # Physical splitting with section headers
@@ -48,7 +48,7 @@ import logging
 from pathlib import Path
 
 # Trigger parser registration at module load time
-import myrag.parsers  # noqa: F401 — loads all parsers via __init__ loop
+import myrag.parsers  # noqa: F401 — loads dispatcher (MarkItDown + Trafilatura)
 
 logger = logging.getLogger(__name__)
 
@@ -59,36 +59,21 @@ def _resolve_parser(filepath: str):
 
 
 class TextCleaner:
-    """Apply a series of cleaning steps to raw extracted text.
-
-    Runs before the LLM formatter — deterministic regex-based noise removal only.
-    Semantic understanding is delegated to format_text().
+    """Facade — delegates to parsers.text_cleaner.TextCleaner.
+    
+    Kept as a class in pipeline.py for backward compatibility with existing callers.
+    The actual implementation lives in parsers/text_cleaner.py (YAML config support).
     """
 
     def __init__(self, *, remove_page_breaks=True, collapse_whitespace=True):
-        self.remove_page_breaks = remove_page_breaks
-        self.collapse_whitespace = collapse_whitespace
+        from myrag.parsers.text_cleaner import TextCleaner as _RealCleaner  # noqa: F811
+        self._cleaner = _RealCleaner(
+            remove_page_breaks=remove_page_breaks,
+            collapse_whitespace=collapse_whitespace,
+        )
 
     def clean(self, text: str) -> str:
-        if not isinstance(text, str) or not text.strip():
-            return ""
-
-        import re
-        
-        # Remove control characters (PDFs often contain \x07 BELL chars etc.)
-        text = re.sub(r"[\x00-\x1f\x7f]", " ", text)
-        
-        if self.remove_page_breaks:
-            page_pattern = r"(?:^|\n)\s*[-=\*_]\s*(PAGE\s*\d+\s*)?\s*(-{2,})?"  # Match --- PAGE 1 --- with optional spaces (from \x07→space conversion)
-            text = re.sub(page_pattern, " ", text)
-
-        if self.collapse_whitespace:
-            text = re.sub(r"[ \t\v\f]+", " ", text)
-            text = re.sub(r"\n{3,}", "\n\n", text)
-
-        # Join lines preserving newlines between them (strip each line's trailing/leading whitespace only)
-        lines = [line.strip() for line in text.split("\n")]
-        return "\n".join(lines).strip()
+        return self._cleaner.clean(text)
 
 
 class Chunker:

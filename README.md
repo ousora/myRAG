@@ -3,128 +3,125 @@
 ## Architecture
 
 ```text
-Raw file (.pdf/.docx/.txt)
-    ↓ parser.parse_file()     # Extract text from binary formats
-    ↓ cleaner.clean_text()    # Regex-based noise removal (ads, nav bars, etc.)
-    ↓ formatter.format_text()  # LLM semantic structuring into title/tags/chunks
-        → write_to_md(result, output_dir/)   [human-readable .md]
-    ↓ chunker.chunk() or embedder.embed()     [optional vector DB pipeline]
+Raw file (.pdf/.docx/.html/.md/.txt)
+    ↓ parser.parse()            # MarkItDown / Trafilatura → Clean Markdown
+    ↓ cleaner.clean()           # TextCleaner: noise removal, anchor cleanup
+    ↓ formatter.format_text()   # LLM semantic structuring → title/tags/sections[]
+        → write_to_md(result)   [human-readable .md with hierarchical headers]
+    ↓ chunker.chunk(section_path=...)  [downstream: split into embedding-ready chunks]
+    ↓ embedder.store_chunks()             [optional vector DB pipeline]
 ```
 
 ## Pipeline Components (Scheme C)
 
-### 1. Parser (`parsers/`) — Text Extraction
-Extracts raw text from binary formats: PDF (PyMuPDF), DOCX (python-docx), HTML (BeautifulSoup+readability), Markdown, TXT (with encoding detection).
+### 1. Parser (`parsers/`) — Unified Text Extraction
+
+Uses **MarkItDown** for PDF, DOCX, Markdown, and TXT files; **Trafilatura** for HTML pages. Both convert directly to clean markdown/text format.
 
 **Usage:**
 ```python
-from myrag.parsers import resolve_parser
+from myrag.parsers.dispatcher import resolve_parser
 parser = resolve_parser("report.pdf")
-raw_text = parser.parse_file("/path/to/report.pdf")
+raw_text = parser.parse("/path/to/report.pdf")
 ```
 
-### 2. Cleaner (`cleaners/`) — Deterministic Noise Removal
-Regex-based cleaning: page breaks, extra whitespace, navigation bars. Runs **before** the LLM formatter to reduce token cost.
+Supported extensions: `pdf`, `docx`, `md` / `mkd`, `txt`, `html` / `htm`.
+
+### 2. TextCleaner (`parsers/text_cleaner.py`) — Deterministic Cleaning
+
+Removes noise artifacts via configurable regex rules (default + user overrides in YAML config): extra whitespace, leading markdown headers, repeated paragraphs. Runs before LLM to reduce token cost and improve output quality.
 
 ```python
-from myrag.cleaners import TextCleaner
-cleaned = TextCleaner().clean(raw_text)
+from myrag.parsers.text_cleaner import TextCleaner
+cleaned = TextCleaner.clean(raw_text)  # or: cleaned = TextCleaner.clean(raw_text, rules_config="custom_rules.yaml")
 ```
 
 ### 3. Formatter (`formatters/`) — LLM Semantic Structuring
-Calls local bge-m3 endpoint to produce structured output: title, tags, metadata, section_path arrays, and chunks (512 chars each).
+
+Calls local LLM endpoint (Qwen3.6-35B-A3B-MoE via llama.cpp at `192.168.191.112:8081`) to produce structured output with title, tags, and metadata.sections[]. The LLM does NOT output chunks — chunking is handled by the downstream Chunker module.
 
 **Usage:**
 ```python
 from myrag.formatters import format_text_async, write_to_md
 
-future = format_text_async(cleaned, source_type="web")
+future = format_text_async(cleaned, source_type="pdf")
 result = future.result(timeout=300)  # LLM response may take time
-write_to_md(result, "output/")       # Writes .md file
+write_to_md(result, "output/")       # Writes .md file with proper headers
 ```
 
-### 4. Chunker (`chunkers/`) — Fine-Grained Splitting (Optional)
-Splits formatter output into smaller chunks for embedding. Typically not needed — formatter already produces ~512-char semantic segments.
+### 4. Chunker (`chunkers/`) — Fine-Grained Splitting (Downstream)
+
+Splits the formatter's full text into smaller chunks for embedding. Automatically parses section headers from markdown to assign correct semantic context per chunk.
 
 ```python
 from myrag.chunkers import Chunker
-chunks = Chunker(max_chars=256).chunk(formatted_text)
+chunks = Chunker(max_chars=256).chunk(full_markdown_text)  # auto-detects ## sections
 ```
 
 ### 5. Embedder (`embedders/`) — Vector Indexing (Optional)
+
 Calls local bge-m3 embedding service for vector DB storage (FAISS/Milvus).
 
- ## Directory Structure
+## Directory Structure
 
-  ```text
-  myrag/
-  ├── parsers/          # File-type-specific document parsers
-  │   ├── dispatcher.py     # PARSERS registry + resolve_parser()
-  │   ├── pdf.py            # PyMuPDF parser
-  │   ├── docx.py           # python-docx parser
-  │   ├── html.py           # BeautifulSoup + readability parser
-  │   ├── md_parser.py      # markdown library parser
-  │   └── txt.py            # Plain text with encoding detection
-  ├── cleaners/         # TextCleaner for noise removal & normalization
-  ├── chunkers/         # Chunking module (max_chars, overlap)
-  ├── embedders/        # bge-m3 embedding client (OpenAI-compatible API)
-  ├── formatters/       # LLM-based text formatter + markdown writer
-  │   ├── __init__.py       # format_text() / format_text_async()
-  │   ├── prompts.py        # System prompt template
-  │   └── writer.py         # write_to_md() / format_md()
-  ├── pipeline.py     # process_file() + process_directory() entry points
-  ├── pyproject.toml  # Project config (setuptools build, dev deps)
-  ├── CHANGELOG.md    # Version history
-  ├── LICENSE         # MIT License
-  └── README.md       # This file
+```text
+myrag/
+├── parsers/          # Unified parser via MarkItDown / Trafilatura
+│   ├── dispatcher.py     # resolve_parser() routing logic
+│   └── text_cleaner.py   # TextCleaner: noise removal & normalization
+├── cleaners/         # Backward compat facade — re-exports TextCleaner + clean_text() from parsers.text_cleaner
+├── chunkers/         # Chunking module (max_chars, overlap)
+├── embedders/        # bge-m3 embedding client (OpenAI-compatible API)
+├── formatters/       # LLM-based text formatter + markdown writer
+│   ├── __init__.py     # format_text() / format_text_async()
+│   ├── prompts.py      # System prompt template (clean section_path constraints)
+│   └── writer.py       # write_to_md() — renders chunks with hierarchical headers
+├── pipeline.py       # process_file_with_md() + process_directory() entry points
+├── pyproject.toml    # Project config (setuptools build, dev deps)
+├── CHANGELOG.md      # Version history
+├── LICENSE           # MIT License
+└── README.md         # This file
 
-  .test/                  # Test artifacts (not tracked in git)
-  ├── output/             # Unit test results & formatted outputs (.json, .md)
-  └── scripts/            # Standalone test scripts for manual runs
-      └── run_pdf_test.py
-
-  .doc/                   # Raw input documents (PDFs, TXTs, etc.)
+.doc/                 # Raw input documents (PDFs, TXTs, etc.)
+.output/              # Formatted output (.md files)
 ```
 
 ## Quick Start
 
-### Parse a Single File (Traditional RAG)
+### Process a Single File to Markdown
 ```python
-from myrag.pipeline import process_file
+from myrag.pipeline import process_file_with_md
 
-chunks = process_file("report.pdf")  # Returns list[dict] with text + metadata
-print(json.dumps(chunks, indent=2))
+path = process_file_with_md("report.pdf", output_dir="output/")
+# Writes: output/report.md with proper H1/H2/H3 headers
 ```
 
-### Process Directory
-```python
-from myrag.pipeline import process_directory
-
-all_chunks = process_directory("./docs", max_chars=512)
-# Processes all supported files in ./docs/ recursively
+### CLI Usage
+```bash
+cd /home/colinvan/workspace && PYTHONPATH=/home/colinvan/workspace myrag/.venv/bin/python -m myrag.pipeline md ./myrag/.doc/cnaps.txt --output-dir ./myrag/output/
 ```
 
-### LLM-Formatted Output (Scheme C)
+### LLM-Formatted Output (Programmatic)
 ```python
 from myrag.formatters import format_text_async, write_to_md
 
 with open("cnaps.txt") as f:
     raw = f.read()[:15000]  # Truncate for testing
 
-future = format_text_async(raw, source_type="web")
-result = future.result(timeout=300)  # LLM response may take up to 2 minutes
-write_to_md(result, "output/")       # Writes output/title.md
+future = format_text_async(raw, source_type="txt")
+result = future.result(timeout=300)
+write_to_md(result, "output/")       # Writes output/title.md with headers
 ```
 
 ## Configuration
 
 - **Embedding Service**: `embedders/bge_m3.py` — set base_url for local bge-m3 endpoint
-- **LLM Endpoint**: `formatters/__init__.py` ENDPOINT + MODEL variables (defaults to your qwenpaw service)
+- **LLM Endpoint**: `formatters/__init__.py` ENDPOINT + MODEL variables (defaults to qwenpaw service at 192.168.191.112:8081)
 - **Chunk Size**: Default 512 chars, configurable via Chunker(max_chars=...)
 
 ## Testing
 
 ```bash
-cd myrag && python3 -m pytest formatters/tests/ -v
-# Expected: 10 passed
+cd myrag && PYTHONPATH=/home/colinvan/workspace python3 -m pytest formatters/tests/ cleaners/tests/ -v
+# Expected: passes with mock LLM responses
 ```
