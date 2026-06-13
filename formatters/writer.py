@@ -21,17 +21,17 @@ def write_to_md(result: dict, output_dir: str) -> str:
     safe_name = "".join(c if c.isalnum() or c in "-_." else "_" for c in title)
     file_path = os.path.join(output_dir, f"{safe_name}.md")
 
-    now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
-
     metadata = result.get("metadata", {})
     sections = metadata.get("sections", [])  # [{level, title}, ...] from LLM
     
     lines: list[str] = []
     lines.append(f"# {title}")
     lines.append("")
+    
     tags = result.get("tags", [])
     if tags:
         lines.append("**Tags:** " + ", ".join(tags))
+    
     total_words = metadata.get("total_words")
     chunk_count = metadata.get("chunk_count")
     if total_words or chunk_count:
@@ -41,45 +41,59 @@ def write_to_md(result: dict, output_dir: str) -> str:
         if chunk_count:
             parts.append(f"**Chunks:** {chunk_count}")
         lines.append(" | ".join(parts))
+    
+    # Build a hierarchical section TOC from metadata.sections (NOT from chunks)
+    if sections:
+        lines.append("")
+        for s in sections:
+            # LLM formatter outputs {level: N} where N = heading number (2=H2/##, 3=H3/###)
+            level = min(s.get("level", 2), 6)
+            title_text = s.get("title", "")
+            indent = "  " * max(level - 1, 0)
+            lines.append(f"{indent}{'#' * level} {title_text}")
+    
     lines.append("")
 
-    # Build a section header index from metadata.sections (NOT from chunks)
-    if sections:
-        lines.append("**Sections:**")
-        for s in sections:
-            level = min(s.get("level", 2), 6) - 1  # Convert to markdown heading (# + N-1)
-            title_text = s.get("title", "")
-            indent = "  " * max(level, 0)
-            marker = "#" * (level + 1) if level >= 1 else ""
-            lines.append(f"{indent}- {marker} {title_text}")
-        lines.append("")
-
-    # Write chunks as body — minimal markers for readability only when needed
+    # Write chunks as body content — NO section headers in text
     chunks = result.get("chunks", [])
     if chunks:
         prev_section = None
-        lines.append("")
-        for i, c in enumerate(chunks):
+        for c in chunks:
             text = c.get("text", "") or ""
-            sp = tuple(c.get("section_path") or ["General"])
             
-            # Only add a marker when section changes (not every chunk)
-            if prev_section and sp != prev_section:
-                path_str = " / ".join(sp) if isinstance(sp, list) else str(sp)
-                lines.append("")
-                lines.append(f"---")  # Section separator instead of header
-                lines.append("")
+            # Clean text: strip any leading section header that LLM may have included
+            cleaned_text = _strip_section_header(text.strip()) if isinstance(text, str) else text
             
-            lines.append(text.strip())
-            prev_section = sp
-        lines.append("")
-
-    md_content = "\n".join(lines)
+            lines.append(cleaned_text)
     
+    md_content = "\n".join(lines) + "\n"
+
     with open(file_path, "w", encoding="utf-8") as f:
         f.write(md_content)
     
     return file_path
+
+
+def _strip_section_header(text: str) -> str:
+    """Remove leading section header/anchor info from chunk text.
+
+    LLM formatter may include section title info at the start of chunk text
+    for vector search anchoring (e.g., "第一篇 CNAPS 是..." or "导图\n...").
+    
+    Returns cleaned text with the leading anchor removed.
+    """
+    import re
+    
+    # Strip article markers like 第一篇/第二篇 etc. followed by newline
+    text = re.sub(r'^[第]([一二三四五六七八九十百]+)\s*\n', '', text)
+    
+    # Pattern: markdown header at start of chunk (## Header\n or ### Header\n)
+    text = re.sub(r'^(#{1,6})\s+[^\n]+\n+', '', text)
+    
+    # Pattern: "导图" or similar single-word section anchors followed by newline
+    text = re.sub(r'^[导]\w+\s*\n', '', text)
+    
+    return text.strip()
 
 
 def format_md(result: dict) -> str:
@@ -90,5 +104,4 @@ def format_md(result: dict) -> str:
         return f.read()
 
 
-# Re-export for convenience from formatters module
 __all__ = ["format_md", "write_to_md"]
