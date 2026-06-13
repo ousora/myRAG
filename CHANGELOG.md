@@ -1,5 +1,24 @@
 # Changelog — myrag-pipeline
 
+## [Unreleased]
+
+### Changed
+- **Cleaners module refactored** (`cleaners/`):
+    - Added control character removal (e.g., `\x07` BELL chars from PDFs) via `re.sub(r"[\x00-\x1f\x7f]", " ", text)`
+    - Improved page break regex to handle converted whitespace patterns: `-=_*\s+PAGE N\s+-=_*`
+    - `clean_text()` now accepts optional params (`remove_page_breaks`, `collapse_whitespace`) instead of using defaults
+- **Formatter prompts updated** (`formatters/prompts.py`):
+    - `sections`: changed from flat list `["Section 1"]` to structured objects `[{"level": 2, "title": "..."}]` with heading hierarchy levels
+    - `chunks.section`: renamed to `section_path: ["Introduction"]` (array representing full hierarchical path)
+- **Formatter writer enhanced** (`formatters/writer.py`):
+    - Added `_render_section_path()` helper — maps section depth to markdown header level (H2–H6)
+    - Sections list now renders with indentation based on `level` field
+    - Output metadata block includes `**Total words:** N | **Chunks:** M` summary line
+- **pipeline.py docstring**: clarified full Scheme C pipeline flow (parser → cleaner → formatter → chunker/embedder)
+
+### Added
+- **Tests: cleaners module** (`cleaners/tests/test_cleaner.py`) — unit tests for control char removal, page break detection, whitespace normalization, and empty input handling
+
 ## [0.2.0] — 2026-06-13
 
 ### Added

@@ -6,6 +6,26 @@ from datetime import datetime, timezone
 from typing import Any, Dict
 
 
+def _render_section_path(section_path: list[str]) -> str:
+    """Render section path as a hierarchical header.
+
+    Args:
+        section_path: e.g., ["CNAPS2概览", "SAPS系统"] → level 3 (H3)
+                      ["A", "B", "C"] → level 4 (H4)
+
+    Returns:
+        Formatted markdown heading string.
+    """
+    if not section_path:
+        return ""
+
+    # Map path depth to header level (1 = H2, 2 = H3, etc.)
+    level = min(len(section_path), 5) + 1  # Clamp at H6
+    header_text = " ".join(section_path)
+
+    return f"{'#' * level} {header_text}"
+
+
 def write_to_md(result: dict, output_dir: str) -> str:
     """Format structured result into markdown and save it.
 
@@ -45,12 +65,20 @@ def write_to_md(result: dict, output_dir: str) -> str:
     sections = metadata.get("sections", [])
     if sections:
         lines.append("")
-        for section in sections:
-            lines.append(f"- {section}")
+        for s in sections:
+            title_text = s["title"] if isinstance(s, dict) else s
+            level_num = s.get("level", 2) if isinstance(s, dict) else 0
+            indent = "  " * (level_num - 2)
+            lines.append(f"{indent}- {title_text}")
+
+    total_words = metadata.get("total_words", 0)
+    chunk_count = metadata.get("chunk_count", len(result.get("chunks", [])))
+    lines.append("")
+    lines.append(f"**Total words:** {total_words} | **Chunks:** {chunk_count}")
 
     lines.append("\n---\n")
     for chunk in result.get("chunks", []):
-        section = chunk.get("section", "General")
+        section_path = chunk.get("section_path", [])
         text = chunk["text"].strip()
         if not text:
             continue
@@ -59,7 +87,8 @@ def write_to_md(result: dict, output_dir: str) -> str:
         while text.endswith("\n"):
             text = text[:-1]
 
-        lines.append(f"## {section}")
+        header = _render_section_path(section_path)
+        lines.append(header)
         lines.append("")
         lines.append(text)
         lines.append("")
@@ -101,12 +130,20 @@ def format_md(result: dict) -> str:
     sections = metadata.get("sections", [])
     if sections:
         lines.append("")
-        for section in sections:
-            lines.append(f"- {section}")
+        for s in sections:
+            title_text = s["title"] if isinstance(s, dict) else s
+            level_num = s.get("level", 2) if isinstance(s, dict) else 0
+            indent = "  " * (level_num - 2)
+            lines.append(f"{indent}- {title_text}")
+
+    total_words = metadata.get("total_words", 0)
+    chunk_count = metadata.get("chunk_count", len(result.get("chunks", [])))
+    lines.append("")
+    lines.append(f"**Total words:** {total_words} | **Chunks:** {chunk_count}")
 
     lines.append("\n---\n")
     for chunk in result.get("chunks", []):
-        section = chunk.get("section", "General")
+        section_path = chunk.get("section_path", [])
         text = chunk["text"].strip()
         if not text:
             continue
@@ -115,7 +152,8 @@ def format_md(result: dict) -> str:
         while text.endswith("\n"):
             text = text[:-1]
 
-        lines.append(f"## {section}")
+        header = _render_section_path(section_path)
+        lines.append(header)
         lines.append("")
         lines.append(text)
         lines.append("")

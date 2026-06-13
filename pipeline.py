@@ -1,9 +1,17 @@
-"""RAG data cleanup pipeline — parse → clean → chunk → embed.
+"""RAG data cleanup pipeline — parse → clean → format → chunk → embed.
+
+Pipeline flow (Scheme C):
+    Raw file (.pdf/.docx/.txt)
+        ↓ parser.parse_file() — extract text from binary formats
+        ↓ cleaner.clean_text() — regex-based noise removal (ads, nav bars, etc.)
+        ↓ formatter.format_text() — LLM semantic structuring into title/tags/chunks
+            → write_to_md(result, output_dir/)  [human-readable .md]
+        ↓ chunker.chunk() or embedder.embed()  [optional vector DB pipeline]
 
 Usage:
     from myrag.pipeline import process_file, process_directory
     
-    # Parse a single file
+    # Parse a single file (traditional RAG)
     chunks = process_file("path/to/report.pdf")
     
     # Or walk an entire directory
@@ -26,7 +34,11 @@ def _resolve_parser(filepath: str):
 
 
 class TextCleaner:
-    """Apply a series of cleaning steps to raw extracted text."""
+    """Apply a series of cleaning steps to raw extracted text.
+
+    Runs before the LLM formatter — deterministic regex-based noise removal only.
+    Semantic understanding is delegated to format_text().
+    """
 
     def __init__(self, *, remove_page_breaks=True, collapse_whitespace=True):
         self.remove_page_breaks = remove_page_breaks
@@ -80,6 +92,11 @@ class Chunker:
 def process_file(filepath: str, *, remove_page_breaks=True, collapse_whitespace=True, max_chars=512) -> list[dict]:
     """Parse a single file and return structured chunks.
 
+    Pipeline (Scheme C): parser → cleaner → chunker → output dict list.
+    
+    For LLM-formatted output, use:
+        from myrag.formatters import format_text_async
+    
     Returns list of dicts: [{"text": ..., "metadata": {...}}, ...]
     """
     parser = _resolve_parser(filepath)

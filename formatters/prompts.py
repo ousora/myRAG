@@ -12,12 +12,11 @@ Your task is to clean and structure this content into the following output:
    - source_type: {source_type}
    - total_words: count of meaningful words in the content
    - chunk_count: number of chunks to split this into
-   - sections: list of section headers found in the document
-   - created_at: current timestamp (ISO 8601 format, e.g., "2026-06-13T14:30:00Z")
+   - sections: list of section headers found in the document with their hierarchy levels, e.g., [{{"level": 2, "title": "Section 1"}}, ...]
+    - created_at: current timestamp (ISO 8601 format, e.g., "2026-06-13T14:30:00Z")
    - modified_date: last modification date if inferable from content, otherwise null
 4. **Chunks** — Split the body content into semantically coherent chunks (max 512 characters each):
-   - Each chunk has an id (starting from 1)
-   - Each chunk has a section header indicating which part of the document it belongs to
+   - Each chunk has an id (starting from 1) and a `section_path` array representing the full hierarchical path of this section's title: e.g., ["Introduction"] for flat, or ["CNAPS2概览", "SAPS系统", "账户分类"] for nested headings. Use simple "section": "Introduction" for flat documents without clear hierarchy.
    - Preserve original line breaks and formatting within chunks
 
 Rules:
@@ -34,14 +33,14 @@ Output ONLY valid JSON in this exact format:
     "source_type": "{source_type}",
     "total_words": <number>,
     "chunk_count": <number>,
-    "sections": ["Section 1", "Section 2"],
+    "sections": [{{"level": 2, "title": "Section 1"}}, ...],
     "created_at": "<ISO timestamp>",
     "modified_date": null or date string
   }},
   "chunks": [
     {{
       "id": 1,
-      "section": "Introduction",
+      "section_path": ["Introduction"],
       "text": "... content ..."
     }}
   ]

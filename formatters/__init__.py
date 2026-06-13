@@ -54,9 +54,9 @@ def format_text(raw: str, source_type: str = "web") -> Dict[str, Any]:
                     {"role": "user", "content": raw.strip()},
                 ],
                 "temperature": 0.3,
-                "max_tokens": 4096,
+                "max_tokens": 8192,
             },
-            timeout=60,
+            timeout=180,
         )
 
         response.raise_for_status()
@@ -85,7 +85,6 @@ def format_text_async(raw: str, source_type: str = "web") -> Future[Dict[str, An
 
 
 __all__ = ["format_text", "format_text_async"]
-
 
 # Re-export writer functions for convenience
 from .writer import format_md, write_to_md  # noqa: F401

@@ -1,23 +1,11 @@
-"""Text cleaning for RAG — remove noise, normalize content.
-
-Usage (standalone):
-    from myrag.cleaners import clean_text
-    
-Usage (via pipeline module):
-    from myrag.pipeline import process_file
-"""
-
-import re
+"""Text cleaning utilities for RAG pipelines."""
 
 
 class TextCleaner:
     """Apply a series of cleaning steps to raw extracted text.
 
-    Typical pipeline:
-        1. Remove page breaks and separators inserted by PDF parsers
-        2. Collapse whitespace (tabs → spaces, multiple newlines)
-        3. Remove headers/footers patterns
-        4. Normalize Unicode / half-width chars
+    Runs before the LLM formatter — deterministic regex-based noise removal only.
+    Semantic understanding is delegated to format_text().
     """
 
     def __init__(self, *, remove_page_breaks=True, collapse_whitespace=True):
@@ -28,25 +16,28 @@ class TextCleaner:
         if not isinstance(text, str) or not text.strip():
             return ""
 
-        # 1. Page breaks / separators
-        if self.remove_page_breaks:
-            page_pattern = r"(?:^|\n)\s*[-=\*_]{3,}\s*(PAGE\s*\d+\s*)?(?:\n|$)"
-            text = re.sub(page_pattern, "\n", text)
+        import re
 
-        # 2. Collapse whitespace
+        # Remove control characters (PDFs often contain \x07 BELL chars etc.)
+        text = re.sub(r"[\x00-\x1f\x7f]", " ", text)
+
+        if self.remove_page_breaks:
+            # Match page breaks: --- PAGE N ---, ===, or *** (with optional spaces from \x07→space conversion)
+            text = re.sub(r"(?:^|\n)\s*[-=_\*\s]+\s*(PAGE\s+\d+\s*)?\s*[-=_\*\s]+", " ", text)
+
         if self.collapse_whitespace:
-            # Normalize various whitespace to single space
             text = re.sub(r"[ \t\v\f]+", " ", text)
-            # Collapse multiple newlines (keep paragraph breaks up to 2 blank lines)
             text = re.sub(r"\n{3,}", "\n\n", text)
 
-        # 3. Strip leading/trailing whitespace from each line
+        # Join lines preserving newlines between them (strip each line's trailing/leading whitespace only)
         lines = [line.strip() for line in text.split("\n")]
-        text = "\n".join(lines).strip()
-
-        return text
+        return "\n".join(lines).strip()
 
 
-def clean_text(text: str) -> str:
-    """Convenience wrapper."""
-    return TextCleaner().clean(text)
+def clean_text(text: str, *, remove_page_breaks=True, collapse_whitespace=True) -> str:
+    """Convenience function to apply cleaning steps."""
+    cleaner = TextCleaner(
+        remove_page_breaks=remove_page_breaks,
+        collapse_whitespace=collapse_whitespace,
+    )
+    return cleaner.clean(text)
