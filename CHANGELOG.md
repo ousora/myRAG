@@ -1,5 +1,17 @@
 # Changelog — myrag-pipeline
 
+## [0.2.0] — 2026-06-13
+
+### Added
+- **Formatters module** (`formatters/`): LLM-powered text formatting for raw copied content
+  - `format_text()` / `format_text_async()`: Clean and structure raw web/text into title, tags, metadata, chunks via local Qwen model
+  - `write_to_md()` / `format_md()`: Write structured results to markdown files or return as string
+  - `prompts.py`: Configurable system prompts for different source types (`web`, `markdown`, `pdf_clip`)
+- **Tests**: Unit tests for formatters module (mocked httpx responses)
+
+### Changed
+- **.gitignore**: Added `.doc/` and `output/` to ignore user data directories
+
 ## [0.1.0] — 2026-06-13
 
 ### Added

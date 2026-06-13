@@ -25,6 +25,12 @@ build/
 .pytest_cache/
 .coverage*
 
+# User data / raw input documents
+.doc/
+
+# Generated output
+output/
+
 # Local config (if any secrets)
 config.yaml
 .env
