@@ -1,92 +1,89 @@
-# myRAG — RAG Data Cleanup Pipeline (Scheme C)
+# myRAG — RAG Pipeline
+
+```
+.doc/file → parse → clean → format → chunk → embed → sqlite-vec
+                                                       ↓
+                                                  可读 .md 输出
+```
 
 ## Architecture
 
 ```text
 Raw file (.pdf/.docx/.html/.md/.txt)
-    ↓ parser.parse()            # MarkItDown / Trafilatura → Clean Markdown
-    ↓ cleaner.clean()           # TextCleaner: noise removal, whitespace normalization
-    ↓ formatter.format_text()   # LLM semantic structuring → title/tags/sections[]
-        → write_to_md(result)   [human-readable .md with hierarchical headers]
-    ↓ chunker.chunk(text)       # Auto-parse headers, split into embedding-ready chunks
-    ↓ embedder.store_chunks()   [optional: vector DB indexing — Hybrid A+B]
+    ↓ parser.parse()              # MarkItDown / Trafilatura → text
+    ↓ cleaner.clean()             # TextCleaner: noise removal
+    ↓ formatter.format_text()     # LLM → title, tags, sections[]
+        → write_to_md(result)     # human-readable .md
+    ↓ _render_markdown_with_sections(result)
+    ↓ chunker.chunk(md)           # LangChain MarkdownHeaderTextSplitter
+    ↓ embedder.store_chunks()     # bge-m3 → 1024-d vectors
+    ↓ SQLiteVecStore              # sqlite-vec: chunks + FTS5 + documents
 ```
 
 ## Pipeline Components
 
-### 1. Parser (`parsers/`) — Unified Text Extraction
+### 1. Parser (`parsers/`)
 
-Uses **MarkItDown** for PDF, DOCX, Markdown, TXT and **Trafilatura** for HTML. Both convert to clean markdown/text format via `resolve_parser()`.
+**MarkItDown** (pdf, docx, md, txt) + **Trafilatura** (html). Single `resolve_parser()` dispatcher.
 
 ```python
 from myrag.parsers.dispatcher import resolve_parser
 parser = resolve_parser("report.pdf")
-raw_text = parser.parse("/path/to/report.pdf")
+text = parser.parse("report.pdf")
 ```
 
-Supported: `pdf`, `docx`, `md`/`mkd`, `txt`, `html`/`htm`.
+### 2. TextCleaner (`parsers/text_cleaner.py`)
 
-### 2. TextCleaner (`parsers/text_cleaner.py`) — Deterministic Cleaning
-
-Removes control chars, page breaks, normalizes whitespace. Supports optional YAML config for user-defined regex rules.
+Control chars, page breaks, whitespace. Optional YAML config for custom regex rules.
 
 ```python
 from myrag.parsers.text_cleaner import TextCleaner
 cleaned = TextCleaner().clean(raw_text)
 ```
 
-### 3. Formatter (`formatters/`) — LLM Semantic Structuring
+### 3. Formatter (`formatters/`)
 
-Calls local LLM (Qwen MoE at `192.168.191.112:8081`) for title/tags/section extraction. Outputs structured JSON with `body` field for downstream chunking.
+LLM-powered: extracts title, tags, section hierarchy. Configurable via `conf/config.yaml`.
 
 ```python
 from myrag.formatters import format_text_async, write_to_md
 
 future = format_text_async(cleaned, source_type="pdf")
 result = future.result(timeout=300)
-md_path = write_to_md(result, "output/")
+md_path = write_to_md(result, "output/")    # readable markdown
 ```
 
-### 4. Chunker (`chunkers/`) — Header-Enriched Splitting
+### 4. Chunker (`chunkers/`)
 
-Auto-parses markdown headers from formatter output, assigns semantic context per chunk, and optionally prepends headers for better vector retrieval.
+LangChain `MarkdownHeaderTextSplitter` splits on `##`/`###` boundaries. Oversized sections get `RecursiveCharacterTextSplitter` fallback. Plain text without headers auto-detected.
 
 ```python
 from myrag.chunkers import Chunker
-chunks = Chunker(max_chars=512).chunk(cleaned_text)
-# Each chunk: {"text": "## Section\n\ncontent...", "section_path": ["Section"]}
+chunks = Chunker(chunk_size=512, chunk_overlap=64).chunk(markdown_text)
+# Each chunk: {"text": "...", "section_path": ["Services", "HVPS"], "metadata": {...}}
 ```
 
-### 5. Embedder (`embedders/`) — Vector Indexing (Optional)
+### 5. Embedder + Storage
 
-OpenAI-compatible bge-m3 embedding client.
+bge-m3 embeddings → sqlite-vec database with FTS5 full-text index.
 
 ```python
+# One-shot: ingest + embed + store
+from myrag.pipeline import process_file_hybrid
+
+result = process_file_hybrid(
+    "report.pdf", doc_id="doc_001",
+    chunk_size=512,
+    store_path="data/myrag.db",   # persist to sqlite-vec
+)
+
+# Query
 from myrag.embedders import Embedder
-e = Embedder(base_url="http://your-server:11435")
-vectors = e.embed(["text1", "text2"])
-```
+from myrag.storage.sqlite_vec import SQLiteVecStore
 
-## Directory Structure
-
-```text
-myrag/
-├── parsers/              # MarkItDown + Trafilatura unified backend
-│   ├── dispatcher.py           # resolve_parser() routing
-│   └── text_cleaner.py         # TextCleaner with YAML config support
-├── cleaners/             # Backward-compat facade → parsers.text_cleaner
-├── chunkers/             # Header-enriched chunking with auto section detection
-├── embedders/            # bge-m3 embedding client (OpenAI-compatible API)
-├── formatters/           # LLM text formatter + markdown writer
-│   ├── __init__.py             # format_text_async()
-│   ├── prompts.py              # System prompt template
-│   └── writer.py               # write_to_md() with H2-H5 header rendering
-├── storage/              # SQLite-vec vector store (standalone, not yet integrated)
-│   └── sqlite_vec.py
-├── pipeline.py           # process_file() / process_file_hybrid() / process_file_with_md()
-├── pyproject.toml        # Project config + dependencies
-├── CHANGELOG.md          # Version history
-└── README.md             # This file
+db = SQLiteVecStore("data/myrag.db")
+e = Embedder()
+hits = db.search_chunks(e.embed("your question"), k=5)
 ```
 
 ## Quick Start
@@ -94,62 +91,80 @@ myrag/
 ### Install
 
 ```bash
-pip install -e ".[dev]"
+pip install -e ".[dev,sqlite-vec]"
+cp conf/config.example.yaml conf/config.yaml
+# Edit conf/config.yaml with your endpoints
 ```
 
-### Process a Single File
-
-```python
-from myrag.pipeline import process_file_with_md
-
-path = process_file_with_md("report.pdf", output_dir="output/")
-```
-
-### CLI Usage
+### CLI
 
 ```bash
-PYTHONPATH=/home/colinvan/workspace python -m myrag.pipeline md input.pdf
-PYTHONPATH=/home/colinvan/workspace python -m myrag.pipeline hybrid input.pdf --doc-id mydoc_001
+# Generate readable markdown
+python -m myrag.pipeline md input.pdf --output-dir output/
+
+# Full ingest: format → chunk → embed → sqlite-vec
+python -m myrag.pipeline hybrid input.pdf --store data/myrag.db
+
+# Traditional (no LLM, no storage)
+python -m myrag.pipeline process-file input.txt --chunk-size 512
+```
+
+## Directory Structure
+
+```text
+myrag/
+├── config.py              # Config loader: get_config()
+├── pipeline.py            # process_file / process_file_hybrid / process_file_with_md
+├── parsers/               # MarkItDown + Trafilatura dispatcher
+│   ├── dispatcher.py
+│   └── text_cleaner.py
+├── cleaners/              # Backward-compat facade
+├── formatters/            # LLM formatter + prompts + markdown writer
+│   ├── __init__.py
+│   ├── prompts.py
+│   └── writer.py
+├── chunkers/              # LangChain MarkdownHeaderTextSplitter wrapper
+├── embedders/             # bge-m3 embedding client (OpenAI-compatible API)
+├── storage/               # SQLiteVecStore
+│   └── sqlite_vec.py
+├── conf/
+│   ├── config.yaml        # Your endpoints (gitignored)
+│   └── config.example.yaml # Template (committed)
+├── pyproject.toml
+├── CHANGELOG.md
+└── README.md
 ```
 
 ## Configuration
 
-All endpoints and model settings live in **`conf/config.yaml`** (gitignored — safe for local IPs).
-
-A template with safe defaults is provided at `conf/config.example.yaml` (committed).
+Single file: `conf/config.yaml` (gitignored). Template at `conf/config.example.yaml`.
 
 ```yaml
-# config/config.yaml
 llm:
-  endpoint: "http://192.168.191.112:8081/v1/chat/completions"
-  model: "Qwen/QwQ-32B-A3B-..."
+  endpoint: "http://your-llm:8081/v1/chat/completions"
+  model: "your-model-name"
   temperature: 0.3
   max_tokens: 8192
   timeout: 180
 
 embedding:
-  base_url: "http://192.168.191.112:11435"
+  base_url: "http://your-embedder:11435"
   model: "bge-m3"
   timeout: 60
 ```
 
-**Resolution order** (first wins):
-1. `$MYRAG_CONFIG` environment variable
-2. `conf/config.yaml` (your instance)
-3. `conf/config.example.yaml` (safe defaults)
+Resolution: `$MYRAG_CONFIG` → `conf/config.yaml` → `conf/config.example.yaml`.
 
-**Runtime override**:
 ```python
 from myrag.config import get_config
 cfg = get_config()
-print(cfg.llm_endpoint)   # from config file
-
-# Embedder with explicit endpoint (ignores config)
-e = Embedder(base_url="http://other-server:11435")
+print(cfg.llm_endpoint)  # from your config file
 ```
 
 ## Testing
 
 ```bash
-cd /home/colinvan/workspace && PYTHONPATH=/home/colinvan/workspace python3 -m pytest myrag/formatters/tests/ myrag/cleaners/tests/ -v
+cd /home/colinvan/workspace
+PYTHONPATH=. myrag/.venv/bin/python -m pytest myrag/chunkers/tests/ myrag/formatters/tests/ myrag/cleaners/tests/ -v
+# 22 tests: chunkers 8 + formatters 9 + cleaners 5
 ```
