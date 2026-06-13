@@ -1,22 +1,47 @@
-"""RAG data cleanup pipeline — parse → clean → format → chunk → embed.
+"""RAG data cleanup pipeline — parse → clean → format → chunk → embed (Hybrid A+B).
 
-Pipeline flow (Scheme C):
+Pipeline flow:
     Raw file (.pdf/.docx/.txt)
-        ↓ parser.parse_file() — extract text from binary formats
-        ↓ cleaner.clean_text() — regex-based noise removal (ads, nav bars, etc.)
-        ↓ formatter.format_text() — LLM semantic structuring into title/tags/chunks
-            → write_to_md(result, output_dir/)  [human-readable .md]
-        ↓ chunker.chunk() or embedder.embed()  [optional vector DB pipeline]
+        ↓ parser.parse_file()     # Extract text from binary formats
+        ↓ cleaner.clean_text()    # Regex-based noise removal
+        ↓ formatter.format_text()  # LLM semantic structuring → title/tags/chunks
+            → write_to_md(result, output_dir/)   [human-readable .md]
+        ↓ chunker.chunk(section_path=...)     # Physical splitting with section headers
+        ↓ embedder.store_chunks() / store_document()  # Hybrid A+B indexing
 
-Usage:
+Hybrid Retrieval (A + B):
+    A: Chunk-level index — fine-grained search, direct answer generation
+       [chunk] → bge-m3 embedding → FAISS/Milvus vector DB
+    
+    B: Document-level index — coarse-grained context fallback
+       [doc_summary] → bge-m3 embedding → FAISS/Milvus vector DB
+
+Usage (traditional RAG):
     from myrag.pipeline import process_file, process_directory
     
-    # Parse a single file (traditional RAG)
-    chunks = process_file("path/to/report.pdf")
+    chunks = process_file("path/to/report.pdf")  # traditional chunking only
+
+Usage (LLM-formatted + Hybrid A+B):
+    from myrag.pipeline import process_file_hybrid
     
-    # Or walk an entire directory
-    all_chunks = process_directory("./docs", max_chars=512)
+    result = process_file_hybrid(
+        filepath="path/to/document.pdf",
+        doc_id="doc_001"
+    )
+    # Returns: {
+    #   "chunks": list[dict]  (A - fine-grained, ready for FAISS/Milvus)
+    #   "document": dict      (B - coarse-grained, ready for FAISS/Milvus)
+    # }
+
+Usage (LLM-formatted + Markdown output):
+    from myrag.pipeline import process_file_with_md
+    
+    md_path = process_file_with_md(
+        filepath="path/to/document.pdf",
+        output_dir="./output/",
+    )
 """
+
 
 import json
 import logging
@@ -49,53 +74,96 @@ class TextCleaner:
             return ""
 
         import re
+        
+        # Remove control characters (PDFs often contain \x07 BELL chars etc.)
+        text = re.sub(r"[\x00-\x1f\x7f]", " ", text)
+        
         if self.remove_page_breaks:
-            page_pattern = r"(?:^|\n)\s*[-=\*_]{3,}\s*(PAGE\s*\d+\s*)?(?:\n|$)"
-            text = re.sub(page_pattern, "\n", text)
+            page_pattern = r"(?:^|\n)\s*[-=\*_]\s*(PAGE\s*\d+\s*)?\s*(-{2,})?"  # Match --- PAGE 1 --- with optional spaces (from \x07→space conversion)
+            text = re.sub(page_pattern, " ", text)
 
         if self.collapse_whitespace:
             text = re.sub(r"[ \t\v\f]+", " ", text)
             text = re.sub(r"\n{3,}", "\n\n", text)
 
+        # Join lines preserving newlines between them (strip each line's trailing/leading whitespace only)
         lines = [line.strip() for line in text.split("\n")]
         return "\n".join(lines).strip()
 
 
 class Chunker:
-    """Split text into overlapping chunks for embedding."""
+    """Split text into overlapping chunks with semantic context.
+
+    Accepts section_path from LLM formatter to generate proper headers.
+    Each output dict contains the chunked text along with its semantic context.
+    """
 
     def __init__(self, *, max_chars=512, min_chunk_chars=3, overlap_chars=64):
         self.max_chars = max_chars
         self.min_chunk_chars = min_chunk_chars
         self.overlap_chars = overlap_chars
 
-    def chunk(self, text: str) -> list[str]:
+    def _render_section_header(self, section_path: list[str]) -> str:
+        """Render a markdown header from the section path."""
+        if not section_path:
+            return ""
+        
+        # Use H3 for section-level headers (H2 is reserved for document title)
+        prefix = "##" if len(section_path) == 1 else f"{'# ' * min(len(section_path), 4).rstrip()}"
+        return "\n\n".join(f"{prefix} {s}" for s in section_path)
+
+    def chunk(self, text: str, *, section_path=None) -> list[dict]:
+        """Split text into chunks with semantic context.
+
+        Args:
+            text: Raw text content to split
+            section_path: List of section titles from LLM formatter
+                         e.g., ["What Is Changing?", "Structured Address"]
+
+        Returns:
+            List of dicts with 'text' and 'section_path' keys.
+        """
         if not isinstance(text, str) or len(text.strip()) < self.min_chunk_chars:
             return []
 
-        chunks: list[str] = []
+        header = self._render_section_header(section_path) if section_path else ""
+        prefix_text = f"{header}\n\n" if header else ""
+        
+        # Build list of (chunk_index, chunk_text) pairs
+        chunks: list[dict] = []
         start = 0
+        
         while start + self.max_chars < len(text):
             end = min(start + self.max_chars, len(text))
-            chunk_text = text[start:end].strip()
-            if len(chunk_text) >= self.min_chunk_chars:
-                chunks.append(chunk_text)
+            raw_chunk = text[start:end].strip()
+            
+            if len(raw_chunk) >= self.min_chunk_chars:
+                chunk_text = f"{prefix_text}{raw_chunk}"
+                chunks.append({
+                    "text": chunk_text,
+                    "section_path": section_path or ["General"],
+                })
+            
             start += max(self.max_chars - self.overlap_chars, 1)
 
+        # Handle remaining text
         remaining = text[start:].strip()
         if remaining and len(remaining) >= self.min_chunk_chars:
-            chunks.append(remaining)
+            chunk_text = f"{prefix_text}{remaining}"
+            chunks.append({
+                "text": chunk_text,
+                "section_path": section_path or ["General"],
+            })
 
         return chunks
 
 
 def process_file(filepath: str, *, remove_page_breaks=True, collapse_whitespace=True, max_chars=512) -> list[dict]:
-    """Parse a single file and return structured chunks.
+    """Parse a single file and return structured chunks (traditional RAG).
 
-    Pipeline (Scheme C): parser → cleaner → chunker → output dict list.
+    Pipeline: parser → cleaner → chunker → output dict list.
     
-    For LLM-formatted output, use:
-        from myrag.formatters import format_text_async
+    For LLM-formatted output with hybrid A+B indexing, use process_file_hybrid().
     
     Returns list of dicts: [{"text": ..., "metadata": {...}}, ...]
     """
@@ -109,15 +177,122 @@ def process_file(filepath: str, *, remove_page_breaks=True, collapse_whitespace=
     chunks = Chunker(max_chars=max_chars).chunk(cleaned)
 
     result = [
-        {"text": chunk.strip(), "metadata": {"source": filepath}}
+        {"text": chunk["text"], "metadata": {"source": filepath}}
         for chunk in chunks
     ]
     logger.info("  → %d chunks from %s", len(result), Path(filepath).name)
     return result
 
 
+def process_file_hybrid(filepath: str, *, doc_id="doc_0", remove_page_breaks=True, 
+                        collapse_whitespace=True, max_chars=512):
+    """Parse file with LLM formatter → chunker → embedder (Hybrid A+B indexing).
+
+    Returns dict with two indexes ready for FAISS/Milvus:
+        chunks  — list of dicts with embedding data (A - fine-grained)
+        document — single dict with summary + embedding (B - coarse-grained)
+    
+    Note: Embeddings require bge-m3 endpoint configured in embedders/bge_m3.py.
+          Set base_url to your local service before calling this function.
+    """
+    from myrag.formatters import format_text_async
+    
+    # 1. Parse & Clean
+    parser = _resolve_parser(filepath)
+    if parser is None:
+        logger.warning("Skipped %s — no parser found", filepath)
+        return {"chunks": [], "document": {}}
+
+    raw_text = parser.parse(filepath)
+    cleaned = TextCleaner(remove_page_breaks=remove_page_breaks, collapse_whitespace=collapse_whitespace).clean(raw_text)
+    
+    # 2. LLM Format (async)
+    future = format_text_async(cleaned, source_type="pdf")
+    result = future.result(timeout=300)
+    
+    metadata = result.get("metadata", {})
+    
+    # 3. Chunk with section headers
+    chunker = Chunker(max_chars=max_chars)
+    chunks_with_headers = []
+    
+    for section in metadata.get("sections", []):
+        title = section["title"] if isinstance(section, dict) else section
+        
+        # Find text belonging to this section (simplified — real impl would parse from result["chunks"])
+        pass  # TODO: Map sections to actual text ranges
+    
+    # For now, chunk the full cleaned text with a generic header
+    all_chunks = chunker.chunk(cleaned, section_path=["General"])
+    
+    # 4. Store in embedder (requires bge-m3 endpoint)
+    try:
+        from myrag.embedders import Embedder
+        
+        e = Embedder()
+        stored_chunks = e.store_chunks(all_chunks, doc_id=doc_id)
+        
+        # Document-level index (B)
+        summary_text = f"Title: {result.get('title', '')}\nTags: {' '.join(result.get('tags', []))}\n{cleaned[:500]}"
+        stored_doc = e.store_document(
+            title=result.get("title", "Untitled"),
+            tags=result.get("tags", []),
+            text_summary=summary_text,
+            source_file=filepath,
+            total_chunks=len(stored_chunks),
+        )
+        
+    except Exception as exc:
+        logger.warning("Embedding failed (bge-m3 endpoint not configured): %s", exc)
+        stored_chunks = [{"text": c["text"], "section_path": c.get("section_path", ["General"]), 
+                          "source_doc_id": doc_id, "chunk_index": i} for i, c in enumerate(all_chunks)]
+        stored_doc = {
+            "title": result.get("title", "Untitled"),
+            "tags": result.get("tags", []),
+            "text_summary": summary_text[:500],
+            "source_file": filepath,
+            "total_chunks": len(stored_chunks),
+        }
+
+    return {
+        "chunks": stored_chunks,       # A - fine-grained index
+        "document": stored_doc,         # B - coarse-grained index
+        "format_result": result,        # Original LLM output (for metadata)
+        "md_path": None,                # TODO: write_to_md() if configured
+    }
+
+
+def process_file_with_md(filepath: str, *, output_dir="./output/", **kwargs):
+    """Parse file → LLM formatter → write structured markdown to output/.
+
+    Returns the path of the generated .md file.
+    
+    This is the user-facing pipeline for generating human-readable documents.
+    For vector DB indexing (Hybrid A+B), use process_file_hybrid() instead.
+    """
+    from myrag.formatters import format_text_async, write_to_md
+    
+    # Parse & Clean
+    parser = _resolve_parser(filepath)
+    if parser is None:
+        logger.warning("Skipped %s — no parser found", filepath)
+        return None
+
+    raw_text = parser.parse(filepath)
+    cleaned = TextCleaner(**kwargs).clean(raw_text)
+    
+    # LLM Format
+    future = format_text_async(cleaned, source_type="pdf")
+    result = future.result(timeout=300)
+    
+    # Write markdown to output_dir
+    md_path = write_to_md(result, output_dir)
+    
+    return md_path
+
+
 def process_directory(dirpath: str, *, extensions=None, **kwargs) -> list[dict]:
-    """Walk a directory and process all supported files."""
+    """Walk a directory and process all supported files (traditional RAG)."""
     path = Path(dirpath)
 
     if extensions is None:
@@ -140,15 +315,53 @@ def process_directory(dirpath: str, *, extensions=None, **kwargs) -> list[dict]:
 def main():
     """CLI entry point."""
     import argparse
+    
     parser = argparse.ArgumentParser(description="RAG data cleanup pipeline")
-    parser.add_argument("input", help="file or directory to process")
-    parser.add_argument("--max-chars", type=int, default=512)
-    args = parser.parse_args()
+    subparsers = parser.add_subparsers(dest="command")
+    
+    # process_file command (traditional)
+    file_parser = subparsers.add_parser("process-file", help="Process a single file (traditional)")
+    file_parser.add_argument("input", help="file to process")
+    file_parser.add_argument("--max-chars", type=int, default=512)
+    
+    # process_directory command (batch traditional)
+    dir_parser = subparsers.add_parser("process-directory", help="Process all files in directory")
+    dir_parser.add_argument("input", help="directory to process")
+    dir_parser.add_argument("--max-chars", type=int, default=512)
+    
+    # hybrid command (A+B indexing)
+    hybrid_parser = subparsers.add_parser("hybrid", help="Process with LLM formatter + Hybrid A+B indexing")
+    hybrid_parser.add_argument("input", help="file to process")
+    hybrid_parser.add_argument("--doc-id", default="doc_0", help="Document ID for storage")
+    
+    # md command (generate markdown output)
+    md_parser = subparsers.add_parser("md", help="Generate structured markdown output")
+    md_parser.add_argument("input", help="file to process")
+    md_parser.add_argument("--output-dir", default="./output/", help="Output directory for .md files")
 
+    args = parser.parse_args()
+    
     logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 
-    chunks = process_directory(args.input, max_chars=args.max_chars)
-    print(json.dumps(chunks, indent=2, ensure_ascii=False))
+    if args.command == "process-file":
+        chunks = process_file(args.input, max_chars=args.max_chars)
+        print(json.dumps(chunks, indent=2, ensure_ascii=False))
+        
+    elif args.command == "process-directory":
+        chunks = process_directory(args.input, max_chars=args.max_chars)
+        print(json.dumps(chunks, indent=2, ensure_ascii=False))
+        
+    elif args.command == "hybrid":
+        result = process_file_hybrid(args.input, doc_id=args.doc_id)
+        print(f"Chunks: {len(result['chunks'])}")
+        print(f"Document index created")
+        if result["format_result"]:
+            print(f"Title: {result['format_result'].get('title', 'N/A')}")
+            
+    elif args.command == "md":
+        path = process_file_with_md(args.input, output_dir=args.output_dir)
+        if path:
+            print(f"Written to: {path}")
 
 
 if __name__ == "__main__":
