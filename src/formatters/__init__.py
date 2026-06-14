@@ -131,18 +131,20 @@ def _get_last_n_lines(md_parts: list[str], n: int = 10) -> str:
 
 
 def _split_by_paragraph(text: str, max_chars: int = _CHUNK_THRESHOLD_CHARS) -> list[str]:
-    """Split text at double-newline paragraph boundaries.
+    """Split text at paragraph boundaries, chunk oversized paragraphs at sentences.
 
-    Chunks do NOT overlap — continuity is provided via the prompt context
-    (last 10 lines of previous markdown + cumulative summary).
-    Each chunk ≤ max_chars to stay within the LLM's reliable context window.
+    Normal paragraphs are grouped up to max_chars. If a single paragraph exceeds
+    max_chars, it's split at sentence boundaries (`. `, `! `, `? `, or `\n`).
+
+    Chunks do NOT physically overlap — continuity across chunks is provided
+    via the prompt context (last 10 lines of previous output + summary).
 
     Args:
         text: The cleaned text to split.
         max_chars: Maximum characters per chunk (≈ tokens × 4).
 
     Returns:
-        List of paragraph-boundary-aligned text chunks.
+        List of paragraph-boundary-aligned text chunks, each ≤ max_chars.
     """
     paragraphs = re.split(r'\n\n+', text)
     paragraphs = [p.strip() for p in paragraphs if p.strip()]
@@ -154,18 +156,44 @@ def _split_by_paragraph(text: str, max_chars: int = _CHUNK_THRESHOLD_CHARS) -> l
     current: list[str] = []
     current_len = 0
 
-    for p in paragraphs:
-        p_len = len(p) + 2  # +2 for the \n\n separator
-        if current_len + p_len > max_chars and current:
+    def _flush():
+        """Flush accumulated paragraphs as a chunk."""
+        nonlocal current, current_len
+        if current:
             chunks.append('\n\n'.join(current))
             current = []
             current_len = 0
+
+    for p in paragraphs:
+        p_len = len(p) + 2  # +2 for \n\n separator
+
+        # If this single paragraph already exceeds max_chars, split it inline
+        if p_len > max_chars + 2:
+            _flush()
+            # Split at sentence boundaries
+            sentences = re.split(r'(?<=[.!?])\s+', p)
+            sent_buf: list[str] = []
+            sent_len = 0
+            for s in sentences:
+                s_len = len(s) + 1
+                if sent_len + s_len > max_chars and sent_buf:
+                    chunks.append(' '.join(sent_buf))
+                    sent_buf = []
+                    sent_len = 0
+                sent_buf.append(s)
+                sent_len += s_len
+            if sent_buf:
+                chunks.append(' '.join(sent_buf))
+            continue
+
+        # Normal paragraph: accumulate until threshold
+        if current_len + p_len > max_chars and current:
+            _flush()
+
         current.append(p)
         current_len += p_len
 
-    if current:
-        chunks.append('\n\n'.join(current))
-
+    _flush()
     return chunks
 
 
@@ -289,8 +317,7 @@ def format_text(raw: str, source_type: str = "web") -> Dict[str, Any]:
     # Auto-dispatch based on text length
     raw_len = len(raw)
     if raw_len > _CHUNK_THRESHOLD_CHARS:
-        logger.info("Large text: %d chars — chunked processing (%d chunks)",
-                     raw_len, max(1, raw_len // _CHUNK_THRESHOLD_CHARS))
+        logger.info("Large text: %d chars — calling chunked processor", raw_len)
         return _format_text_chunked(raw, source_type)
 
     logger.info("Small text: %d chars — single-shot", raw_len)
