@@ -109,7 +109,7 @@ def _get_last_n_lines(md_parts: list[str], n: int = 10) -> str:
     if not md_parts:
         return ""
     full = "\n\n".join(md_parts)
-    lines = [l for l in full.split("\n") if l.strip()]
+    lines = [line for line in full.split("\n") if line.strip()]
     return "\n".join(lines[-n:])
 
 
@@ -275,4 +275,4 @@ def format_text_async(raw: str, source_type: str = "web") -> Future[Dict[str, An
 __all__ = ["format_text", "format_text_async"]
 
 # Re-export writer functions for convenience
-from .writer import format_md, write_to_md  # noqa: F401
+from .writer import format_md, write_to_md  # noqa: F401, E402

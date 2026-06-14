@@ -5,8 +5,6 @@ import json
 from concurrent.futures import Future
 from unittest.mock import Mock, patch
 
-import sys; sys.path.insert(0, '/home/colinvan/workspace')
-
 import pytest
 
 from myrag.formatters import format_text, format_text_async

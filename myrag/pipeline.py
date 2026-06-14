@@ -163,9 +163,7 @@ def process_file_hybrid(filepath: str, *, doc_id="doc_0", remove_page_breaks=Tru
     # 2. LLM Format (async)
     future = format_text_async(cleaned, source_type="pdf")
     result = future.result(timeout=300)
-    
-    metadata = result.get("metadata", {})
-    
+
     # 3. Render markdown with headers from metadata.sections, then chunk
     formatted_md = _render_markdown_with_sections(result)
     chunker = Chunker(chunk_size=chunk_size)
@@ -327,7 +325,7 @@ def main():
         print(f"Chunks: {len(result['chunks'])}")
         if result.get("db_path"):
             print(f"DB:     {result['db_path']}")
-        print(f"Document index created")
+        print("Document index created")
         if result["format_result"]:
             print(f"Title: {result['format_result'].get('title', 'N/A')}")
             

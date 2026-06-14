@@ -1,7 +1,5 @@
 """Tests for LangChain-based Chunker."""
 
-import sys; sys.path.insert(0, '/home/colinvan/workspace')
-
 from myrag.chunkers import Chunker, chunk_text
 
 SIMPLE_MD = """# Test Doc
@@ -66,9 +64,9 @@ Nested content here.
         c = Chunker(chunk_size=200, chunk_overlap=30)
         chunks = c.chunk(LONG_SECTION_MD)
         for ch in chunks:
-            assert "metadata" in ch, f"Missing metadata in chunk"
-            assert "section_path" in ch, f"Missing section_path in chunk"
-            assert "text" in ch, f"Missing text in chunk"
+            assert "metadata" in ch, "Missing metadata in chunk"
+            assert "section_path" in ch, "Missing section_path in chunk"
+            assert "text" in ch, "Missing text in chunk"
 
     def test_convenience_wrapper(self):
         chunks = chunk_text(SIMPLE_MD, chunk_size=1000)

@@ -2,8 +2,6 @@
 
 
 import os
-from datetime import datetime, timezone
-from typing import Any, Dict
 
 def write_to_md(result, output_dir):
     """Format structured result into markdown and save it.

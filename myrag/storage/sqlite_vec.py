@@ -4,7 +4,7 @@
 import json
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Optional
 
 
 class SQLiteVecStore:
@@ -228,7 +228,7 @@ class SQLiteVecStore:
         if query_vector:
             emb_str = sqlite_vec.serialize_float32(query_vector)
             results = self.conn.execute(
-                f"""SELECT c.id, c.text, json_each.value as section_path, 
+                """SELECT c.id, c.text, json_each.value as section_path, 
                              c.source_doc_id, c.chunk_index, c.word_count
                     FROM chunks c, json_each(c.section_path)
                     ORDER BY vec_distance_cosine(embedding, ?) ASC
@@ -258,7 +258,7 @@ class SQLiteVecStore:
                 combined[v["id"]] = dict(v)
                 emb_str = sqlite_vec.serialize_float32(query_vector)
                 combined[v["id"]]["_vec_score"] = self.conn.execute(
-                    f"SELECT vec_distance_cosine(embedding, ?) FROM chunks WHERE id=?",
+                    "SELECT vec_distance_cosine(embedding, ?) FROM chunks WHERE id=?",
                     [emb_str, v["id"]]
                 ).fetchone()[0]
 

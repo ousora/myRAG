@@ -1,9 +1,7 @@
 """Tests for text cleaner."""
 
 
-import sys; sys.path.insert(0, '/home/colinvan/workspace')
-
-from myrag.cleaners import clean_text, TextCleaner
+from myrag.cleaners import clean_text
 
 
 def test_normal_text_unchanged():
