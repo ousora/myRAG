@@ -1,9 +1,0 @@
-# Core dependencies for myRAG pipeline (production)
-markitdown>=0.1              # Universal doc conversion (PDF, DOCX, MD, TXT)
-trafilatura>=1.12            # HTML content extraction
-httpx>=0.27                  # HTTP client for LLM formatter + embedding service
-langchain-text-splitters>=0.3  # MarkdownHeaderTextSplitter + RecursiveCharacterTextSplitter
-PyYAML>=6.0                  # YAML config loading (conf/config.yaml, clean_rules.yaml)
-
-# Optional (install via extras)
-sqlite-vec                 # Local vector DB — install with: pip install myrag[sqlite-vec]

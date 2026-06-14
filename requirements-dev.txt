@@ -1,6 +1,0 @@
-# Development dependencies for myRAG — installs everything in requirements.txt + dev extras
--r requirements.txt
-
-pytest>=7.4           # Test runner
-ruff>=0.3             # Fast Python linter/formatter
-PyYAML>=6.0           # YAML — also needed by tests that load config

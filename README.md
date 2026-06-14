@@ -90,7 +90,8 @@ hits = db.search_chunks(e.embed("your question"), k=5)
 ### Install
 
 ```bash
-pip install -e ".[dev,sqlite-vec]"
+# Install uv first: curl -LsSf https://astral.sh/uv/install.sh | sh
+uv sync --extra dev --extra sqlite-vec
 cp conf/config.example.yaml conf/config.yaml
 # Edit conf/config.yaml with your endpoints
 ```
@@ -163,7 +164,7 @@ print(cfg.llm_endpoint)  # from your config file
 ## Testing
 
 ```bash
-cd /home/colinvan/workspace
-PYTHONPATH=. myrag/.venv/bin/python -m pytest myrag/chunkers/tests/ myrag/formatters/tests/ myrag/cleaners/tests/ -v
+cd /home/colinvan/workspace/myrag
+uv run pytest chunkers/tests/ formatters/tests/ cleaners/tests/ -v
 # 22 tests: chunkers 8 + formatters 9 + cleaners 5
 ```
