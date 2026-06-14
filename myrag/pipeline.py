@@ -162,7 +162,7 @@ def process_file_hybrid(filepath: str, *, doc_id="doc_0", remove_page_breaks=Tru
     
     # 2. LLM Format (async)
     future = format_text_async(cleaned, source_type="pdf")
-    result = future.result(timeout=300)
+    result = future.result(timeout=3600)
 
     # 3. Render markdown with headers from metadata.sections, then chunk
     formatted_md = _render_markdown_with_sections(result)
@@ -251,7 +251,7 @@ def process_file_with_md(filepath: str, *, output_dir="./output/", **kwargs):
     
     # LLM Format
     future = format_text_async(cleaned, source_type="pdf")
-    result = future.result(timeout=300)
+    result = future.result(timeout=3600)
     
     # Write markdown to output_dir
     md_path = write_to_md(result, output_dir)

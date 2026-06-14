@@ -87,7 +87,9 @@ Notice: "Search", "Print", "Help", "Page 3 of 42", "Copyright 2025" are chrome �
 CHUNKED_SYSTEM_PROMPT = '''\
 You are a document structure extractor processing part {chunk_label} of a large document split into chunks.
 
-Your job is to produce markdown content for this chunk and a one-sentence summary.
+CRITICAL: Do NOT summarize. Preserve ALL substantive content — every sentence, every paragraph, every data point, every table. The output is what gets embedded for search — missing content means failed retrieval.
+
+Your job is to produce the FULL markdown content for this chunk and a one-sentence summary.
 
 ─── INPUT ───
 
@@ -104,26 +106,28 @@ You will receive:
 Output valid JSON only. No markdown fences, no explanation.
 
 {{
-  "part_md": "markdown content for this chunk, continuing from the previous chunk...",
+  "part_md": "FULL markdown content for this chunk, preserving ALL substantive information...",
   "summary": "One-sentence summary of what this chunk covered (for passing to the next chunk)"
 }}
 
 ─── RULES ───
 
-1. CONTINUITY: Start exactly where the previous chunk left off in terms of topic and section.
+1. CONTENT COMPLETENESS (CRITICAL): The part_md MUST contain ALL substantive content from this chunk — every sentence, every paragraph, every number, every technical detail. Do NOT summarize, shorten, or omit anything. The only thing you may strip is navigation chrome (see rule 4).
+
+2. CONTINUITY: Start exactly where the previous chunk left off in terms of topic and section.
    Use 【前文收尾】 as a reference point — continue the narrative, don't restart it.
 
-2. ONLY NEW CONTENT: Do NOT repeat anything from 【前文收尾】.
-   If this chunk starts mid-section, that's fine — write the remaining content.
+3. ONLY NEW CONTENT: Do NOT repeat anything from 【前文收尾】.
+   If this chunk starts mid-section, that's fine — write the remaining content without re-adding the section header.
 
-3. HEADERS: Use ## or ### markdown headers for subsections found in this chunk.
-   If the previous chunk ended mid-section, DON'T re-add the section header — just continue the content.
+4. CHROME REMOVAL (ONLY these): Strip navigation bars, page numbers, footers, copyright notices, TOC artifacts.
+   Do NOT strip any content text, technical terms, or data.
 
-4. CHROME REMOVAL: Strip navigation bars, page numbers, footers, copyright notices, TOC artifacts.
+5. HEADERS: Use ## or ### markdown headers for subsections found in this chunk.
 
-5. PRESERVE: Code blocks, tables, lists, key technical terms, dates, names.
+6. PRESERVE: Code blocks, tables, lists, key technical terms, dates, names, numbers, statistics, footnotes.
 
-6. Summary: ONE clear sentence per chunk (e.g., "Covers the database schema design and indexing strategy.").
+7. Summary: ONE clear sentence per chunk (e.g., "Covers the database schema design and indexing strategy.").
 
 {first_chunk_extra}
 '''

@@ -39,12 +39,16 @@ def get_executor() -> ThreadPoolExecutor:
     return _executor
 
 
-def _call_llm(system_prompt: str, user_message: str) -> dict:
+def _call_llm(system_prompt: str, user_message: str, *,
+              max_tokens: int | None = None,
+              timeout: int | None = None) -> dict:
     """Make a single LLM API call and return the parsed JSON response.
 
     Args:
         system_prompt: System-level instruction for the LLM.
         user_message: The user input text.
+        max_tokens: Override max output tokens. Uses config default if None.
+        timeout: Override HTTP timeout in seconds. Uses config default if None.
 
     Returns:
         Parsed JSON dict from the LLM response.
@@ -65,9 +69,9 @@ def _call_llm(system_prompt: str, user_message: str) -> dict:
                     {"role": "user", "content": user_message},
                 ],
                 "temperature": cfg.llm_temperature,
-                "max_tokens": cfg.llm_max_tokens,
+                "max_tokens": max_tokens or cfg.llm_max_tokens,
             },
-            timeout=cfg.llm_timeout,
+            timeout=timeout or cfg.llm_timeout,
         )
         response.raise_for_status()
     except httpx.HTTPError as e:
@@ -195,7 +199,7 @@ def _format_text_chunked(raw: str, source_type: str = "pdf") -> Dict[str, Any]:
             f"{chunk_text}"
         )
 
-        result = _call_llm(system_prompt, user_message)
+        result = _call_llm(system_prompt, user_message, max_tokens=16384, timeout=300)
 
         part_md = result.get("part_md", "").strip()
         if part_md:

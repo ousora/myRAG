@@ -11,8 +11,8 @@ llm:
   model: "Qwen/QwQ-32B-A3B-Claude-4.7-Opus-Reasoning-Distilled-APEX-I-Compact.gguf"
   # Generation parameters
   temperature: 0.3
-  max_tokens: 8192
-  timeout: 180               # seconds for HTTP request
+  max_tokens: 16384
+  timeout: 300               # seconds for HTTP request
 
 # ── Embedding Service (embedders) ────────────────────────────────────
 embedding:
