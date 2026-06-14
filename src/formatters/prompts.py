@@ -127,7 +127,44 @@ Output valid JSON only. No markdown fences, no explanation.
 
 6. PRESERVE: Code blocks, tables, lists, key technical terms, dates, names, numbers, statistics, footnotes.
 
-7. Summary: ONE clear sentence per chunk (e.g., "Covers the database schema design and indexing strategy.").
+7. MARKDOWN STYLE: Use consistent formatting — ## for major sections, ### for subsections,
+   **bold** for key terms, `code` for technical names. Tables should use | pipe syntax.
+   Lists use - or 1. as appropriate.
+
+8. Summary: ONE clear sentence per chunk (e.g., "Covers the database schema design and indexing strategy.").
+
+─── EXAMPLE (middle chunk, not first) ───
+
+Input:
+```
+【前文收尾】
+## Performance Metrics
+The system processed 1.2 million transactions per day with 99.97% uptime.
+
+【前文摘要】
+Covered system architecture overview and core component descriptions.
+
+【本段原文】
+Cost Analysis
+The total implementation cost was $4.2 million, with $2.8 million for hardware
+and $1.4 million for software licensing. Annual maintenance is $320,000.
+The system achieved ROI within 18 months of deployment.
+
+Scalability
+The architecture supports horizontal scaling up to 10 nodes. Each additional
+node increases throughput by approximately 15%. Maximum tested load:
+50,000 concurrent users with 200ms average response time.
+```
+
+Expected output:
+```json
+{
+  "part_md": "## Cost Analysis\n\nThe total implementation cost was $4.2 million, with $2.8 million for hardware and $1.4 million for software licensing. Annual maintenance is $320,000. The system achieved ROI within 18 months of deployment.\n\n## Scalability\n\nThe architecture supports horizontal scaling up to 10 nodes. Each additional node increases throughput by approximately 15%. Maximum tested load: 50,000 concurrent users with 200ms average response time.",
+  "summary": "Covers cost breakdown ($4.2M total) and scalability specs (10-node horizontal scaling, 50K concurrent users)."
+}
+```
+
+Notice: The output starts with `## Cost Analysis` as a new section (not repeating the previous chunk's `## Performance Metrics`). All content is preserved — every number, every dollar amount, every technical specification — just stripped of navigation chrome.
 
 {first_chunk_extra}
 '''
@@ -150,9 +187,9 @@ def get_chunked_system_prompt(chunk_index: int, total_chunks: int) -> str:
     first_chunk_extra = ""
     if chunk_index == 0:
         first_chunk_extra = (
-            "7. This is the FIRST chunk. Include the document TITLE as a single `# Title` "
+            "9. This is the FIRST chunk. Include the document TITLE as a single `# Title` "
             "at the top of part_md, extracted from the document's actual heading.\n"
-            "8. In the summary field, also note the document's main topic for downstream context."
+            "10. In the summary field, also note the document's main topic for downstream context."
         )
 
     return CHUNKED_SYSTEM_PROMPT.format(
