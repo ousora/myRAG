@@ -2,7 +2,24 @@
 
 ## [Unreleased]
 
-### Added (LangChain Chunker + sqlite-vec — 2026-06-14)
+### Added (Auto-Chunking for Large Docs — 2026-06-14)
+
+- **Chunked formatter**: Texts >28K chars auto-split at paragraph boundaries and processed chunk-by-chunk. Each chunk LLM call receives the last 10 lines of previous markdown output + cumulative summary as continuity context. Single-shot path unchanged for small docs.
+- **CHUNKED_SYSTEM_PROMPT**: New prompt with concrete input/output example, `Do NOT summarize — preserve ALL substantive content` instruction, markdown style rules, and JSON output schema (`part_md` + `summary`).
+- **uv package management**: Replaced pip + requirements.txt with `uv sync`. Single source of truth in `pyproject.toml`. `uv.lock` committed for reproducible installs.
+
+### Changed
+
+- **Package layout**: Flat root → `src/` standard layout. All imports changed from `myrag.xxx` to `xxx`.
+- **Dependencies cleaned**: Removed 6 ghost deps (`pymupdf`, `python-docx`, `beautifulsoup4`, `readability-lxml`, `markdown`, `tiktoken`). Added `markitdown[pdf]`, `trafilatura`, `httpx`, `langchain-text-splitters`, `PyYAML`.
+- **Config defaults**: `max_tokens` 8192 → 16384, `timeout` 180 → 300.
+- **Pipeline timeout**: `future.result()` 300 → 3600 (1h for large doc processing).
+- **Test files**: Removed `sys.path.insert` hacks; imports now work via proper package install.
+
+### Fixed
+
+- **Chunk summary bug**: First run produced 20:1 compression (115 lines for 57-page PDF) — missing `DO NOT summarize` in chunked prompt. Fixed + added concrete example → now 619 lines with 8 tables, full glossary, all technical data preserved.
+- **str.format KeyError**: JSON curly braces in EXAMPLE block needed `{{`/`}}` escaping.
 
 - **LangChain Chunker**: Replaced custom regex Chunker with `MarkdownHeaderTextSplitter` + `RecursiveCharacterTextSplitter`. Splits on markdown header boundaries; oversized sections get recursive character split. Plain-text fallback when no headers detected.
 - **sqlite-vec storage**: `process_file_hybrid(store_path=...)` now persists embeddings to sqlite-vec database. 17+ chunks, FTS5 full-text index, vector similarity search.
