@@ -158,10 +158,10 @@ node increases throughput by approximately 15%. Maximum tested load:
 
 Expected output:
 ```json
-{
-  "part_md": "## Cost Analysis\n\nThe total implementation cost was $4.2 million, with $2.8 million for hardware and $1.4 million for software licensing. Annual maintenance is $320,000. The system achieved ROI within 18 months of deployment.\n\n## Scalability\n\nThe architecture supports horizontal scaling up to 10 nodes. Each additional node increases throughput by approximately 15%. Maximum tested load: 50,000 concurrent users with 200ms average response time.",
+{{
+  "part_md": "## Cost Analysis\\n\\nThe total implementation cost was $4.2 million, with $2.8 million for hardware and $1.4 million for software licensing. Annual maintenance is $320,000. The system achieved ROI within 18 months of deployment.\\n\\n## Scalability\\n\\nThe architecture supports horizontal scaling up to 10 nodes. Each additional node increases throughput by approximately 15%. Maximum tested load: 50,000 concurrent users with 200ms average response time.",
   "summary": "Covers cost breakdown ($4.2M total) and scalability specs (10-node horizontal scaling, 50K concurrent users)."
-}
+}}
 ```
 
 Notice: The output starts with `## Cost Analysis` as a new section (not repeating the previous chunk's `## Performance Metrics`). All content is preserved — every number, every dollar amount, every technical specification — just stripped of navigation chrome.
