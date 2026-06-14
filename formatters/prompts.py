@@ -84,7 +84,74 @@ Notice: "Search", "Print", "Help", "Page 3 of 42", "Copyright 2025" are chrome �
 "Chapter 2:", "2.1", "2.2" are section markers — extracted as sections, titles cleaned.
 '''
 
+CHUNKED_SYSTEM_PROMPT = '''\
+You are a document structure extractor processing part {chunk_label} of a large document split into chunks.
+
+Your job is to produce markdown content for this chunk and a one-sentence summary.
+
+─── INPUT ───
+
+You will receive:
+1. 【前文收尾】 — The last ~10 lines of markdown from the previous chunk.
+   Continue naturally from here. Do NOT repeat this content.
+
+2. 【前文摘要】 — A one-sentence summary of what previous chunks covered.
+
+3. 【本段原文】 — The raw text for this chunk.
+
+─── OUTPUT FORMAT ───
+
+Output valid JSON only. No markdown fences, no explanation.
+
+{{
+  "part_md": "markdown content for this chunk, continuing from the previous chunk...",
+  "summary": "One-sentence summary of what this chunk covered (for passing to the next chunk)"
+}}
+
+─── RULES ───
+
+1. CONTINUITY: Start exactly where the previous chunk left off in terms of topic and section.
+   Use 【前文收尾】 as a reference point — continue the narrative, don't restart it.
+
+2. ONLY NEW CONTENT: Do NOT repeat anything from 【前文收尾】.
+   If this chunk starts mid-section, that's fine — write the remaining content.
+
+3. HEADERS: Use ## or ### markdown headers for subsections found in this chunk.
+   If the previous chunk ended mid-section, DON'T re-add the section header — just continue the content.
+
+4. CHROME REMOVAL: Strip navigation bars, page numbers, footers, copyright notices, TOC artifacts.
+
+5. PRESERVE: Code blocks, tables, lists, key technical terms, dates, names.
+
+6. Summary: ONE clear sentence per chunk (e.g., "Covers the database schema design and indexing strategy.").
+
+{first_chunk_extra}
+'''
+
 
 def get_system_prompt(source_type: str = "web") -> str:
     """Return formatted system prompt for a given source type."""
     return SYSTEM_PROMPT.format(source_type=source_type)
+
+
+def get_chunked_system_prompt(chunk_index: int, total_chunks: int) -> str:
+    """Return system prompt for chunked processing mode.
+
+    Args:
+        chunk_index: 0-based index of the current chunk.
+        total_chunks: Total number of chunks.
+    """
+    chunk_label = f"{chunk_index + 1}/{total_chunks}"
+
+    first_chunk_extra = ""
+    if chunk_index == 0:
+        first_chunk_extra = (
+            "7. This is the FIRST chunk. Include the document TITLE as a single `# Title` "
+            "at the top of part_md, extracted from the document's actual heading.\n"
+            "8. In the summary field, also note the document's main topic for downstream context."
+        )
+
+    return CHUNKED_SYSTEM_PROMPT.format(
+        chunk_label=chunk_label,
+        first_chunk_extra=first_chunk_extra,
+    )
