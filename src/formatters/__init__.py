@@ -5,6 +5,7 @@ Auto-detects which path to use based on input size.
 """
 
 import json
+import logging
 import re
 from concurrent.futures import ThreadPoolExecutor, Future
 from typing import Any, Dict
@@ -12,6 +13,8 @@ from typing import Any, Dict
 import httpx
 
 from .prompts import get_system_prompt, get_chunked_system_prompt
+
+logger = logging.getLogger(__name__)
 
 # ── Chunking threshold ──────────────────────────────────────────────────
 # Texts above this many characters trigger chunked processing.
@@ -75,12 +78,22 @@ def _call_llm(system_prompt: str, user_message: str, *,
         )
         response.raise_for_status()
     except httpx.HTTPError as e:
+        logger.error("LLM call failed after %.1fs: %s",
+                      (timeout or cfg.llm_timeout), e)
         raise RuntimeError(f"LLM API request failed: {e}") from e
 
     try:
         raw_content = response.json()["choices"][0]["message"]["content"]
     except (KeyError, IndexError) as e:
+        logger.error("LLM returned unexpected response structure: %s", e)
         raise ValueError(f"LLM returned invalid format: {e}") from e
+
+    input_chars = len(user_message)
+    output_chars = len(raw_content)
+    logger.info("LLM call: %d chars in → %d chars out (max_tokens=%s, timeout=%ss)",
+                input_chars, output_chars,
+                max_tokens or cfg.llm_max_tokens,
+                timeout or cfg.llm_timeout)
 
     # Strip code block markers from LLM response
     content = re.sub(
@@ -173,6 +186,7 @@ def _format_text_chunked(raw: str, source_type: str = "pdf") -> Dict[str, Any]:
     """
     chunks = _split_by_paragraph(raw)
     total = len(chunks)
+    logger.info("Chunked processing: %d chunks, %d chars total", total, len(raw))
 
     all_parts: list[str] = []
     cumulative_summary = ""
@@ -199,9 +213,15 @@ def _format_text_chunked(raw: str, source_type: str = "pdf") -> Dict[str, Any]:
             f"{chunk_text}"
         )
 
+        logger.info("Chunk %d/%d: %d chars input — calling LLM...",
+                     i + 1, total, len(chunk_text))
         result = _call_llm(system_prompt, user_message, max_tokens=16384, timeout=300)
 
         part_md = result.get("part_md", "").strip()
+        summary = result.get("summary", "").strip()
+        logger.info("Chunk %d/%d: %d chars output, summary='%s'",
+                     i + 1, total, len(part_md), summary[:80] if summary else "(empty)")
+
         if part_md:
             all_parts.append(part_md)
 
@@ -224,6 +244,9 @@ def _format_text_chunked(raw: str, source_type: str = "pdf") -> Dict[str, Any]:
         level = len(match.group(1))
         section_title = match.group(2).strip()
         sections.append({"level": level, "title": section_title})
+
+    logger.info("Chunked merge complete: %d parts → %d chars, %d sections",
+                len(all_parts), len(body), len(sections))
 
     return {
         "title": title,
@@ -264,9 +287,13 @@ def format_text(raw: str, source_type: str = "web") -> Dict[str, Any]:
         raise ValueError("Input text is empty")
 
     # Auto-dispatch based on text length
-    if len(raw) > _CHUNK_THRESHOLD_CHARS:
+    raw_len = len(raw)
+    if raw_len > _CHUNK_THRESHOLD_CHARS:
+        logger.info("Large text: %d chars — chunked processing (%d chunks)",
+                     raw_len, max(1, raw_len // _CHUNK_THRESHOLD_CHARS))
         return _format_text_chunked(raw, source_type)
 
+    logger.info("Small text: %d chars — single-shot", raw_len)
     return _format_text_single(raw, source_type)
 
 
