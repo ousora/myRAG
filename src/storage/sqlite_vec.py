@@ -13,11 +13,12 @@ class SQLiteVecStore:
     def __init__(self, db_path: str):
         self.db_path = Path(db_path)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
-        
+
         import sqlite3
         import sqlite_vec
-        
+
         conn = sqlite3.connect(self.db_path, timeout=10)
+        conn.enable_load_extension(True)
         sqlite_vec.load(conn)
         
         self.conn = conn
