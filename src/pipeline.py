@@ -45,6 +45,7 @@ Usage (LLM-formatted + Markdown output):
 
 import json
 import logging
+import logging.handlers
 from pathlib import Path
 
 # Trigger parser registration at module load time
@@ -309,8 +310,34 @@ def main():
     md_parser.add_argument("--output-dir", default="./output/", help="Output directory for .md files")
 
     args = parser.parse_args()
-    
-    logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
+
+    # Setup logging: console + file
+    log_dir = Path("logs")
+    log_dir.mkdir(exist_ok=True)
+    log_file = log_dir / "pipeline.log"
+
+    root_logger = logging.getLogger()
+    root_logger.setLevel(logging.INFO)
+    root_logger.handlers.clear()
+
+    # Console handler
+    console = logging.StreamHandler()
+    console.setLevel(logging.INFO)
+    console.setFormatter(logging.Formatter("%(levelname)s: %(message)s"))
+    root_logger.addHandler(console)
+
+    # File handler (append, 5MB max, keep 3 backups)
+    fh = logging.handlers.RotatingFileHandler(
+        log_file, maxBytes=5 * 1024 * 1024, backupCount=3, encoding="utf-8",
+    )
+    fh.setLevel(logging.INFO)
+    fh.setFormatter(logging.Formatter(
+        "%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    ))
+    root_logger.addHandler(fh)
+
+    logger.info("Logging to %s", log_file.resolve())
 
     if args.command == "process-file":
         chunks = process_file(args.input, chunk_size=args.chunk_size)

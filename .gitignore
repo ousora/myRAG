@@ -34,6 +34,9 @@ output/
 # Vector database files (local sqlite-vec)
 data/
 
+# Logs
+logs/
+
 # Test artifacts (not tracked in git)
 .test/
 
