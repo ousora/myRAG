@@ -3,4 +3,4 @@
 
 pytest>=7.4           # Test runner
 ruff>=0.3             # Fast Python linter/formatter
-mypy>=1.8             # Type checking (optional)
+PyYAML>=6.0           # YAML — also needed by tests that load config
