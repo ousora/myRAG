@@ -17,12 +17,12 @@ Hybrid Retrieval (A + B):
        [doc_summary] → bge-m3 embedding → FAISS/Milvus vector DB
 
 Usage (traditional RAG):
-    from myrag.pipeline import process_file, process_directory
+    from pipeline import process_file, process_directory
     
     chunks = process_file("path/to/report.pdf")  # traditional chunking only
 
 Usage (LLM-formatted + Hybrid A+B):
-    from myrag.pipeline import process_file_hybrid
+    from pipeline import process_file_hybrid
     
     result = process_file_hybrid(
         filepath="path/to/document.pdf",
@@ -34,7 +34,7 @@ Usage (LLM-formatted + Hybrid A+B):
     # }
 
 Usage (LLM-formatted + Markdown output):
-    from myrag.pipeline import process_file_with_md
+    from pipeline import process_file_with_md
     
     md_path = process_file_with_md(
         filepath="path/to/document.pdf",
@@ -48,7 +48,7 @@ import logging
 from pathlib import Path
 
 # Trigger parser registration at module load time
-import myrag.parsers  # noqa: F401 — loads dispatcher (MarkItDown + Trafilatura)
+import parsers  # noqa: F401 — loads dispatcher (MarkItDown + Trafilatura)
 
 logger = logging.getLogger(__name__)
 
@@ -73,7 +73,7 @@ def _render_markdown_with_sections(result: dict) -> str:
 
 
 def _resolve_parser(filepath: str):
-    from myrag.parsers.dispatcher import resolve_parser as rp
+    from parsers.dispatcher import resolve_parser as rp
     return rp(filepath)
 
 
@@ -85,7 +85,7 @@ class TextCleaner:
     """
 
     def __init__(self, *, remove_page_breaks=True, collapse_whitespace=True):
-        from myrag.parsers.text_cleaner import TextCleaner as _RealCleaner  # noqa: F811
+        from parsers.text_cleaner import TextCleaner as _RealCleaner  # noqa: F811
         self._cleaner = _RealCleaner(
             remove_page_breaks=remove_page_breaks,
             collapse_whitespace=collapse_whitespace,
@@ -101,7 +101,7 @@ class Chunker:
     Kept in pipeline.py for backward compatibility with existing callers.
     The canonical implementation lives in chunkers/__init__.py.
     """
-    from myrag.chunkers import Chunker as _RealChunker
+    from chunkers import Chunker as _RealChunker
 
     def __new__(cls, **kwargs):
         return cls._RealChunker(**kwargs)
@@ -149,7 +149,7 @@ def process_file_hybrid(filepath: str, *, doc_id="doc_0", remove_page_breaks=Tru
         document — single dict with summary + embedding (B - coarse-grained)
         db_path  — path to sqlite-vec DB if store_path was provided, else None
     """
-    from myrag.formatters import format_text_async
+    from formatters import format_text_async
     
     # 1. Parse & Clean
     parser = _resolve_parser(filepath)
@@ -172,7 +172,7 @@ def process_file_hybrid(filepath: str, *, doc_id="doc_0", remove_page_breaks=Tru
     # 4. Embed + optionally persist to sqlite-vec
     db_path = None
     try:
-        from myrag.embedders import Embedder
+        from embedders import Embedder
     
         e = Embedder()
         stored_chunks = e.store_chunks(all_chunks, doc_id=doc_id)
@@ -189,7 +189,7 @@ def process_file_hybrid(filepath: str, *, doc_id="doc_0", remove_page_breaks=Tru
 
         # Persist to sqlite-vec if requested
         if store_path:
-            from myrag.storage.sqlite_vec import SQLiteVecStore
+            from storage.sqlite_vec import SQLiteVecStore
             db = SQLiteVecStore(store_path)
             
             # Store chunks with embeddings
@@ -238,7 +238,7 @@ def process_file_with_md(filepath: str, *, output_dir="./output/", **kwargs):
     This is the user-facing pipeline for generating human-readable documents.
     For vector DB indexing (Hybrid A+B), use process_file_hybrid() instead.
     """
-    from myrag.formatters import format_text_async, write_to_md
+    from formatters import format_text_async, write_to_md
     
     # Parse & Clean
     parser = _resolve_parser(filepath)
@@ -264,7 +264,7 @@ def process_directory(dirpath: str, *, extensions=None, chunk_size=512, **kwargs
     path = Path(dirpath)
 
     if extensions is None:
-        from myrag.parsers.dispatcher import PARSERS
+        from parsers.dispatcher import PARSERS
         extensions = set(PARSERS.keys())
 
     results: list[dict] = []

@@ -6,7 +6,7 @@ Resolution order (first wins):
     3. <project_root>/conf/config.example.yaml   (safe defaults, committed)
 
 Usage:
-    from myrag.config import get_config, Config
+    from config import get_config, Config
 
     cfg = get_config()
     cfg.llm_endpoint          # "http://192.168.191.112:8081/v1/chat/completions"

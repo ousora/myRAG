@@ -1,7 +1,7 @@
 """Embedding client — call your local bge-m3 service (vLLM / Ollama compatible).
 
 Usage:
-    from myrag.embedders import Embedder
+    from embedders import Embedder
     
     e = Embedder(base_url="http://192.168.191.112:8081")
     
@@ -39,7 +39,7 @@ class Embedder:
         import httpx
 
         # Load config defaults, then override with explicit params
-        from myrag.config import get_config
+        from config import get_config
         cfg = get_config()
         base_url = base_url or cfg.embedding_base_url
         model = model or cfg.embedding_model

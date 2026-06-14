@@ -1,6 +1,6 @@
 """Tests for LangChain-based Chunker."""
 
-from myrag.chunkers import Chunker, chunk_text
+from chunkers import Chunker, chunk_text
 
 SIMPLE_MD = """# Test Doc
 
@@ -73,7 +73,7 @@ Nested content here.
         assert len(chunks) >= 2
 
     def test_pipeline_facade_compatible(self):
-        from myrag.pipeline import Chunker as PipeChunker
+        from pipeline import Chunker as PipeChunker
         c = PipeChunker(chunk_size=1000)
         chunks = c.chunk(SIMPLE_MD)
         assert len(chunks) >= 2

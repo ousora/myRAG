@@ -24,5 +24,8 @@ sqlite-vec = ["sqlite-vec"]  # Local vector storage (lightweight, single-file)
 
 [tool.setuptools.packages.find]
 where = ["src"]
-include = ["myrag*", "myrag.*"]
-exclude = ["myrag_pipeline.egg-info"]
+include = ["*"]
+exclude = ["myrag_pipeline.egg-info", "tests*"]
+
+[tool.setuptools]
+py-modules = ["pipeline", "config"]

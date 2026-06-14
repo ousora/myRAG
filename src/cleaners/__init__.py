@@ -1,11 +1,11 @@
 """Text cleaning utilities for RAG pipelines.
 
 Facade — delegates to parsers.text_cleaner.TextCleaner (canonical implementation with YAML config support).
-The cleaners module exists for backward compatibility; new code should import from myrag.parsers.text_cleaner.
+The cleaners module exists for backward compatibility; new code should import from parsers.text_cleaner.
 """
 
 
-from myrag.parsers.text_cleaner import TextCleaner  # noqa: F401, re-exported
+from parsers.text_cleaner import TextCleaner  # noqa: F401, re-exported
 
 # Convenience function — delegates to the canonical class above
 def clean_text(text: str, *, remove_page_breaks=True, collapse_whitespace=True) -> str:

@@ -24,7 +24,7 @@ _CHUNK_THRESHOLD_CHARS = 28000
 
 def _get_config():
     """Lazy-load config on first call."""
-    from myrag.config import get_config
+    from config import get_config
     return get_config()
 
 

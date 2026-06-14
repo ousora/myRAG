@@ -1,7 +1,7 @@
 """Tests for text cleaner."""
 
 
-from myrag.cleaners import clean_text
+from cleaners import clean_text
 
 
 def test_normal_text_unchanged():
