@@ -1,11 +1,11 @@
 # myRAG — RAG Pipeline
 
 ```
-.doc/file → parse → clean → format ─┬→ write_to_md()  → 可读 .md
+.doc/file → parse → clean → format ─┬→ write_to_md()  → readable .md
                                     └→ chunk → embed → sqlite-vec
 ```
 
-> 大文档自动按段落分片处理（>28K chars），每片保留前文收尾 + 累计摘要作为上下文，保证连续性。
+> Large texts (>28K chars) are auto-split at paragraph boundaries and processed chunk-by-chunk. Each chunk receives the last 10 lines of previous markdown output + cumulative summary as context for continuity.
 
 ## Architecture
 
@@ -14,8 +14,8 @@ Raw file (.pdf/.docx/.html/.md/.txt)
     ↓ parser.parse()              # MarkItDown / Trafilatura → text
     ↓ cleaner.clean()             # TextCleaner: noise removal
     ↓ formatter.format_text()     # LLM → {title, tags, sections, body}
-    │                             # 小文档一次调用，大文档自动分片
-    ├→ write_to_md(result)        # 可读 .md 文件
+    │                             # Small docs: single-shot. Large docs: auto-chunked
+    ├→ write_to_md(result)        # readable .md file
     └→ _render_markdown_with_sections(result)
         ↓ chunker.chunk(md)       # LangChain MarkdownHeaderTextSplitter
         ↓ embedder.store_chunks() # bge-m3 → 1024-d vectors
@@ -70,16 +70,12 @@ chunks = Chunker(chunk_size=512, chunk_overlap=64).chunk(markdown_text)
 bge-m3 embeddings → sqlite-vec database with FTS5 full-text index.
 
 ```python
-# One-shot: ingest + embed + store
-from pipeline import process_file_hybrid
+# Read + ingest from an existing .md file
+from pipeline import _ingest_markdown
 
-result = process_file_hybrid(
-    "report.pdf", doc_id="doc_001",
-    chunk_size=512,
-    store_path="data/myrag.db",   # persist to sqlite-vec
-)
+_ingest_markdown("output/report.md", store_path="data/myrag.db")
 
-# Query
+# Or query directly
 from embedders import Embedder
 from storage.sqlite_vec import SQLiteVecStore
 
@@ -102,11 +98,14 @@ cp conf/config.example.yaml conf/config.yaml
 ### CLI
 
 ```bash
-# Generate readable markdown
+# 1. Generate .md only (inspect or edit before storage)
 python -m pipeline md input.pdf --output-dir output/
 
-# Full ingest: format → chunk → embed → sqlite-vec
-python -m pipeline hybrid input.pdf --store data/myrag.db
+# 2. Ingest an existing .md into sqlite-vec (no LLM call)
+python -m pipeline ingest output/doc.md --store data/doc.db
+
+# 3. Generate .md and auto-ingest (two-step, transparent)
+python -m pipeline process input.pdf --store data/doc.db
 
 # Traditional (no LLM, no storage)
 python -m pipeline process-file input.txt --chunk-size 512
@@ -119,7 +118,7 @@ myrag/
 ├── src/
 │   ├── __init__.py           # Package init
 │   ├── config.py             # Config loader: get_config()
-│   ├── pipeline.py           # process_file / process_file_hybrid / process_file_with_md
+│   ├── pipeline.py           # CLI + process_file / _ingest_markdown / process_file_with_md
 │   ├── parsers/              # MarkItDown + Trafilatura dispatcher
 │   │   ├── dispatcher.py
 │   │   └── text_cleaner.py
@@ -136,6 +135,8 @@ myrag/
 │   ├── config.yaml           # Your endpoints (gitignored)
 │   └── config.example.yaml   # Template (committed)
 ├── output/                   # Generated markdown files
+├── data/                     # sqlite-vec databases (gitignored)
+├── logs/                     # Pipeline logs (gitignored)
 ├── pyproject.toml
 ├── uv.lock
 └── README.md
@@ -159,7 +160,7 @@ embedding:
   timeout: 60
 ```
 
-Resolution: `$MYRAG_CONFIG` → `conf/config.yaml` → `conf/config.example.yaml`.
+Resolution chain: `$MYRAG_CONFIG` → `conf/config.yaml` → `conf/config.example.yaml`.
 
 ```python
 from config import get_config
