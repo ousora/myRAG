@@ -1,5 +1,7 @@
 # Project Rules — myrag-pipeline
 
+> **Full agent instructions are in [AGENTS.md](AGENTS.md)** — architecture, key directories, build commands, conventions, and pitfalls. This file contains the coding standards only.
+
 ## Coding Standards
 
 1. **Documentation Language** — Public-facing docs, docstrings, and comments should be in English. Chinese may appear only as supplementary notes for technical concepts where English equivalents are unclear to the team (e.g., RAG 术语解释).
