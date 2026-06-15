@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+### Changed
+
+- **Pipeline module split**: `pipeline.py` (549 lines) → `pipeline/core.py` (356), `pipeline/cli.py` (128), `pipeline/ingest.py` (81). All under 500-line limit.
+- **Formatter public API**: `_call_llm()` renamed to `call_llm()`, exported in `__all__`. New `format_text_with_system(raw, source_type, *, system_prompt)` convenience wrapper. Added `system_prompt` parameter chain through `format_text_async()`.
+
+### Fixed
+
+- **sqlite_vec import detection**: Replaced fragile `sys.path` walking with `importlib.metadata.distribution("sqlite-vec").files`. Works across editable installs, wheels, and different Python versions. Added explicit `PackageNotFoundError` handling.
+
 ### Added (Auto-Chunking for Large Docs — 2026-06-14)
 
 - **Chunked formatter**: Texts >28K chars auto-split at paragraph boundaries and processed chunk-by-chunk. Each chunk LLM call receives the last 10 lines of previous markdown output + cumulative summary as continuity context. Single-shot path unchanged for small docs.

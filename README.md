@@ -48,10 +48,15 @@ cleaned = TextCleaner().clean(raw_text)
 LLM-powered: extracts title, tags, section hierarchy. **Auto-chunks large texts** (>28K chars) at paragraph boundaries — each chunk gets the last 10 lines of previous markdown output + cumulative summary as context for continuity.
 
 ```python
-from formatters import format_text_async, write_to_md
+from formatters import format_text_async, format_text_with_system, call_llm, write_to_md
 
+# Standard formatting (async)
 future = format_text_async(cleaned, source_type="pdf")
 result = future.result(timeout=3600)
+
+# Custom system prompt
+result = format_text_with_system(cleaned, source_type="pdf", system_prompt=custom_prompt)
+
 md_path = write_to_md(result, "output/")    # readable markdown
 ```
 
@@ -71,7 +76,7 @@ bge-m3 embeddings → sqlite-vec database with FTS5 full-text index.
 
 ```python
 # Read + ingest from an existing .md file
-from pipeline import _ingest_markdown
+from pipeline.ingest import _ingest_markdown
 
 _ingest_markdown("output/report.md", store_path="data/myrag.db")
 
@@ -118,7 +123,11 @@ myrag/
 ├── src/
 │   ├── __init__.py           # Package init
 │   ├── config.py             # Config loader: get_config()
-│   ├── pipeline.py           # CLI + process_file / _ingest_markdown / process_file_with_md
+│   ├── pipeline/             # Pipeline modules (split to stay under 500 lines)
+│   │   ├── __init__.py       # Package init
+│   │   ├── core.py           # Core functions: process_file, process_directory, process_file_hybrid, rag_query
+│   │   ├── cli.py            # CLI entry point with argparse subcommands
+│   │   └── ingest.py         # _ingest_markdown function
 │   ├── parsers/              # MarkItDown + Trafilatura dispatcher
 │   │   ├── dispatcher.py
 │   │   └── text_cleaner.py
