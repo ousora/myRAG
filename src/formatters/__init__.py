@@ -42,9 +42,9 @@ def get_executor() -> ThreadPoolExecutor:
     return _executor
 
 
-def _call_llm(system_prompt: str, user_message: str, *,
-              max_tokens: int | None = None,
-              timeout: int | None = None) -> dict:
+def call_llm(system_prompt: str, user_message: str, *,
+             max_tokens: int | None = None,
+             timeout: int | None = None) -> dict:
     """Make a single LLM API call and return the parsed JSON response.
 
     Args:
@@ -197,10 +197,10 @@ def _split_by_paragraph(text: str, max_chars: int = _CHUNK_THRESHOLD_CHARS) -> l
     return chunks
 
 
-def _format_text_single(raw: str, source_type: str = "web") -> Dict[str, Any]:
+def _format_text_single(raw: str, source_type: str = "web", *, system_prompt: str | None = None) -> Dict[str, Any]:
     """Single-shot formatting — original behavior for small documents."""
-    prompt = get_system_prompt(source_type)
-    return _call_llm(prompt, raw.strip())
+    prompt = system_prompt if system_prompt is not None else get_system_prompt(source_type)
+    return call_llm(prompt, raw.strip())
 
 
 def _format_text_chunked(raw: str, source_type: str = "pdf") -> Dict[str, Any]:
@@ -243,7 +243,7 @@ def _format_text_chunked(raw: str, source_type: str = "pdf") -> Dict[str, Any]:
 
         logger.info("Chunk %d/%d: %d chars input — calling LLM...",
                      i + 1, total, len(chunk_text))
-        result = _call_llm(system_prompt, user_message, max_tokens=16384, timeout=300)
+        result = call_llm(system_prompt, user_message, max_tokens=16384, timeout=300)
 
         part_md = result.get("part_md", "").strip()
         summary = result.get("summary", "").strip()
@@ -324,13 +324,56 @@ def format_text(raw: str, source_type: str = "web") -> Dict[str, Any]:
     return _format_text_single(raw, source_type)
 
 
-def format_text_async(raw: str, source_type: str = "web") -> Future[Dict[str, Any]]:
-    """Submit formatting task to thread pool. Returns a Future."""
-    future = get_executor().submit(format_text, raw, source_type)
+def _format_text_async_impl(raw: str, source_type: str, *, system_prompt: str | None = None) -> Dict[str, Any]:
+    """Internal implementation of async formatting that respects custom system prompts."""
+    if not raw.strip():
+        raise ValueError("Input text is empty")
+
+    raw_len = len(raw)
+    if raw_len > _CHUNK_THRESHOLD_CHARS:
+        return _format_text_chunked(raw, source_type)
+
+    return _format_text_single(raw, source_type, system_prompt=system_prompt)
+
+
+def format_text_async(raw: str, source_type: str = "web", *, system_prompt: str | None = None) -> Future[Dict[str, Any]]:
+    """Submit formatting task to thread pool. Returns a Future.
+
+    Args:
+        raw: The text to process.
+        source_type: Source context for the LLM ('web', 'markdown', 'pdf_clip').
+        system_prompt: Optional custom system prompt (overrides default).
+                       Useful for RAG queries where you want a different prompt style.
+    """
+    future = get_executor().submit(_format_text_async_impl, raw, source_type, system_prompt=system_prompt)
     return future
 
 
-__all__ = ["format_text", "format_text_async"]
+def format_text_with_system(raw: str, source_type: str = "web", *, system_prompt: str | None = None) -> Dict[str, Any]:
+    """Format text with an optional custom system prompt.
+
+    Convenience wrapper that delegates to _format_text_single() or _format_text_chunked()
+    depending on input size, passing the system_prompt through.
+
+    Args:
+        raw: The text to process.
+        source_type: Source context for the LLM ('web', 'markdown', 'pdf_clip').
+        system_prompt: Optional custom system prompt (overrides default).
+
+    Returns:
+        Dict with keys: title, tags, metadata, body.
+    """
+    if not raw.strip():
+        raise ValueError("Input text is empty")
+
+    raw_len = len(raw)
+    if raw_len > _CHUNK_THRESHOLD_CHARS:
+        return _format_text_chunked(raw, source_type)
+
+    return _format_text_single(raw, source_type, system_prompt=system_prompt)
+
+
+__all__ = ["call_llm", "format_text", "format_text_async", "format_text_with_system"]
 
 # Re-export writer functions for convenience
 from .writer import format_md, write_to_md  # noqa: F401, E402

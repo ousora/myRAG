@@ -1,10 +1,70 @@
 """SQLite-based vector store using sqlite-vec extension."""
 
+from __future__ import annotations
 
 import json
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
+
+# ---------------------------------------------------------------------------
+# Dynamic loader for the third-party ``sqlite-vec`` package.
+#
+# Our own file is named ``storage.sqlite_vec``, so a bare ``import sqlite_vec``
+# resolves back to us (the local module), not the real package.  We bypass all
+# name resolution by loading directly from the filesystem path discovered via
+# ``importlib.metadata.distribution("sqlite-vec").files``.
+# ---------------------------------------------------------------------------
+_sqlite_vec: Optional[object] = None
+
+
+def _load_sqlite_vec() -> object:
+    """Return the third-party ``sqlite_vec`` module (loaded once).
+
+    Raises RuntimeError if the ``sqlite-vec`` package is not installed.
+    """
+    global _sqlite_vec
+    if _sqlite_vec is not None:
+        return _sqlite_vec
+
+    from importlib.metadata import PackageNotFoundError, distribution
+    import importlib.util
+
+    try:
+        dist = distribution("sqlite-vec")
+    except PackageNotFoundError as exc:  # type: ignore[attr-defined]
+        raise RuntimeError(
+            "The 'sqlite-vec' package is required but not installed.\n"
+            "Install it with: pip install sqlite-vec\n"
+            "(or: uv add --dev sqlite-vec)"
+        ) from exc
+
+    # Locate __init__.py via the distribution's file list — robust across
+    # editable installs, wheels, and different Python versions.
+    init_py = next(
+        (f for f in dist.files or [] if str(f) == "sqlite_vec/__init__.py"),
+        None,
+    )
+    if init_py is None:
+        raise RuntimeError(
+            "Could not locate sqlite_vec.__init__ inside the 'sqlite-vec' distribution.\n"
+            "The installed version may be corrupted or incompatible."
+        )
+
+    spec = importlib.util.spec_from_file_location(
+        "_third_party_sqlite_vec", str(dist.locate_file(init_py)),
+    )
+    mod = importlib.util.module_from_spec(spec)  # type: ignore[union-attr]
+    sys.modules["_third_party_sqlite_vec"] = mod
+    spec.loader.exec_module(mod)  # type: ignore[union-attr]
+    _sqlite_vec = mod
+    return mod
+
+
+# Cached reference for convenience — callers use this instead of calling
+# ``_load_sqlite_vec()`` every time.
+_SQLITE_VEC = _load_sqlite_vec()
 
 
 class SQLiteVecStore:
@@ -15,11 +75,9 @@ class SQLiteVecStore:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
 
         import sqlite3
-        import sqlite_vec
-
         conn = sqlite3.connect(self.db_path, timeout=10)
         conn.enable_load_extension(True)
-        sqlite_vec.load(conn)
+        _load_sqlite_vec().load(conn)  # type: ignore[attr-defined]
         
         self.conn = conn
         self.conn.execute("PRAGMA journal_mode=WAL")
@@ -58,8 +116,6 @@ class SQLiteVecStore:
     def upsert_chunk(self, chunk_data: dict, *, doc_id: str, 
                      embedding: list[float], chunk_index: int = 0) -> dict:
         """Insert or update a chunk with its embedding."""
-        import sqlite_vec
-        
         self._setup_schema()
         
         section_json = json.dumps(chunk_data.get("section_path", ["General"]))
@@ -68,7 +124,7 @@ class SQLiteVecStore:
         cursor = self.conn.execute(
             """INSERT INTO chunks (text, embedding, source_doc_id, chunk_index, section_path, word_count)
                VALUES (?, ?, ?, ?, ?, ?)""",
-            (chunk_data["text"], sqlite_vec.serialize_float32(embedding), doc_id, 
+            (chunk_data["text"], _SQLITE_VEC.serialize_float32(embedding), doc_id, 
              chunk_index, json.dumps(chunk_data.get("section_path", ["General"])), word_count)
         )
 
@@ -114,15 +170,13 @@ class SQLiteVecStore:
     def search_chunks(self, query_vector: list[float], *, k: int = 10,
                       source_doc_id: Optional[str] = None, section_filter: Optional[list[str]] = None) -> list[dict]:
         """Search chunks by vector similarity (cosine distance)."""
-        import sqlite_vec
-        
         self._setup_schema()
 
-        emb_str = sqlite_vec.serialize_float32(query_vector)
-        
+        emb_str = _SQLITE_VEC.serialize_float32(query_vector)
+
         conditions = []
         params = []
-        
+
         if source_doc_id:
             conditions.append("source_doc_id = ?")
             params.append(source_doc_id)
@@ -216,8 +270,6 @@ class SQLiteVecStore:
     def hybrid_search(self, query_text: str, query_vector: Optional[list[float]] = None, 
                       k: int = 10) -> list[dict]:
         """Hybrid search: vector similarity + full-text (FTS5)."""
-        import sqlite_vec
-        
         self._setup_schema()
 
         fts_results = self.conn.execute(
@@ -227,7 +279,7 @@ class SQLiteVecStore:
         
         vec_results = []
         if query_vector:
-            emb_str = sqlite_vec.serialize_float32(query_vector)
+            emb_str = _SQLITE_VEC.serialize_float32(query_vector)
             results = self.conn.execute(
                 """SELECT c.id, c.text, json_each.value as section_path, 
                              c.source_doc_id, c.chunk_index, c.word_count
@@ -257,7 +309,7 @@ class SQLiteVecStore:
         for v in vec_results:
             if v["id"] not in combined:
                 combined[v["id"]] = dict(v)
-                emb_str = sqlite_vec.serialize_float32(query_vector)
+                emb_str = _SQLITE_VEC.serialize_float32(query_vector)
                 combined[v["id"]]["_vec_score"] = self.conn.execute(
                     "SELECT vec_distance_cosine(embedding, ?) FROM chunks WHERE id=?",
                     [emb_str, v["id"]]
@@ -276,10 +328,21 @@ class SQLiteVecStore:
             (doc_id,)
         ).fetchall()
 
+        def _deserialize_embedding(raw) -> list[float]:
+            """Deserialize embedding from BLOB (sqlite_vec format) or legacy string."""
+            if isinstance(raw, bytes):
+                import struct
+                n = len(raw) // 4
+                return list(struct.unpack(f"{n}f", raw))
+            # Legacy comma-separated string format
+            if isinstance(raw, str):
+                return [float(v) for v in raw.split(",")]
+            return list(raw)
+
         return [{
             "id": row[0],
             "text": row[1],
-            "embedding": [float(v) for v in row[2].split(",")] if isinstance(row[2], str) else list(row[2]),
+            "embedding": _deserialize_embedding(row[2]),
             "source_doc_id": row[3],
             "chunk_index": row[4],
             "section_path": self._parse_section_path(row[5]) if row[5] else ["General"],
