@@ -12,23 +12,12 @@
 - [x] Centralized config (`conf/config.yaml` + `config.py`)
 - [x] End-to-end verification on cncc.txt — 20 chunks, accurate vector retrieval
 - [x] Unit tests — 48 passed (config 11, chunkers 8, formatters 9, cleaners 5, embedders 7, parsers 13)
-- [x] **Improve sqlite_vec import detection** (`src/storage/sqlite_vec.py`)
-  - Replaced fragile `sys.path` walking with `importlib.metadata.distribution("sqlite-vec").files` search
-  - Added explicit `PackageNotFoundError` handling with actionable error message
-  - Works across editable installs, wheels, and different Python versions
-- [x] **Split pipeline.py** (was 549 lines → now split across 3 modules, all under 500)
-  - `pipeline/core.py` (356 lines) — core functions: process_file, process_directory, process_file_hybrid, rag_query
-  - `pipeline/cli.py` (128 lines) — CLI entry point with main() and argparse subcommands
-  - `pipeline/ingest.py` (81 lines) — _ingest_markdown function
-  - Reduces duplication between `process_file_hybrid` and `_ingest_markdown`
-- [x] **Replace bare except in `process_file_hybrid`**
-  - Changed `except Exception` → `except (httpx.HTTPError, RuntimeError)` with typed log message
-- [x] **Verify `_format_text_single()` accepts `system_prompt` parameter**
-  - Added `system_prompt: str | None = None` to `_format_text_single()`, `_format_text_async_impl()`, and new public `format_text_with_system()` wrapper
-- [x] **Fix `summary_text` scope bug** in exception handler
-  - Moved title/tags extraction and summary_text construction before the try block so they're always available in the except handler; removed `'summary_text' in dir()` code smell (always True since we initialized it)
-- [x] **Make `_call_llm` public or use proper LLM client abstraction** ✅
-  - Renamed to `call_llm()`, exported in `__all__`, updated all callers (including `rag_query()`).
+- [x] **Improve sqlite_vec import detection** — replaced fragile sys.path walking with importlib.metadata-based detection
+- [x] **Split pipeline.py** — split 549-line file into core.py, cli.py, ingest.py (all under 500 lines)
+- [x] **Replace bare except in `process_file_hybrid`** — changed to specific httpx.HTTPError and RuntimeError
+- [x] **Add system_prompt param to format functions** — added optional system_prompt to _format_text_single, _format_text_async_impl, and format_text_with_system
+- [x] **Fix summary_text scope bug** — moved extraction before try block, removed dir() check
+- [x] **Make _call_llm public** — renamed to call_llm(), added to __all__, updated all callers
 
 ---
 
