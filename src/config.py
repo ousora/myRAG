@@ -72,6 +72,38 @@ class Config:
         self.embedding_model: str      = emb.get("model", "bge-m3")
         self.embedding_timeout: int    = emb.get("timeout", 60)
 
+        # ── Formatter ──
+        fmt = raw.get("formatter", {})
+        self.chunk_threshold_chars: int = fmt.get("chunk_threshold_chars", 28000)
+        self.chunk_max_tokens: int      = fmt.get("chunk_max_tokens", 16384)
+        self.chunk_timeout: int         = fmt.get("chunk_timeout", 300)
+
+        # ── Pipeline ──
+        pipe = raw.get("pipeline", {})
+        self.format_timeout: int = pipe.get("format_timeout", 3600)
+
+        # ── Logging ──
+        log_cfg = raw.get("logging", {})
+        self.log_max_bytes: int = log_cfg.get("max_bytes", 5 * 1024 * 1024)
+
+    def _validate(self) -> list[str]:
+        """Return a list of validation error messages, or [] if valid."""
+        errors: list[str] = []
+
+        # Formatter settings must be positive
+        for field in ("chunk_threshold_chars", "chunk_max_tokens", "chunk_timeout"):
+            val = getattr(self, field)
+            if not isinstance(val, int) or val <= 0:
+                errors.append(f"{field} must be a positive integer (got {val})")
+
+        # Pipeline settings must be positive
+        for field in ("format_timeout",):
+            val = getattr(self, field)
+            if not isinstance(val, int) or val <= 0:
+                errors.append(f"{field} must be a positive integer (got {val})")
+
+        return errors
+
     def __repr__(self) -> str:
         return (
             f"Config(llm={self.llm_endpoint} [{self.llm_model}], "
@@ -89,3 +121,13 @@ def get_config() -> Config:
     import yaml
     raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
     return Config(raw)
+
+
+def get_config_lazy() -> Config:
+    """Lazy-loaded config — returns the cached instance on first call.
+
+    This helper is intended for modules that need to access config values
+    without importing ``get_config`` directly (avoids circular imports).
+    Prefer calling ``get_config()`` from new code when possible.
+    """
+    return get_config()

@@ -47,6 +47,8 @@ import httpx
 import logging
 from pathlib import Path
 
+from config import get_config_lazy as _get_config
+
 # Trigger parser registration at module load time
 import parsers  # noqa: F401 — loads dispatcher (MarkItDown + Trafilatura)
 
@@ -161,10 +163,11 @@ def process_file_hybrid(filepath: str, *, doc_id="doc_0", remove_page_breaks=Tru
 
     raw_text = parser.parse(filepath)
     cleaned = TextCleaner(remove_page_breaks=remove_page_breaks, collapse_whitespace=collapse_whitespace).clean(raw_text)
-    
+
     # 2. LLM Format (async)
+    cfg = _get_config()
     future = format_text_async(cleaned, source_type="pdf")
-    result = future.result(timeout=3600)
+    result = future.result(timeout=cfg.format_timeout)
 
     # 3. Render markdown with headers from metadata.sections, then chunk
     formatted_md = _render_markdown_with_sections(result)
@@ -246,7 +249,9 @@ def process_file_with_md(filepath: str, *, output_dir="./output/", **kwargs):
     For vector DB indexing (Hybrid A+B), use process_file_hybrid() instead.
     """
     from formatters import format_text_async, write_to_md
-    
+
+    cfg = _get_config()
+
     # Parse & Clean
     parser = _resolve_parser(filepath)
     if parser is None:
@@ -255,10 +260,10 @@ def process_file_with_md(filepath: str, *, output_dir="./output/", **kwargs):
 
     raw_text = parser.parse(filepath)
     cleaned = TextCleaner(**kwargs).clean(raw_text)
-    
+
     # LLM Format
     future = format_text_async(cleaned, source_type="pdf")
-    result = future.result(timeout=3600)
+    result = future.result(timeout=cfg.format_timeout)
     
     # Write markdown to output_dir
     md_path = write_to_md(result, output_dir)

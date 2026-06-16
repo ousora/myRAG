@@ -16,12 +16,6 @@ from .prompts import get_system_prompt, get_chunked_system_prompt
 
 logger = logging.getLogger(__name__)
 
-# ── Chunking threshold ──────────────────────────────────────────────────
-# Texts above this many characters trigger chunked processing.
-# ~28K chars ≈ 7000 tokens — safe for most local LLMs.
-_CHUNK_THRESHOLD_CHARS = 28000
-
-
 # ── Internal helpers ────────────────────────────────────────────────────
 
 
@@ -30,6 +24,11 @@ def _get_config():
     from config import get_config
     return get_config()
 
+
+# ── Chunking threshold ──────────────────────────────────────────────────
+# Texts above this many characters trigger chunked processing.
+# ~28K chars ≈ 7000 tokens — safe for most local LLMs.
+_CHUNK_THRESHOLD_CHARS = _get_config().chunk_threshold_chars
 
 _executor = None
 
@@ -225,25 +224,31 @@ def _format_text_chunked(raw: str, source_type: str = "pdf") -> Dict[str, Any]:
         prev_tail = _get_last_n_lines(all_parts, 10)
         prev_tail_block = (
             prev_tail
-            or "（这是文档的第一部分，无需参考前文。）"
+            or "This is the first chunk; no prior context needed."
         )
         summary_block = (
             cumulative_summary
-            or "（这是文档的第一部分。）"
+            or "This is the first chunk."
         )
 
         user_message = (
-            f"【前文收尾】\n"
+            f"[Previous Context]\n"
             f"{prev_tail_block}\n\n"
-            f"【前文摘要】\n"
+            f"[Summary of Previous Chunks]\n"
             f"{summary_block}\n\n"
-            f"【本段原文】\n"
+            f"[Current Chunk Text]\n"
             f"{chunk_text}"
         )
 
         logger.info("Chunk %d/%d: %d chars input — calling LLM...",
                      i + 1, total, len(chunk_text))
-        result = call_llm(system_prompt, user_message, max_tokens=16384, timeout=300)
+        cfg = _get_config()
+        result = call_llm(
+            system_prompt,
+            user_message,
+            max_tokens=cfg.chunk_max_tokens,
+            timeout=cfg.chunk_timeout,
+        )
 
         part_md = result.get("part_md", "").strip()
         summary = result.get("summary", "").strip()

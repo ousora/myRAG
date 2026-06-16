@@ -164,7 +164,7 @@ class SQLiteVecStore:
                 return [data]
             else:
                 return [str(data)]
-        except (json.JSONDecodeError, Exception):
+        except json.JSONDecodeError:
             return []
 
     def search_chunks(self, query_vector: list[float], *, k: int = 10,

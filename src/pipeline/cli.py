@@ -2,8 +2,14 @@
 
 import argparse
 import json
+import logging
 import logging.handlers
 from pathlib import Path
+
+from config import get_config_lazy as _get_config
+
+
+logger = logging.getLogger(__name__)
 
 
 def main():
@@ -58,9 +64,17 @@ def main():
     console.setFormatter(logging.Formatter("%(levelname)s: %(message)s"))
     root_logger.addHandler(console)
 
-    # File handler (append, 5MB max, keep 3 backups)
+    cfg = _get_config()
+
+    # Log loaded configuration for debugging
+    root_logger.info("Config: log_max_bytes=%d, chunk_threshold_chars=%d",
+                     cfg.log_max_bytes, cfg.chunk_threshold_chars)
+    root_logger.info("Config: format_timeout=%ds, chunk_timeout=%ds",
+                     cfg.format_timeout, cfg.chunk_timeout)
+
+    # File handler (append, configurable max size, keep 3 backups)
     fh = logging.handlers.RotatingFileHandler(
-        log_file, maxBytes=5 * 1024 * 1024, backupCount=3, encoding="utf-8",
+        log_file, maxBytes=cfg.log_max_bytes, backupCount=3, encoding="utf-8",
     )
     fh.setLevel(logging.INFO)
     fh.setFormatter(logging.Formatter(

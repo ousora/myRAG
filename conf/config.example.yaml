@@ -20,3 +20,17 @@ embedding:
   base_url: "http://localhost:11435"
   model: "bge-m3"
   timeout: 60                # seconds for HTTP request
+
+# ── Formatter Settings ───────────────────────────────────────────────
+formatter:
+  chunk_threshold_chars: 28000   # texts above this trigger chunked processing (~7000 tokens)
+  chunk_max_tokens: 16384        # max output tokens per chunk LLM call
+  chunk_timeout: 300             # seconds for each chunk LLM call
+
+# ── Pipeline Settings ────────────────────────────────────────────────
+pipeline:
+  format_timeout: 3600           # seconds for full pipeline formatting (async)
+
+# ── Logging Settings ─────────────────────────────────────────────────
+logging:
+  max_bytes: 5242880             # 5 MB rotating log file size
