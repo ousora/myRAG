@@ -31,6 +31,8 @@
 
 12. **Logging & Debug Info** — Use the standard `logging` module with appropriate levels (`INFO`, `WARNING`, `ERROR`). Never use `print()` in production code. Log file paths, chunk counts, and parsing results at least at `INFO` level for debugging purposes.
 
+13. **TODO Maintenance** — After completing a task, move it from the backlog section to the completed section in `TODO.md` with one short summary line describing what was done. Delete the item entirely from the backlog section so the document stays current and actionable.
+
 ## Testing Requirements
 
 - Each parser module must have unit tests covering its core parsing logic
