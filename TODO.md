@@ -18,6 +18,7 @@
 - [x] **Add system_prompt param to format functions** — added optional system_prompt to _format_text_single, _format_text_async_impl, and format_text_with_system
 - [x] **Fix summary_text scope bug** — moved extraction before try block, removed dir() check
 - [x] **Make _call_llm public** — renamed to call_llm(), added to __all__, updated all callers
+- [x] **Translate Chinese prompt labels in CHUNKED_SYSTEM_PROMPT** — changed to English: `[Previous Context]`, `[Summary of Previous Chunks]`, `[Current Chunk Text]`
 
 ---
 
@@ -52,8 +53,7 @@
 
 ### P2 — Code Quality
 
-- [x] **Translate Chinese prompt labels** in `CHUNKED_SYSTEM_PROMPT`
-  - Changed to English: `[Previous Context]`, `[Summary of Previous Chunks]`, `[Current Chunk Text]`
+
 
 - [ ] **Add config validation** in `Config` class
   - Validate required fields and types (e.g., `temperature` must be float in [0, 1])
