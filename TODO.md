@@ -11,7 +11,7 @@
 - [x] sqlite-vec persistence (chunks + documents + FTS5) via `process_file_hybrid()`
 - [x] Centralized config (`conf/config.yaml` + `config.py`)
 - [x] End-to-end verification on cncc.txt — 20 chunks, accurate vector retrieval
-- [x] Unit tests — 45 passed (chunkers 8, formatters 9, cleaners 5, storage 13, integration 9, sqlite_vec loader 1)
+- [x] Unit tests — 48 passed (config 11, chunkers 8, formatters 9, cleaners 5, embedders 7, parsers 13)
 - [x] **Improve sqlite_vec import detection** (`src/storage/sqlite_vec.py`)
   - Replaced fragile `sys.path` walking with `importlib.metadata.distribution("sqlite-vec").files` search
   - Added explicit `PackageNotFoundError` handling with actionable error message
@@ -63,13 +63,12 @@
 
 ### P2 — Code Quality
 
-- [ ] **Translate Chinese prompt labels** in `CHUNKED_SYSTEM_PROMPT`
-  - `【前文收尾】` → `Previous Tail` (or keep Chinese as supplementary note per project rules)
-  - `【前文摘要】` → `Previous Summary`
-  - `【本段原文】` → `Current Raw Text`
+- [x] **Translate Chinese prompt labels** in `CHUNKED_SYSTEM_PROMPT`
+  - Changed to English: `[Previous Context]`, `[Summary of Previous Chunks]`, `[Current Chunk Text]`
 
 - [ ] **Add config validation** in `Config` class
   - Validate required fields and types (e.g., `temperature` must be float in [0, 1])
+  - ✅ Partially done: `_validate()` method added for timeout/size constraints
 
 ### P3 — Nice to Have
 
@@ -93,8 +92,8 @@
 |----------|-------|
 | P0 — Critical | 4 |
 | P1 — Important | 6 |
-| P2 — Code Quality | 3 |
+| P2 — Code Quality | 2 |
 | P3 — Nice to Have | 5 |
-| **Total** | **18** |
+| **Total** | **17** |
 
 **Assessment**: Solid RAG pipeline with clean architecture. Primary concerns are the embedding serialization bug in SQLiteVecStore, missing storage tests, and resource leaks (httpx.Client, ThreadPoolExecutor). The Query interface is the next major milestone.
