@@ -8,7 +8,6 @@ All imports should work as before: `from pipeline import process_file, ...`
 from pipeline.core import (
     Chunker,
     TextCleaner,
-    _render_markdown_with_sections,
     _resolve_parser,
     process_directory,
     process_file,
@@ -23,7 +22,6 @@ from pipeline.ingest import _ingest_markdown
 __all__ = [
     "Chunker",
     "TextCleaner",
-    "_render_markdown_with_sections",
     "_resolve_parser",
     "process_directory",
     "process_file",

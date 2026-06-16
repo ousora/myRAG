@@ -11,11 +11,12 @@
 ## Architecture
 ```text
 parsers/          — MarkItDown / Trafilatura unified parser + TextCleaner
-cleaners/         — Legacy (use parsers/text_cleaner.py instead)
+cleaners/         — REMOVED (was backward-compat facade)
 chunkers/         — Chunker: configurable size + overlap segmentation
 embedders/        — Embedder: bge-m3 embedding client (OpenAI-compatible API)
 formatters/       — LLM formatter with clean section_path constraints
-pipeline.py       — process_file_with_md() / process_directory() entry point
+pipeline/core.py  — process_file(), process_directory(), process_file_hybrid()
+pipeline/ingest.py — _ingest_markdown() for existing .md ingestion
 ```
 
 ## Key Files

@@ -22,10 +22,10 @@
 
 | Public API | File | Purpose |
 |-----------|------|---------|
-| `process_file()` | `src/pipeline.py` | Traditional RAG (parse → clean → chunk) |
-| `process_file_hybrid()` | `src/pipeline.py` | LLM format + embed + sqlite-vec |
-| `process_file_with_md()` | `src/pipeline.py` | LLM format → write .md |
-| `_ingest_markdown()` | `src/pipeline.py` | Ingest existing .md to vector DB |
+| `process_file()` | `pipeline/core.py` | Traditional RAG (parse → clean → chunk) |
+| `process_file_hybrid()` | `pipeline/core.py` | LLM format + embed + sqlite-vec |
+| `process_file_with_md()` | `pipeline/core.py` | LLM format → write .md |
+| `_ingest_markdown()` | `pipeline/ingest.py` | Ingest existing .md to vector DB |
 | `format_text_async()` | `src/formatters/__init__.py` | Async LLM formatting |
 | `Chunker.chunk()` | `src/chunkers/__init__.py` | Markdown/text chunking |
 | `Embedder.embed()` | `src/embedders/bge_m3.py` | bge-m3 embedding |

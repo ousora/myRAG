@@ -131,7 +131,6 @@ myrag/
 │   ├── parsers/              # MarkItDown + Trafilatura dispatcher
 │   │   ├── dispatcher.py
 │   │   └── text_cleaner.py
-│   ├── cleaners/             # Backward-compat facade
 │   ├── formatters/           # LLM formatter + prompts + markdown writer
 │   │   ├── __init__.py
 │   │   ├── prompts.py
@@ -182,5 +181,5 @@ print(cfg.llm_endpoint)  # from your config file
 ```bash
 cd /home/colinvan/workspace/myrag
 uv run pytest -v
-# 22 tests: chunkers 8 + formatters 9 + cleaners 5
+# 39 tests: chunkers 8 + formatters 9 + storage 13 + integration 9
 ```

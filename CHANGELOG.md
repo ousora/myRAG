@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### Removed
+
+- **Backward-compat facades**: Deleted `src/cleaners/` directory and its tests. Canonical implementation is now exclusively in `parsers/text_cleaner.TextCleaner`. The convenience function `clean_text()` was removed — use `TextCleaner().clean(text)` directly.
+- **Top-level pipeline shim**: Deleted `src/pipeline.py` (re-export wrapper). All imports should come from submodules: `pipeline.core`, `pipeline.ingest`, etc.
+
 ### Changed
 
 - **Pipeline module split**: `pipeline.py` (549 lines) → `pipeline/core.py` (356), `pipeline/cli.py` (128), `pipeline/ingest.py` (81). All under 500-line limit.

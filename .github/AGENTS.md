@@ -10,10 +10,10 @@ myRAG is a RAG (Retrieval-Augmented Generation) data pipeline that converts raw 
 
 | Path | Purpose |
 |------|---------|
-| `src/pipeline.py` | CLI entry point + public APIs: `process_file()`, `process_file_hybrid()`, `process_file_with_md()`, `_ingest_markdown()` |
+| `src/pipeline/core.py` | Core pipeline: `process_file()`, `process_directory()`, `process_file_hybrid()`, `process_file_with_md()` |
 | `src/config.py` | Config loader with resolution chain: env var → config.yaml → config.example.yaml |
 | `src/parsers/` | MarkItDown (pdf/docx/md/txt) + Trafilatura (html) dispatcher |
-| `src/cleaners/` | Backward-compat facade; canonical impl in `parsers/text_cleaner.py` |
+| `src/cleaners/` — removed; canonical impl in `parsers/text_cleaner.py` |
 | `src/formatters/` | LLM-powered structuring: `prompts.py`, `writer.py`, async formatting |
 | `src/chunkers/` | LangChain MarkdownHeaderTextSplitter wrapper with RecursiveCharacterTextSplitter fallback |
 | `src/embedders/bge_m3.py` | bge-m3 embedding client (OpenAI-compatible API) |
@@ -29,7 +29,7 @@ uv run ruff check .                        # Lint
 uv run mypy src/                           # Type check (if available)
 ```
 
-Tests live alongside source: `src/chunkers/tests/`, `src/formatters/tests/`, `src/cleaners/tests/`. 22 tests total.
+Tests live alongside source: `src/chunkers/tests/`, `src/formatters/tests/`, `src/storage/tests/`.
 
 ## Architecture Decisions
 
@@ -37,7 +37,7 @@ Tests live alongside source: `src/chunkers/tests/`, `src/formatters/tests/`, `sr
 2. **Hybrid A+B indexing**: Chunk-level fine-grained search (A) + document-level coarse-grained context fallback (B). Both stored in sqlite-vec.
 3. **Auto-chunking for large docs**: Texts >28K chars are split at paragraph boundaries; each chunk receives last 10 lines of previous output + cumulative summary as context.
 4. **Config resolution chain**: `$MYRAG_CONFIG` → `conf/config.yaml` → `conf/config.example.yaml`. All endpoints configurable via YAML.
-5. **Facade pattern**: `cleaners/` and top-level `Chunker`/`TextCleaner` in `pipeline.py` delegate to canonical implementations in submodules for backward compatibility.
+5. **Facade pattern removed** — `cleaners/` directory deleted; use `parsers.text_cleaner.TextCleaner` directly.
 
 ## Conventions
 

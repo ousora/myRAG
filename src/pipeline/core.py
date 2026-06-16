@@ -17,12 +17,12 @@ Hybrid Retrieval (A + B):
        [doc_summary] → bge-m3 embedding → FAISS/Milvus vector DB
 
 Usage (traditional RAG):
-    from pipeline import process_file, process_directory
+    from pipeline.core import process_file, process_directory
     
     chunks = process_file("path/to/report.pdf")  # traditional chunking only
 
 Usage (LLM-formatted + Hybrid A+B):
-    from pipeline import process_file_hybrid
+    from pipeline.core import process_file_hybrid
     
     result = process_file_hybrid(
         filepath="path/to/document.pdf",
@@ -34,7 +34,7 @@ Usage (LLM-formatted + Hybrid A+B):
     # }
 
 Usage (LLM-formatted + Markdown output):
-    from pipeline import process_file_with_md
+    from pipeline.core import process_file_with_md
     
     md_path = process_file_with_md(
         filepath="path/to/document.pdf",
@@ -53,6 +53,8 @@ import parsers  # noqa: F401 — loads dispatcher (MarkItDown + Trafilatura)
 logger = logging.getLogger(__name__)
 
 
+# Internal helper — not exported. Renders LLM output sections into markdown.
+# If you need this, import directly from pipeline.core (not via __init__).
 def _render_markdown_with_sections(result: dict) -> str:
     """Build markdown text with proper ##/### headers from metadata.sections.
 
