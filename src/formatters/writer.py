@@ -28,8 +28,8 @@ def write_to_md(result, output_dir):
     lines.append(f"# {title}")
     lines.append("")
 
-    # Metadata block as bullet list — avoids table syntax issues with "|"
-    _write_metadata_block(lines, metadata)
+    # Structured YAML-style metadata block
+    _write_metadata_block(lines, result)
 
     # Body content
     body = result.get("body", "")
@@ -66,24 +66,55 @@ def _safe_filename(title):
     return safe
 
 
-def _write_metadata_block(lines, metadata):
-    """Write a metadata block as bullet list with proper blank-line separation."""
-    tags = metadata.get("tags", [])
+def _write_metadata_block(lines, result):
+    """Write a structured YAML-style metadata block.
+
+    Fields written (when present and non-empty):
+      - source_file  — original document path
+      - created_at   — ISO-8601 timestamp of ingestion
+      - modified_date — last modification date (if available)
+      - tags         — comma-separated list
+      - total_words  — word count
+      - sections     — numbered heading outline with levels
+    """
+    metadata = result.get("metadata", {})
+    source_file = metadata.get("source_file", "")
+    created_at = metadata.get("created_at", "")
+    modified_date = metadata.get("modified_date", None)
+    tags = result.get("tags", metadata.get("tags", []))
     total_words = metadata.get("total_words")
     sections_list = metadata.get("sections", [])
 
-    meta_lines = []
+    meta_lines: list[str] = []
+
+    if source_file:
+        meta_lines.append(f"- **Source:** {source_file}")
+    if created_at:
+        meta_lines.append(f"- **Created:** {created_at}")
+    if modified_date:
+        meta_lines.append(f"- **Modified:** {modified_date}")
+
+    # Tags and word count on one line (compact)
+    compact_parts: list[str] = []
     if tags:
-        meta_lines.append(f"- **Tags:** {', '.join(tags)}")
-
-    parts = []
+        compact_parts.append(", ".join(tags))
     if total_words:
-        parts.append(str(total_words))
-    if sections_list:
-        parts += [s["title"] for s in sections_list]
+        compact_parts.append(str(total_words))
+    if compact_parts:
+        meta_lines.append("- **Tags / Words:** " + " | ".join(compact_parts))
 
-    if parts:
-        meta_lines.append("- **Words:** " + ", ".join(parts))
+    # Section outline (numbered)
+    if sections_list:
+        section_items = []
+        for s in sections_list:
+            level = s.get("level", 2)
+            indent = "  " * (level - 2)  # level-2 is base, no indent
+            prefix = f"{s.get('number', '')} {indent}" if s.get("number") else indent
+            section_items.append(f"{prefix}- **{s['title']}**")
+        meta_lines.append("")
+        meta_lines.append("- **Sections:**")
+        for item in section_items:
+            meta_lines.append(item)
 
     # Blank line before and after metadata block (markdown paragraph separation)
     if meta_lines:
@@ -93,48 +124,14 @@ def _write_metadata_block(lines, metadata):
 
 
 def _write_body_with_sections(lines, body: str, sections: list):
-    """Write body text with section headers derived from parsed markdown headings.
+    """Write body content to the output.
 
-    Splits the body by actual ``#``/``##``/``###`` headings found in the text,
-    then inserts a blank line before each section for proper rendering.
-    Falls back to writing the full body as-is when no structure is detected.
+    The LLM formatter produces valid markdown (headings, tables, code blocks).
+    We write it as-is without splitting — any header manipulation is handled
+    by ``_render_markdown_with_sections`` in pipeline.core when needed.
     """
-    if not sections or len(sections) < 2:
-        # No clear hierarchy — write the full body as-is (already has proper markdown formatting)
-        lines.append("")
-        lines.append(body.strip())
-        return
-
-    header_pattern = r'^(#{1,6})\s+(.+)$'
-    matches = [(m.group(2).strip(), len(m.group(1)), m.start(), m.end())
-               for m in re.finditer(header_pattern, body, re.MULTILINE)]
-
-    if not matches:
-        # Body has no headers — write as-is (already formatted)
-        lines.append("")
-        lines.append(body.strip())
-        return
-
-    # Split body into sections by header positions and render each section
-    prev_end = 0
-    for title, level, start, end in matches:
-        if start > prev_end:
-            text = body[prev_end:start].strip()
-            if text:
-                lines.append("")
-                lines.append(text)
-
-        # Render header with proper blank-line separation
-        prefix = "#" * level
-        lines.append(f"\n{prefix} {title}")
-        prev_end = end
-
-    # Remaining content after last header
-    if len(body) > prev_end:
-        text = body[prev_end:].strip()
-        if text:
-            lines.append("")
-            lines.append(text)
+    lines.append("")
+    lines.append(body.strip())
 
 
 def format_md(result):

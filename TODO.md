@@ -19,6 +19,11 @@
 - [x] **Fix summary_text scope bug** — moved extraction before try block, removed dir() check
 - [x] **Make _call_llm public** — renamed to call_llm(), added to __all__, updated all callers
 - [x] **Translate Chinese prompt labels in CHUNKED_SYSTEM_PROMPT** — changed to English: `[Previous Context]`, `[Summary of Previous Chunks]`, `[Current Chunk Text]`
+- [x] **Fix hashlib import missing in formatters/__init__.py** — added `import hashlib` (used for LLM response debug logging)
+- [x] **Fix total_words = 0 in metadata** — placeholder value from prompt template was passed through; now computed as `len(body.split())`
+- [x] **Fix tags not displayed in markdown output** — tags are at result level (`result["tags"]`) but writer.py read from `metadata.get("tags")`; updated `_write_metadata_block()` to accept full result dict
+- [x] **Fix placeholder metadata in single-shot mode** — LLM copies template placeholders (created_at: "ISO-8601", total_words: 0); now overridden with real values in `_format_text_single()`
+- [x] **Fix split table headers from PDF extraction** — added `_merge_table_continuation_lines()` in TextCleaner; detects continuation rows by column count heuristic and merges them
 
 ---
 

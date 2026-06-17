@@ -109,6 +109,9 @@ class TextCleaner:
         if self.collapse_whitespace:
             result = self._collapse_whitespace(result)
 
+        # 5. Merge split table header rows (PDF extraction artifact)
+        result = self._merge_table_continuation_lines(result)
+
         return result.strip()
 
     @staticmethod
@@ -122,3 +125,42 @@ class TextCleaner:
         # Strip leading/trailing whitespace per line (preserves structure)
         lines = [line.strip() for line in text.split("\n")]
         return "\n".join(lines).strip()
+
+    @staticmethod
+    def _merge_table_continuation_lines(text: str) -> str:
+        """Merge split table header rows into a single logical row.
+
+        PDF extraction often splits a multi-column table header across two lines,
+        e.g.:
+            | Payment | Operator | Volume | Value/GDP | ...
+            | Systems | | | | ...
+        This function detects such cases and merges them so the markdown parser
+        sees one coherent header row.
+
+        Detection heuristic: if a `|`-prefixed line has fewer columns than the
+        preceding `|`-prefixed line, it is likely a continuation of that header.
+        """
+        lines = text.split("\n")
+        merged: list[str] = []
+        for i, line in enumerate(lines):
+            stripped = line.strip()
+            if not stripped.startswith("|"):
+                merged.append(line)
+                continue
+
+            cols = [c.strip() for c in stripped.split("|") if c.strip()]
+            col_count = len(cols)
+
+            if merged and merged[-1].strip().startswith("|"):
+                prev = merged[-1]
+                prev_cols = [c.strip() for c in prev.strip().split("|") if c.strip()]
+                prev_col_count = len(prev_cols)
+
+                # If current row has fewer columns than the previous one,
+                # it's likely a continuation of the header — merge them.
+                if col_count < prev_col_count:
+                    merged[-1] = f"{prev.rstrip()} {stripped}"
+                    continue
+
+            merged.append(line)
+        return "\n".join(merged)

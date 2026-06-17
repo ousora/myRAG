@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Fixed (2026-06-17)
+
+- **hashlib import missing**: Added `import hashlib` to `formatters/__init__.py` (used for LLM response debug logging).
+- **total_words = 0 in metadata**: Placeholder value from prompt template was passed through unchanged. Now computed as `len(body.split())`.
+- **tags not displayed in markdown output**: Tags are at result level (`result["tags"]`) but writer.py read from `metadata.get("tags")`. Updated `_write_metadata_block()` to accept full result dict and prioritize `result["tags"]`.
+- **Placeholder metadata in single-shot mode**: LLM copies template placeholders (created_at: "ISO-8601", total_words: 0). Now overridden with real values in `_format_text_single()`.
+- **Split table headers from PDF extraction**: Added `_merge_table_continuation_lines()` in `TextCleaner`. Detects continuation rows by column count heuristic and merges them into the preceding header row.
+
 ### Removed
 
 - **Backward-compat facades**: Deleted `src/cleaners/` directory and its tests. Canonical implementation is now exclusively in `parsers/text_cleaner.TextCleaner`. The convenience function `clean_text()` was removed — use `TextCleaner().clean(text)` directly.

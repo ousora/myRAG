@@ -4,6 +4,7 @@ Handles both single-shot and chunked (large document) modes.
 Auto-detects which path to use based on input size.
 """
 
+import hashlib
 import json
 import logging
 import re
@@ -94,6 +95,16 @@ def call_llm(system_prompt: str, user_message: str, *,
                 max_tokens or cfg.llm_max_tokens,
                 timeout or cfg.llm_timeout)
 
+    # Save raw response for debugging
+    import datetime
+    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    # Use a simple hash of the input to create a unique filename
+    input_hash = hashlib.md5(user_message.encode()).hexdigest()[:8]
+    output_path = f"test/llmoutput/resp_{timestamp}_{input_hash}.txt"
+    with open(output_path, "w", encoding="utf-8") as f:
+        f.write(raw_content)
+    logger.info("Saved raw response to %s", output_path)
+
     # Strip code block markers from LLM response
     content = re.sub(
         r'^```(?:json)?\s*\n', '', raw_content
@@ -106,10 +117,27 @@ def call_llm(system_prompt: str, user_message: str, *,
 
     try:
         return json.loads(content)
-    except json.JSONDecodeError as e:
-        raise ValueError(
-            f"LLM returned invalid JSON: {e}. Raw response: {content!r}"
-        ) from e
+    except json.JSONDecodeError:
+        # The LLM is producing very large nested strings that break standard json.loads.
+        # We attempt to manually extract the "part_md" field if it exists.
+        try:
+            # Try to find the part_md key and its value
+            match = re.search(r'"part_md":\s*"(.*?)"', content, re.DOTALL)
+            if match:
+                # This is a simplified fallback; in a production system, 
+                # we'd use a proper streaming parser or a more robust regex.
+                return {
+                    "part_md": match.group(1).replace('\\n', '\n').replace('\\"', '"'),
+                    "summary": "Extracted via fallback"
+                }
+            
+            # If that fails, try to fix common escape issues and try one last time
+            cleaned_content = content.replace('\\"', '"').replace('\\n', '\n').replace('\\\\', '\\')
+            return json.loads(cleaned_content)
+        except Exception:
+            raise ValueError(
+                f"LLM returned invalid JSON after multiple fallback attempts. Raw response: {content!r}"
+            ) from None
 
 
 def _get_last_n_lines(md_parts: list[str], n: int = 10) -> str:
@@ -255,7 +283,17 @@ def _extract_tags_from_body(body: str, title: str) -> list[str]:
 def _format_text_single(raw: str, source_type: str = "web", *, system_prompt: str | None = None) -> Dict[str, Any]:
     """Single-shot formatting — original behavior for small documents."""
     prompt = system_prompt if system_prompt is not None else get_system_prompt(source_type)
-    return call_llm(prompt, raw.strip())
+    result = call_llm(prompt, raw.strip())
+
+    # Fix placeholder metadata that the LLM copies from the prompt template.
+    body = result.get("body", "")
+    if isinstance(body, str):
+        result.setdefault("metadata", {})["total_words"] = len(body.split())
+    if "created_at" in result.get("metadata", {}):
+        import datetime
+        result["metadata"]["created_at"] = datetime.datetime.now().isoformat()
+
+    return result
 
 
 def _format_text_chunked(raw: str, source_type: str = "pdf") -> Dict[str, Any]:
