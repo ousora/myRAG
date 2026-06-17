@@ -1,6 +1,6 @@
 # Changelog — myRAG Pipeline
 
-## [Unreleased]
+## [0.3.0] — 2026-06-17
 
 ### Fixed (2026-06-17)
 
@@ -8,7 +8,13 @@
 - **total_words = 0 in metadata**: Placeholder value from prompt template was passed through unchanged. Now computed as `len(body.split())`.
 - **tags not displayed in markdown output**: Tags are at result level (`result["tags"]`) but writer.py read from `metadata.get("tags")`. Updated `_write_metadata_block()` to accept full result dict and prioritize `result["tags"]`.
 - **Placeholder metadata in single-shot mode**: LLM copies template placeholders (created_at: "ISO-8601", total_words: 0). Now overridden with real values in `_format_text_single()`.
-- **Split table headers from PDF extraction**: Added `_merge_table_continuation_lines()` in `TextCleaner`. Detects continuation rows by column count heuristic and merges them into the preceding header row.
+- **Split table headers from PDF extraction** → renamed to `_fix_broken_tables()` and rewritten. Uses a more robust approach: detects continuation rows by column count heuristic, appends content into the last cell of the preceding header row to preserve Markdown structure.
+- **TextCleaner rewrite**: Major overhaul of `parsers/text_cleaner.TextCleaner`:
+  - **Generalized page-break regex** — now matches `"--- PAGE N ---"`, `"=== Section ==="`, etc. (previously only matched single separator characters). Split-based filtering with length safeguard (>8 chars) prevents false positives on short lines like bullet points.
+  - **Control character handling** — deleted entirely instead of replacing with space; excludes `\n` and `\t` to avoid breaking text structure.
+  - **YAML flags parsing** (`_parse_flags`) now supports `int`, `str`, or `list[str]` (case-insensitive), e.g. `"IGNORECASE"`.
+  - **Custom rules pre-compiled** in `__init__` instead of on each `clean()` call — avoids repeated regex compilation cost.
+  - **Whitespace collapse** now only trims trailing spaces (`_TRIM_TRAILING_SPACE_RE`) — leading indentation (code blocks, lists) preserved.
 
 ### Removed
 
@@ -17,6 +23,7 @@
 
 ### Changed
 
+- **AGENTS.md moved**: Relocated from `.github/` to root directory so agents can always find it.
 - **Pipeline module split**: `pipeline.py` (549 lines) → `pipeline/core.py` (356), `pipeline/cli.py` (128), `pipeline/ingest.py` (81). All under 500-line limit.
 - **Formatter public API**: `_call_llm()` renamed to `call_llm()`, exported in `__all__`. New `format_text_with_system(raw, source_type, *, system_prompt)` convenience wrapper. Added `system_prompt` parameter chain through `format_text_async()`.
 

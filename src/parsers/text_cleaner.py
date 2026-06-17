@@ -4,9 +4,12 @@ Runs before the LLM formatter: whitespace normalization, page-break removal,
 and user-configurable regex rules from YAML (optional).
 """
 
+from __future__ import annotations
+
 import logging
 import re
 from pathlib import Path
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -31,10 +34,24 @@ class TextCleaner:
     # ------------------------------------------------------------------ #
     # Default regex rules (always applied)                                #
     # ------------------------------------------------------------------ #
-    _CONTROL_RE = re.compile(r"[\x00-\x1f\x7f]")
+
+    # 1. Control characters — delete entirely to prevent word merging
+    _CONTROL_CHAR_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
+
+    # 2. Page breaks / Horizontal rules
+    # Generalized: Starts with 3+ separators, allows words/digits in middle,
+    # ends with 2+ separators.
+    # Examples: "--- PAGE 1 ---", "*** 12 ***", "=== Section ==="
     _PAGE_BREAK_RE = re.compile(
-        r"(?:^|\n)\s*[-=*_]\s*(PAGE\s*\d+\s*)?\s*(-{2,})?",
+        r"^(?:[-=_*]\s*){3,}[\w\s]*?(?:[-=_*]\s*){2,}$",
+        flags=re.IGNORECASE,
     )
+
+    # 3. Whitespace collapsing (pre-compiled for performance)
+    _TAB_TO_SPACE_RE = re.compile(r"[\t\v\f]+")
+    # Only trim TRAILING spaces — preserve leading spaces for Markdown code blocks/lists
+    _TRIM_TRAILING_SPACE_RE = re.compile(r"(?m)[ ]+$")
+    _MULTIPLE_NEWLINES_RE = re.compile(r"\n{3,}")
 
     # ------------------------------------------------------------------ #
     # Constructor                                                         #
@@ -56,27 +73,45 @@ class TextCleaner:
         """
         self.remove_page_breaks = remove_page_breaks
         self.collapse_whitespace = collapse_whitespace
+        self.custom_rules: list[dict[str, Any]] = []
 
-        # Load optional user-defined regex rules from YAML
-        self._user_rules: list[tuple[str, int]] = []  # [(pattern_str, re_flags)]
         if rules_config is not None:
-            path = Path(rules_config)
-            if path.exists():
-                try:
-                    import yaml
+            config_path = Path(rules_config)
+            if config_path.is_file():
+                self._load_custom_rules(config_path)
 
-                    config = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-                    for rule in config.get("rules", []):
-                        pattern_str = str(rule["pattern"])
-                        flags = getattr(re, rule.get("flags", "0"), 0) or re.IGNORECASE
-                        self._user_rules.append((pattern_str, flags))
-                except Exception as exc:
-                    logger.warning(
-                        "Failed to load rules from %s (%s): %s",
-                        path,
-                        type(exc).__name__,
-                        exc,
+    def _load_custom_rules(self, path: Path) -> None:
+        """Safely loads and pre-compiles custom regex rules from a YAML file."""
+        try:
+            import yaml  # noqa: F811 — optional dependency
+        except ImportError:
+            logger.warning(
+                "PyYAML is not installed. Skipping custom rules. "
+                "Install via: pip install pyyaml"
+            )
+            return
+
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = yaml.safe_load(f) or {}
+
+            for rule in data.get("rules", []):
+                pattern_str = rule.get("pattern")
+                if not pattern_str:
+                    continue
+
+                try:
+                    compiled_pattern = re.compile(
+                        pattern_str, self._parse_flags(rule.get("flags"))
                     )
+                    self.custom_rules.append(
+                        {"pattern": compiled_pattern, "replace": rule.get("replace", "")}
+                    )
+                except re.error as e:
+                    logger.warning("Failed to compile custom rule [%s]: %s", pattern_str, e)
+
+        except Exception as e:
+            logger.warning("Failed to load YAML rules file %s: %s", path, e)
 
     # ------------------------------------------------------------------ #
     # Public API                                                          #
@@ -84,83 +119,103 @@ class TextCleaner:
 
     def clean(self, text: str) -> str:
         """Clean raw extracted text. Returns normalized string."""
-        if not isinstance(text, str):
+        if not isinstance(text, str) or not text:
             return ""
 
-        result = text.strip()
-        if not result:
-            return ""
+        result = self._remove_control_chars(text)
 
-        # 1. Remove control characters (PDFs often contain \x07 BELL etc.)
-        result = self._CONTROL_RE.sub(" ", result)
-
-        # 2. Page-break removal
         if self.remove_page_breaks:
-            result = self._PAGE_BREAK_RE.sub("\n", result)
+            result = self._remove_page_breaks(result)
 
-        # 3. Apply user-defined rules (if any loaded from YAML)
-        for pattern_str, flags in self._user_rules:
-            try:
-                result = re.sub(pattern_str, "", result, flags=flags)
-            except re.error as exc:
-                logger.warning("Skipping invalid regex rule '%s': %s", pattern_str, exc)
+        # 3. Repair broken table rows
+        result = self._fix_broken_tables(result)
 
-        # 4. Whitespace normalization (must come last to avoid double-processing)
+        # 4. Apply pre-compiled custom regex rules
+        for rule in self.custom_rules:
+            result = rule["pattern"].sub(rule["replace"], result)
+
+        # 5. Collapse excessive whitespace (must come last to avoid double-processing)
         if self.collapse_whitespace:
             result = self._collapse_whitespace(result)
 
-        # 5. Merge split table header rows (PDF extraction artifact)
-        result = self._merge_table_continuation_lines(result)
-
         return result.strip()
 
-    @staticmethod
-    def _collapse_whitespace(text: str) -> str:
-        """Collapse whitespace and blank lines."""
-        # Tabs, vertical tab, form feed → space; multiple spaces → single space
-        text = re.sub(r"[ \t\v\f]+", " ", text)
-        # Multiple consecutive newlines → double newline (paragraph separator)
-        text = re.sub(r"\n{3,}", "\n\n", text)
+    # ------------------------------------------------------------------ #
+    # Private methods                                                     #
+    # ------------------------------------------------------------------ #
 
-        # Strip leading/trailing whitespace per line (preserves structure)
-        lines = [line.strip() for line in text.split("\n")]
-        return "\n".join(lines).strip()
+    def _remove_control_chars(self, text: str) -> str:
+        """Remove control characters from the input."""
+        return self._CONTROL_CHAR_RE.sub("", text)
 
-    @staticmethod
-    def _merge_table_continuation_lines(text: str) -> str:
-        """Merge split table header rows into a single logical row.
-
-        PDF extraction often splits a multi-column table header across two lines,
-        e.g.:
-            | Payment | Operator | Volume | Value/GDP | ...
-            | Systems | | | | ...
-        This function detects such cases and merges them so the markdown parser
-        sees one coherent header row.
-
-        Detection heuristic: if a `|`-prefixed line has fewer columns than the
-        preceding `|`-prefixed line, it is likely a continuation of that header.
-        """
-        lines = text.split("\n")
-        merged: list[str] = []
-        for i, line in enumerate(lines):
+    def _remove_page_breaks(self, text: str) -> str:
+        """Filters out lines that match the generalized page break pattern."""
+        lines = []
+        for line in text.splitlines():
             stripped = line.strip()
-            if not stripped.startswith("|"):
-                merged.append(line)
+            # Safeguard: only apply regex if the line is long enough to be a page break.
+            # This prevents deleting normal short lines like "---" (Markdown HR) or "- item".
+            if len(stripped) > 8 and self._PAGE_BREAK_RE.match(stripped):
                 continue
+            lines.append(line)
+        return "\n".join(lines)
 
-            cols = [c.strip() for c in stripped.split("|") if c.strip()]
-            col_count = len(cols)
+    def _fix_broken_tables(self, text: str) -> str:
+        """Repair table rows broken during PDF extraction.
 
-            if merged and merged[-1].strip().startswith("|"):
-                prev = merged[-1]
-                prev_cols = [c.strip() for c in prev.strip().split("|") if c.strip()]
-                prev_col_count = len(prev_cols)
+        If the current row has fewer columns than the previous, it appends the content
+        into the last cell of the previous row to preserve Markdown column structure.
+        """
+        lines = text.splitlines()
+        if not lines:
+            return text
 
-                # If current row has fewer columns than the previous one,
-                # it's likely a continuation of the header — merge them.
-                if col_count < prev_col_count:
-                    merged[-1] = f"{prev.rstrip()} {stripped}"
+        merged = []
+        prev_line = ""
+        prev_col_count = 0
+
+        for line in lines:
+            stripped = line.strip()
+
+            # Generalized table row detection (must start and end with |)
+            is_table_row = stripped.startswith("|") and stripped.endswith("|")
+            col_count = stripped.count("|") - 1 if is_table_row else 0
+
+            if is_table_row and prev_line and 0 < col_count < prev_col_count:
+                last_pipe_idx = prev_line.rfind("|", 0, -1)
+                if last_pipe_idx != -1:
+                    append_text = stripped.strip("|").strip()
+                    prev_line = f"{prev_line[:last_pipe_idx]} {append_text} |"
+                    merged[-1] = prev_line
                     continue
 
             merged.append(line)
+            prev_line = line
+            prev_col_count = col_count
+
         return "\n".join(merged)
+
+    @staticmethod
+    def _parse_flags(raw_flags: Any) -> int:
+        """Parse regex flags from YAML config (supports int, str, or list of strings)."""
+        if not raw_flags:
+            return 0
+        if isinstance(raw_flags, int):
+            return raw_flags
+
+        flags = 0
+        flag_list = raw_flags if isinstance(raw_flags, list) else [raw_flags]
+        for f in flag_list:
+            flags |= getattr(re, str(f).upper(), 0)
+        return flags
+
+    @classmethod
+    def _collapse_whitespace(cls, text: str) -> str:
+        """Collapse whitespace using pre-compiled regexes.
+
+        Preserves leading spaces (indentation) for Markdown/Code blocks.
+        """
+        text = cls._TAB_TO_SPACE_RE.sub(" ", text)
+        text = cls._TRIM_TRAILING_SPACE_RE.sub("", text)  # Only trim trailing!
+        text = cls._MULTIPLE_NEWLINES_RE.sub("\n\n", text)
+        return text
