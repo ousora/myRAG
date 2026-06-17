@@ -22,18 +22,24 @@ class TextParser(Protocol):
 
 
 PARSERS: dict[str, type[TextParser]] = {}
+# Thread safety: reads (resolve_parser) are safe from multiple threads.
+# Writes (register_parser) require external synchronization.
+
+# Common extension aliases — map primary name to its variants
+_ALIASES: dict[str, list[str]] = {
+    "markdown": ["md", "mkd"],
+    "html": ["htm"],
+}
 
 
 def register_parser(extension: str, parser_cls: type[TextParser]) -> None:
-    """Register a parser for the given file extension."""
+    """Register a parser for the given file extension.
+
+    Not thread-safe for concurrent registration; safe to read from multiple threads.
+    """
     PARSERS[extension.lower()] = parser_cls
-    # Alias common extensions
-    aliases: dict[str, list[str]] = {
-        "markdown": ["md", "mkd"],
-        "html": ["htm"],
-    }
-    if extension.lower() in aliases:
-        for alias in aliases[extension.lower()]:
+    if extension.lower() in _ALIASES:
+        for alias in _ALIASES[extension.lower()]:
             PARSERS[alias] = parser_cls
 
 
@@ -41,45 +47,63 @@ def register_parser(extension: str, parser_cls: type[TextParser]) -> None:
 # MarkItDown Parser (pdf, docx, markdown, txt)
 # ---------------------------------------------------------------------------
 
-try:
-    from markitdown import MarkItDown  # noqa: F401
-except ImportError:
-    raise RuntimeError(
-        "markitdown is required for PDF/DOCX/MD/TXT parsing. "
-        "Install with: pip install markitdown"
-    ) from None
-
-
 class MarkItDownParser(TextParser):
-    """Extract text using MarkItDown — handles pdf, docx, markdown, txt."""
+    """Extract text using MarkItDown — handles pdf, docx, markdown, txt.
+
+    MarkItDown is imported lazily so the module can be loaded even if the
+    package isn't installed. Dependency is checked upon initialization.
+    """
 
     def __init__(self) -> None:
-        self._converter = MarkItDown()
+        try:
+            from markitdown import MarkItDown
+            self._converter = MarkItDown()
+        except ImportError:
+            raise RuntimeError(
+                "markitdown is required for this parser. "
+                "Install with: pip install markitdown"
+            ) from None
 
-    def parse(self, filepath: str) -> str:  # type: ignore[override]
+    def parse(self, filepath: str) -> str:
         result = self._converter.convert(filepath)
-        return result.text_content
+        return result.text_content or ""
 
 
 # ---------------------------------------------------------------------------
 # Trafilatura Parser (html, htm)
 # ---------------------------------------------------------------------------
 
-try:
-    import trafilatura  # noqa: F401
-except ImportError:
-    raise RuntimeError(
-        "trafilatura is required for HTML parsing. "
-        "Install with: pip install trafilatura"
-    ) from None
-
-
 class TrafilaturaParser(TextParser):
-    """Extract text using Trafilatura — handles html, htm."""
+    """Extract text using Trafilatura — handles html, htm.
 
-    def parse(self, filepath: str) -> str:  # type: ignore[override]
-        content = trafilatura.extract(
-            filepath,
+    Trafilatura is imported lazily. Dependency is checked upon initialization.
+    Uses a pragmatic utf-8/gbk fallback for encoding handling.
+    """
+
+    def __init__(self) -> None:
+        try:
+            import trafilatura
+            # Store function reference only, lighter than storing the whole module.
+            self._extract = trafilatura.extract
+        except ImportError:
+            raise RuntimeError(
+                "trafilatura is required for this parser. "
+                "Install with: pip install trafilatura"
+            ) from None
+
+    def parse(self, filepath: str) -> str:
+        path = Path(filepath)
+
+        # Pragmatic encoding handling — try UTF-8 first, fallback to GBK for
+        # most Chinese web pages.
+        try:
+            html_content = path.read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            html_content = path.read_text(encoding="gbk", errors="replace")
+
+        # trafilatura.extract() only accepts HTML strings (not file paths).
+        content = self._extract(
+            html_content,
             include_comments=False,
             include_tables=True,
             prefer_full_output=True,
@@ -97,7 +121,7 @@ register_parser("markdown", MarkItDownParser)  # also aliases md/mkd
 register_parser("txt", MarkItDownParser)        # txt maps to MarkItDown via generic handler
 register_parser("html", TrafilaturaParser)      # also aliases htm
 
-logger.info(
+logger.debug(
     "Registered %d parsers: pdf, docx, markdown(.md/.mkd), txt, html(.htm)",
     len(PARSERS),
 )
@@ -117,7 +141,8 @@ def resolve_parser(filepath: str | Path) -> TextParser | None:
         logger.info("Using %s to parse %s (.%s)", cls.__name__, path.name, ext)
         return instance
 
-    # Fallback: try MarkItDown for unknown extensions it can handle
+    # Fallback: MarkItDown also supports these formats but they're not explicitly
+    # registered (to keep PARSERS dict clean — only primary types are registered).
     if ext.lower() in ("pptx", "xls", "xlsx", "epub"):
         logger.info("Falling back to MarkItDownParser for %s (.%s)", path.name, ext)
         return MarkItDownParser()

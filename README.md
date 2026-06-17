@@ -28,6 +28,9 @@ Raw file (.pdf/.docx/.html/.md/.txt)
 
 **MarkItDown** (pdf, docx, md, txt) + **Trafilatura** (html). Single `resolve_parser()` dispatcher.
 
+- Lazy import: parsers are loaded on first use (fail-fast in `__init__`).
+- TrafilaturaParser handles HTML encoding with UTF-8 → GBK fallback.
+
 ```python
 from parsers.dispatcher import resolve_parser
 parser = resolve_parser("report.pdf")
