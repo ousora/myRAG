@@ -28,6 +28,7 @@ Output valid JSON only. No markdown fences, no explanation.
 ## Body Completeness (CRITICAL)
 The body field contains pure markdown content that will be written directly to a file.
 - **The document title is NOT part of the body** — it already appears as `# Title` on line 1. Do NOT include the title in the body text, even if it appears at the top of the source text (e.g., Wikipedia article titles). Repeating the title causes duplicate headings and is a critical error.
+- **Do NOT repeat any heading that matches or closely resembles the document title** — check your output before returning: if `# FX Networks` appears on line 1, it must NOT appear again anywhere in the body text.
 - The body MUST contain every sentence, paragraph, and data point from the source text (minus chrome).
 - You may remove navigation chrome but NEVER delete, truncate, or rewrite content text.
 
@@ -115,6 +116,7 @@ The part_md MUST contain hierarchical `##` and `###` markdown headings throughou
 2. If the source text does NOT have explicit headings but contains clear topic shifts, infer section boundaries and add appropriate `## Major Topic` / `### Sub-topic` headings.
 3. The document title is a single `# Title` at the top (first chunk only); all other sections use `##` or `###`. Never leave content as plain paragraphs without any heading.
 4. **EXACTLY ONE** `# Title` per document — only on line 1 of body in first chunk. No other `#` headings allowed anywhere else.
+5. **Do NOT repeat the document title as a heading.** If you see "FX Networks" at the top of this chunk's source text, do NOT write it as `# FX Networks`. The title is already on line 1 of the final file.
 
 ## Markdown Style
 Use consistent formatting:
@@ -134,6 +136,7 @@ Code blocks, tables, lists, key technical terms, dates, names, numbers, statisti
 ONE clear sentence per chunk (e.g., "Covers the database schema design and indexing strategy.").
 
 {first_chunk_extra}
+{title_block}
 '''
 
 
@@ -142,12 +145,13 @@ def get_system_prompt(source_type: str = "web") -> str:
     return SYSTEM_PROMPT.format(source_type=source_type)
 
 
-def get_chunked_system_prompt(chunk_index: int, total_chunks: int) -> str:
+def get_chunked_system_prompt(chunk_index: int, total_chunks: int, title: str = "") -> str:
     """Return system prompt for chunked processing mode.
 
     Args:
         chunk_index: 0-based index of the current chunk.
         total_chunks: Total number of chunks.
+        title: The document title (for non-first chunks to avoid repeating).
     """
     chunk_label = f"{chunk_index + 1}/{total_chunks}"
 
@@ -159,7 +163,15 @@ def get_chunked_system_prompt(chunk_index: int, total_chunks: int) -> str:
             "10. In the summary field, also note the document's main topic for downstream context."
         )
 
+    title_block = ""
+    if chunk_index > 0 and title:
+        title_block = (
+            f"\n## Document Title\nThe full document title is \"{title}\".\n"
+            "Do NOT write this as a `# Heading` in your output — it's already on line 1 of the final file."
+        )
+
     return CHUNKED_SYSTEM_PROMPT.format(
         chunk_label=chunk_label,
+        title_block=title_block,
         first_chunk_extra=first_chunk_extra,
     )

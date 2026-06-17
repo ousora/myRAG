@@ -1,7 +1,9 @@
 """Write formatted results to markdown files."""
 
-
+import hashlib
 import os
+import re
+
 
 def write_to_md(result, output_dir):
     """Format structured result into markdown and save it.
@@ -16,82 +18,95 @@ def write_to_md(result, output_dir):
     os.makedirs(output_dir, exist_ok=True)
 
     title = result["title"]
-    safe_name = "".join(c if c.isalnum() or c in "-_." else "_" for c in title)
+    safe_name = _safe_filename(title)
     file_path = os.path.join(output_dir, f"{safe_name}.md")
 
     metadata = result.get("metadata", {})
-    
+
     lines = []
+    # Title with blank line after (required for proper markdown rendering)
     lines.append(f"# {title}")
     lines.append("")
 
-    # Metadata block: tags, word count, sections overview
-    tags = result.get("tags", [])
-    if tags:
-        lines.append("**Tags:** " + ", ".join(tags))
+    # Metadata block as bullet list — avoids table syntax issues with "|"
+    _write_metadata_block(lines, metadata)
 
-    total_words = metadata.get("total_words")
-    sections = metadata.get("sections", [])
-
-    parts = []
-    if total_words:
-        parts.append(f"**Words:** {total_words}")
-    if sections:
-        parts.append(f"Sections: {len(sections)}")
-    if parts:
-        lines.append(" | ".join(parts))
-
-    # Write body content — LLM already produces proper markdown formatting (## headings, code blocks)
+    # Body content
     body = result.get("body", "")
     if body and isinstance(body, str) and body.strip():
-        _write_body_with_sections(lines, body, [])
+        sections = metadata.get("sections", [])
+        _write_body_with_sections(lines, body, sections)
 
-    md_content = "\n\n".join(lines).rstrip() + "\n"
+    md_content = "\n".join(lines).rstrip() + "\n"
 
     with open(file_path, "w", encoding="utf-8") as f:
         f.write(md_content)
-    
+
     return file_path
 
 
-def _render_section_path(path):
-    """Render a markdown header from the section path.
-    
-    Uses ## for single-level sections, ### for nested ones.
-    Filters out empty or invalid entries before rendering.
+def _safe_filename(title):
+    """Generate a safe filename from title.
+
+    Keeps ASCII alphanumerics and basic punctuation; replaces others with underscore.
+    Appends short hash suffix for titles containing non-ASCII characters
+    (e.g., Chinese, Japanese) to avoid collisions and unreadable filenames.
     """
-    if not path:
-        return ""
-    
-    # Clean up section names: skip empty entries
-    cleaned = []
-    for s in path:
-        clean = s.strip()
-        if not clean:
-            continue
-        cleaned.append(clean)
-    
-    if not cleaned:
-        return ""
-    
-    # H2 for single-level, H3+ for nested (H1 is reserved for document title)
-    prefix = '#' * (len(cleaned) + 1)
-    return "\n\n".join(f"{prefix} {s}" for s in cleaned)
+    # Keep ASCII alphanumerics plus hyphen, dot, space (for readability)
+    safe = "".join(c if c.isascii() and (c.isalnum() or c in "-_. ") else "_" for c in title)
+
+    # Collapse multiple underscores/spaces into one
+    safe = re.sub(r"[_\s]+", "_", safe).strip("_")
+
+    # Append hash suffix when non-ASCII characters were present
+    if any(not c.isascii() for c in title):
+        short_hash = hashlib.md5(title.encode("utf-8")).hexdigest()[:6]
+        safe = f"{safe}_{short_hash}"
+
+    return safe
+
+
+def _write_metadata_block(lines, metadata):
+    """Write a metadata block as bullet list with proper blank-line separation."""
+    tags = metadata.get("tags", [])
+    total_words = metadata.get("total_words")
+    sections_list = metadata.get("sections", [])
+
+    meta_lines = []
+    if tags:
+        meta_lines.append(f"- **Tags:** {', '.join(tags)}")
+
+    parts = []
+    if total_words:
+        parts.append(str(total_words))
+    if sections_list:
+        parts += [s["title"] for s in sections_list]
+
+    if parts:
+        meta_lines.append("- **Words:** " + ", ".join(parts))
+
+    # Blank line before and after metadata block (markdown paragraph separation)
+    if meta_lines:
+        lines.append("")
+        lines.extend(meta_lines)
+        lines.append("")
 
 
 def _write_body_with_sections(lines, body: str, sections: list):
-    """Write body text with section headers derived from metadata."""
+    """Write body text with section headers derived from parsed markdown headings.
+
+    Splits the body by actual ``#``/``##``/``###`` headings found in the text,
+    then inserts a blank line before each section for proper rendering.
+    Falls back to writing the full body as-is when no structure is detected.
+    """
     if not sections or len(sections) < 2:
-        # No clear hierarchy — just write the full body as-is (already has proper markdown formatting)
+        # No clear hierarchy — write the full body as-is (already has proper markdown formatting)
         lines.append("")
         lines.append(body.strip())
         return
 
-    import re
-    
-    # Parse actual headers from body text to find offsets and structure
     header_pattern = r'^(#{1,6})\s+(.+)$'
-    matches = [(m.group(2).strip(), len(m.group(1)), m.start()) 
+    matches = [(m.group(2).strip(), len(m.group(1)), m.start(), m.end())
                for m in re.finditer(header_pattern, body, re.MULTILINE)]
 
     if not matches:
@@ -100,11 +115,26 @@ def _write_body_with_sections(lines, body: str, sections: list):
         lines.append(body.strip())
         return
 
-    # The body is already properly formatted markdown from MarkItDown.
-    # Just append it directly without re-parsing headers.
-    # If LLM output was clean, the body has its own ##/### hierarchy already.
-    lines.append("")
-    lines.append(body.strip())
+    # Split body into sections by header positions and render each section
+    prev_end = 0
+    for title, level, start, end in matches:
+        if start > prev_end:
+            text = body[prev_end:start].strip()
+            if text:
+                lines.append("")
+                lines.append(text)
+
+        # Render header with proper blank-line separation
+        prefix = "#" * level
+        lines.append(f"\n{prefix} {title}")
+        prev_end = end
+
+    # Remaining content after last header
+    if len(body) > prev_end:
+        text = body[prev_end:].strip()
+        if text:
+            lines.append("")
+            lines.append(text)
 
 
 def format_md(result):

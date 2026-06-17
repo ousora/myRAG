@@ -225,7 +225,9 @@ def _extract_tags_from_body(body: str, title: str) -> list[str]:
     title_freq = Counter(title_words)
 
     # Combine: title words get higher weight
-    combined = word_freq + (title_freq * 2)
+    combined = Counter(word_freq)
+    for w, c in title_freq.items():
+        combined[w] += c * 2
 
     # Filter out very common technical terms that aren't useful as tags
     OVERLY_COMMON = {
@@ -322,6 +324,21 @@ def _format_text_chunked(raw: str, source_type: str = "pdf") -> Dict[str, Any]:
     # Extract title from the first `# Title` in body
     title = "Untitled Document"
     title_match = re.search(r'^#\s+(.+)$', body, re.MULTILINE)
+    if title_match:
+        title = title_match.group(1).strip()
+
+    # Post-process: strip duplicate top-level headings matching the document title
+    if title and title != "Untitled Document":
+        lines = body.split('\n')
+        cleaned_lines = []
+        for line in lines:
+            stripped = line.strip()
+            if re.match(r'^#\s+', stripped) and stripped.startswith(f'# {title}'):
+                continue  # skip duplicate title heading
+            cleaned_lines.append(line)
+        body = '\n'.join(cleaned_lines)
+
+    # Extract sections from ## and ### headers in body (after dedup)
     if title_match:
         title = title_match.group(1).strip()
 

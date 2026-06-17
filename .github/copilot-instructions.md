@@ -33,6 +33,8 @@
 
 13. **TODO Maintenance** — After completing a task, move it from the backlog section to the completed section in `TODO.md` with one short summary line describing what was done. Delete the item entirely from the backlog section so the document stays current and actionable.
 
+14. **No hardcoded in source code** — All configuration values must be in YAML files. Do not hardcode values in source code.
+
 ## Testing Requirements
 
 - Each parser module must have unit tests covering its core parsing logic
