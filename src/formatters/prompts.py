@@ -25,64 +25,51 @@ Output valid JSON only. No markdown fences, no explanation.
 
 ─── RULES ───
 
-1. **Body completeness** (CRITICAL): The body MUST contain the ENTIRE document content — every sentence, every paragraph. You may remove navigation chrome (see rule 2) but NEVER delete, truncate, or rewrite content text. The body is what gets embedded for search — missing content means failed retrieval.
+## Body Completeness (CRITICAL)
+The body field contains pure markdown content that will be written directly to a file.
+- **The document title is NOT part of the body** — it already appears as `# Title` on line 1. Do NOT include the title in the body text, even if it appears at the top of the source text (e.g., Wikipedia article titles). Repeating the title causes duplicate headings and is a critical error.
+- The body MUST contain every sentence, paragraph, and data point from the source text (minus chrome).
+- You may remove navigation chrome but NEVER delete, truncate, or rewrite content text.
 
-2. **Chrome to remove**: These are NOT content and should be stripped:
-   - Wikipedia: "Contents hide (Top)", "Search Wikipedia", "Donate", "Create account", "Log in", "Article Talk Read Edit View history", "Tools Appearance hide", font/size/color selectors, sidebar navigation
-   - General: navigation menus, breadcrumbs, "Related articles", social share buttons, comment sections, page footers with copyright/links
+## Chrome to Remove
+These are NOT content and should be stripped:
+- Wikipedia chrome: "Contents hide (Top)", "Search Wikipedia", "Donate", "Create account", "Log in", "Article Talk Read Edit View history", "Tools Appearance hide", font/size/color selectors, sidebar navigation
+- Wikipedia redirects: `(Redirected from ...)` at the top of article body
+- Citation artifacts: inline citation markers like `[1]: 22`, `[4]: 34` — keep the content but strip the marker syntax
+- General chrome: navigation menus, breadcrumbs, "Related articles", social share buttons, comment sections, page footers with copyright/links
 
-3. **Section detection**: Identify semantic content sections that organize the document's information. Look for:
-   - Headings that introduce new topics within the content body
-   - Numbered or bulleted section titles
-   - Bold or capitalized phrases that serve as section breaks
-   DO NOT include: UI labels, TOC items, navigation links, repeated headers from chrome.
+## Section Detection
+Identify semantic content sections that organize the document's information. Look for:
+- Headings that introduce new topics within the content body
+- Numbered or bulleted section titles
+- Bold or capitalized phrases that serve as section breaks
+DO NOT include: UI labels, TOC items, navigation links, repeated headers from chrome.
 
-4. **Section levels**:
-   - level 1: document title (only if it's clearly a title, not a generic heading)
-   - level 2: major content sections
-   - level 3: sub-sections within a major section
-   - level 2 is the default for content sections
+## Section Levels
+- level 1: document title (only if it's clearly a title, not a generic heading)
+- level 2: major content sections
+- level 3: sub-sections within a major section
+- level 2 is the default for content sections
 
-5. **Tags**: 5-8 lowercase tags, hyphenated multi-word (e.g., "real-time-gross-settlement"). Focus on the document's domain, key entities, and technical concepts.
+## Output Structure
+The final markdown file is assembled from JSON fields as follows:
+1. Line 1: `# Title` — single top-level heading extracted from the title field.
+2. Metadata block (Tags, Word count, Sections) — written by writer.py below the title.
+3. Body content: everything in the body field with proper markdown formatting.
 
-6. **Body formatting**: Preserve paragraph breaks (double newline). Single newlines within paragraphs are fine. Do not add extra formatting — just clean text.
+## Hierarchical Headings (CRITICAL)
+The body MUST contain hierarchical `##` and `###` markdown headings throughout.
+- If the source text already has heading markers (e.g., "Chapter 2", numbered sections, bold titles), convert them to `## Section Title` or `### Subsection`. Remove numbering prefixes.
+- If the source text does NOT have explicit headings but contains clear topic shifts, infer section boundaries and add appropriate `## Major Topic` / `### Sub-topic` headings.
+- The document title is a single `# Title` at line 1 (from the title field). All other sections use `##` or `###`. Never leave content as plain paragraphs without any heading.
+- **EXACTLY ONE** `# Title` per document — only on line 1. No other `#` headings allowed anywhere else in the text.
 
-─── EXAMPLE ───
+## Markdown Structure Rules
+- Wrap code, XML, or message examples in triple-backtick fences with language tag (e.g., ```` ```xml ... ``` ````).
+- Add blank lines before and after every structural element: headings, code blocks, lists.
 
-Input excerpt (from a PDF):
-```
-Search  |  Print  |  Help
-Chapter 2: Payment Systems
-2.1 Overview of RTGS
-Real-Time Gross Settlement systems process payments individually
-in real time. They are typically used for high-value transactions.
-2.2 Settlement Methods
-There are two main methods: net settlement and gross settlement.
-Net settlement aggregates transactions before processing...
-Page 3 of 42  |  Copyright 2025
-```
-
-Expected output:
-{{
-  "title": "Payment Systems",
-  "tags": ["payment-systems", "rtgs", "settlement", "real-time-gross-settlement", "net-settlement"],
-  "metadata": {{
-    "source_type": "{source_type}",
-    "total_words": 42,
-    "sections": [
-      {{"level": 1, "title": "Payment Systems"}},
-      {{"level": 2, "title": "Overview of RTGS"}},
-      {{"level": 2, "title": "Settlement Methods"}}
-    ],
-    "created_at": "2026-01-01T00:00:00Z",
-    "modified_date": null
-  }},
-  "body": "Real-Time Gross Settlement systems process payments individually in real time. They are typically used for high-value transactions.\\n\\nThere are two main methods: net settlement and gross settlement. Net settlement aggregates transactions before processing..."
-}}
-
-Notice: "Search", "Print", "Help", "Page 3 of 42", "Copyright 2025" are chrome — removed.
-"Chapter 2:", "2.1", "2.2" are section markers — extracted as sections, titles cleaned.
-'''
+## Body Formatting
+Preserve paragraph breaks (double newline). Single newlines within paragraphs are fine. Do not add extra formatting — just clean text.'''
 
 CHUNKED_SYSTEM_PROMPT = '''\
 You are a document structure extractor processing part {chunk_label} of a large document split into chunks.
@@ -93,78 +80,58 @@ Your job is to produce the FULL markdown content for this chunk and a one-senten
 
 ─── INPUT ───
 
-You will receive:
-1. 【前文收尾】 — The last ~10 lines of markdown from the previous chunk.
+You will receive three inputs:
+1. **Previous Chunk Ending** — The last ~10 lines of markdown from the previous chunk.
    Continue naturally from here. Do NOT repeat this content.
-
-2. 【前文摘要】 — A one-sentence summary of what previous chunks covered.
-
-3. 【本段原文】 — The raw text for this chunk.
+2. **Previous Summary** — A one-sentence summary of what previous chunks covered.
+3. **Current Raw Text** — The raw text for this chunk.
 
 ─── OUTPUT FORMAT ───
 
 Output valid JSON only. No markdown fences, no explanation.
 
 {{
-  "part_md": "FULL markdown content for this chunk, preserving ALL substantive information...",
-  "summary": "One-sentence summary of what this chunk covered (for passing to the next chunk)"
+  "part_md": "FULL markdown content for this chunk...",
+  "summary": "One-sentence summary of what this chunk covered"
 }}
 
 ─── RULES ───
 
-1. CONTENT COMPLETENESS (CRITICAL): The part_md MUST contain ALL substantive content from this chunk — every sentence, every paragraph, every number, every technical detail. Do NOT summarize, shorten, or omit anything. The only thing you may strip is navigation chrome (see rule 4).
+## Body Completeness (CRITICAL)
+The part_md MUST contain ALL substantive content from this chunk — every sentence, every paragraph, every number, every technical detail. Do NOT summarize, shorten, or omit anything.
 
-2. CONTINUITY: Start exactly where the previous chunk left off in terms of topic and section.
-   Use 【前文收尾】 as a reference point — continue the narrative, don't restart it.
+## Continuity Rules
+- Start exactly where the previous chunk left off in terms of topic and section.
+- Use **Previous Chunk Ending** as a reference point — continue the narrative, don't restart it.
+- Do NOT repeat anything from Previous Chunk Ending.
+- If this chunk starts mid-section, write the remaining content without re-adding the section header.
 
-3. ONLY NEW CONTENT: Do NOT repeat anything from 【前文收尾】.
-   If this chunk starts mid-section, that's fine — write the remaining content without re-adding the section header.
+## Chrome Removal (ONLY these)
+Strip navigation bars, page numbers, footers, copyright notices, TOC artifacts. Do NOT strip any content text, technical terms, or data.
 
-4. CHROME REMOVAL (ONLY these): Strip navigation bars, page numbers, footers, copyright notices, TOC artifacts.
-   Do NOT strip any content text, technical terms, or data.
+## Hierarchical Headings (CRITICAL)
+The part_md MUST contain hierarchical `##` and `###` markdown headings throughout — not just a single title at the top. For each section detected:
+1. If the source text already has heading markers (e.g., "Chapter 2", numbered sections, bold titles), convert them to `## Section Title` or `### Subsection`. Remove numbering prefixes.
+2. If the source text does NOT have explicit headings but contains clear topic shifts, infer section boundaries and add appropriate `## Major Topic` / `### Sub-topic` headings.
+3. The document title is a single `# Title` at the top (first chunk only); all other sections use `##` or `###`. Never leave content as plain paragraphs without any heading.
+4. **EXACTLY ONE** `# Title` per document — only on line 1 of body in first chunk. No other `#` headings allowed anywhere else.
 
-5. HEADERS: Use ## or ### markdown headers for subsections found in this chunk.
+## Markdown Style
+Use consistent formatting:
+- `#` for document title (first chunk only)
+- `##` for major sections — every section title MUST be a heading
+- `###` for subsections
+- **bold** for key terms
+- `code` for technical names inline; triple-backtick fences with language tag for code/XML/MT blocks
+- Tables use | pipe syntax
+- Lists use - or 1. as appropriate
+- Add blank lines before and after every structural element: headings, code blocks, lists
 
-6. PRESERVE: Code blocks, tables, lists, key technical terms, dates, names, numbers, statistics, footnotes.
+## Preserve
+Code blocks, tables, lists, key technical terms, dates, names, numbers, statistics, footnotes.
 
-7. MARKDOWN STYLE: Use consistent formatting — ## for major sections, ### for subsections,
-   **bold** for key terms, `code` for technical names. Tables should use | pipe syntax.
-   Lists use - or 1. as appropriate.
-
-8. Summary: ONE clear sentence per chunk (e.g., "Covers the database schema design and indexing strategy.").
-
-─── EXAMPLE (middle chunk, not first) ───
-
-Input:
-```
-【前文收尾】
-## Performance Metrics
-The system processed 1.2 million transactions per day with 99.97% uptime.
-
-【前文摘要】
-Covered system architecture overview and core component descriptions.
-
-【本段原文】
-Cost Analysis
-The total implementation cost was $4.2 million, with $2.8 million for hardware
-and $1.4 million for software licensing. Annual maintenance is $320,000.
-The system achieved ROI within 18 months of deployment.
-
-Scalability
-The architecture supports horizontal scaling up to 10 nodes. Each additional
-node increases throughput by approximately 15%. Maximum tested load:
-50,000 concurrent users with 200ms average response time.
-```
-
-Expected output:
-```json
-{{
-  "part_md": "## Cost Analysis\\n\\nThe total implementation cost was $4.2 million, with $2.8 million for hardware and $1.4 million for software licensing. Annual maintenance is $320,000. The system achieved ROI within 18 months of deployment.\\n\\n## Scalability\\n\\nThe architecture supports horizontal scaling up to 10 nodes. Each additional node increases throughput by approximately 15%. Maximum tested load: 50,000 concurrent users with 200ms average response time.",
-  "summary": "Covers cost breakdown ($4.2M total) and scalability specs (10-node horizontal scaling, 50K concurrent users)."
-}}
-```
-
-Notice: The output starts with `## Cost Analysis` as a new section (not repeating the previous chunk's `## Performance Metrics`). All content is preserved — every number, every dollar amount, every technical specification — just stripped of navigation chrome.
+## Summary
+ONE clear sentence per chunk (e.g., "Covers the database schema design and indexing strategy.").
 
 {first_chunk_extra}
 '''

@@ -196,6 +196,60 @@ def _split_by_paragraph(text: str, max_chars: int = _CHUNK_THRESHOLD_CHARS) -> l
     return chunks
 
 
+def _extract_tags_from_body(body: str, title: str) -> list[str]:
+    """Generate tags from body content for chunked processing mode.
+
+    Uses keyword frequency analysis on the merged body text to extract
+    meaningful domain-specific terms as tags. Falls back to simple
+    noun-phrase extraction if no strong keywords are found.
+    """
+    import re
+    from collections import Counter
+
+    # Common English stop words to filter out
+    STOP_WORDS = {
+        'the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to',
+        'for', 'of', 'with', 'by', 'from', 'is', 'are', 'was', 'were',
+        'be', 'been', 'being', 'have', 'has', 'had', 'do', 'does', 'did',
+        'will', 'would', 'could', 'should', 'may', 'might', 'can', 'shall',
+        'it', 'its', 'this', 'that', 'these', 'those', 'i', 'you', 'he',
+        'she', 'we', 'they', 'me', 'him', 'her', 'us', 'them',
+    }
+
+    # Extract meaningful words from body (alphanumeric sequences >= 3 chars)
+    words = re.findall(r'[a-zA-Z]{3,}', body.lower())
+    word_freq = Counter(w for w in words if w not in STOP_WORDS and len(w) > 2)
+
+    # Also extract title keywords
+    title_words = re.findall(r'[a-zA-Z]{3,}', title.lower())
+    title_freq = Counter(title_words)
+
+    # Combine: title words get higher weight
+    combined = word_freq + (title_freq * 2)
+
+    # Filter out very common technical terms that aren't useful as tags
+    OVERLY_COMMON = {
+        'system', 'payment', 'china', 'country', 'bank', 'data',
+        'information', 'process', 'service', 'user', 'network',
+        'document', 'file', 'text', 'content', 'example',
+    }
+
+    # Select top tags (5-8), preferring multi-word phrases and domain-specific terms
+    candidates = []
+    for word, count in combined.most_common(30):
+        if word not in OVERLY_COMMON:
+            candidates.append(word)
+
+    # If we have enough single words, use them; otherwise fall back to title-based tags
+    if len(candidates) >= 5:
+        return [c for c in candidates[:8]]
+
+    # Fallback: extract from title and first few paragraphs
+    fallback_words = re.findall(r'[a-zA-Z]{3,}', (title + ' ' + body[:2000]).lower())
+    fb_freq = Counter(w for w in fallback_words if w not in STOP_WORDS)
+    return [w for w, _ in fb_freq.most_common(8)]
+
+
 def _format_text_single(raw: str, source_type: str = "web", *, system_prompt: str | None = None) -> Dict[str, Any]:
     """Single-shot formatting — original behavior for small documents."""
     prompt = system_prompt if system_prompt is not None else get_system_prompt(source_type)
@@ -281,9 +335,12 @@ def _format_text_chunked(raw: str, source_type: str = "pdf") -> Dict[str, Any]:
     logger.info("Chunked merge complete: %d parts → %d chars, %d sections",
                 len(all_parts), len(body), len(sections))
 
+    # Generate tags from body content (chunked mode doesn't get LLM-generated tags)
+    tags = _extract_tags_from_body(body, title)
+
     return {
         "title": title,
-        "tags": [],
+        "tags": tags,
         "metadata": {
             "source_type": source_type,
             "total_words": len(body.split()),

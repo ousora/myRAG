@@ -24,14 +24,15 @@ def write_to_md(result, output_dir):
     lines = []
     lines.append(f"# {title}")
     lines.append("")
-    
+
+    # Metadata block: tags, word count, sections overview
     tags = result.get("tags", [])
     if tags:
         lines.append("**Tags:** " + ", ".join(tags))
-    
+
     total_words = metadata.get("total_words")
     sections = metadata.get("sections", [])
-    
+
     parts = []
     if total_words:
         parts.append(f"**Words:** {total_words}")
@@ -40,10 +41,10 @@ def write_to_md(result, output_dir):
     if parts:
         lines.append(" | ".join(parts))
 
-    # Write body content with proper section headers
+    # Write body content — LLM already produces proper markdown formatting (## headings, code blocks)
     body = result.get("body", "")
     if body and isinstance(body, str) and body.strip():
-        _write_body_with_sections(lines, body, sections)
+        _write_body_with_sections(lines, body, [])
 
     md_content = "\n\n".join(lines).rstrip() + "\n"
 
