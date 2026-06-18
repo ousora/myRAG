@@ -77,7 +77,7 @@ class TestFormatText:
         bad_response.raise_for_status = Mock()
 
         with patch("formatters.httpx.post", return_value=bad_response):
-            with pytest.raises(ValueError, match="LLM returned invalid JSON"):
+            with pytest.raises(ValueError, match="no JSON-like content"):
                 format_text("some text")
 
     def test_llm_missing_choices_raises_error(self):

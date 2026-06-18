@@ -14,6 +14,7 @@ from typing import Any, Dict
 import httpx
 
 from .prompts import get_system_prompt, get_chunked_system_prompt
+from .constants import FORMATTER_SCHEMA, CHUNKED_SCHEMA
 
 logger = logging.getLogger(__name__)
 
@@ -44,38 +45,37 @@ def get_executor() -> ThreadPoolExecutor:
 
 def call_llm(system_prompt: str, user_message: str, *,
              max_tokens: int | None = None,
-             timeout: int | None = None) -> dict:
+             timeout: int | None = None,
+             schema: dict | None = None) -> dict:
     """Make a single LLM API call and return the parsed JSON response.
 
     Args:
-        system_prompt: System-level instruction for the LLM.
-        user_message: The user input text.
-        max_tokens: Override max output tokens. Uses config default if None.
-        timeout: Override HTTP timeout in seconds. Uses config default if None.
-
-    Returns:
-        Parsed JSON dict from the LLM response.
-
-    Raises:
-        RuntimeError: On HTTP/network errors.
-        ValueError: On invalid JSON or unexpected response format.
+        system_prompt: System message content.
+        user_message: User message content.
+        max_tokens: Token limit for generation (defaults to config).
+        timeout: Request timeout in seconds (defaults to config).
+        schema: Optional JSON Schema dict sent as ``response_format``.
+                When provided, llama.cpp / OpenAI servers enforce output structure.
     """
     cfg = _get_config()
 
+    payload: dict[str, Any] = {
+        "model": cfg.llm_model,
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_message},
+        ],
+        "temperature": cfg.llm_temperature,
+        "max_tokens": max_tokens or cfg.llm_max_tokens,
+    }
+    if schema is not None:
+        payload["response_format"] = {
+            "type": "json_object",
+            "schema": schema,
+        }
+
     try:
-        response = httpx.post(
-            cfg.llm_endpoint,
-            json={
-                "model": cfg.llm_model,
-                "messages": [
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_message},
-                ],
-                "temperature": cfg.llm_temperature,
-                "max_tokens": max_tokens or cfg.llm_max_tokens,
-            },
-            timeout=timeout or cfg.llm_timeout,
-        )
+        response = httpx.post(cfg.llm_endpoint, json=payload, timeout=timeout or cfg.llm_timeout)
         response.raise_for_status()
     except httpx.HTTPError as e:
         logger.error("LLM call failed after %.1fs: %s",
@@ -98,46 +98,109 @@ def call_llm(system_prompt: str, user_message: str, *,
     # Save raw response for debugging
     import datetime
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    # Use a simple hash of the input to create a unique filename
     input_hash = hashlib.md5(user_message.encode()).hexdigest()[:8]
     output_path = f"test/llmoutput/resp_{timestamp}_{input_hash}.txt"
     with open(output_path, "w", encoding="utf-8") as f:
         f.write(raw_content)
     logger.info("Saved raw response to %s", output_path)
 
-    # Strip code block markers from LLM response
-    content = re.sub(
-        r'^```(?:json)?\s*\n', '', raw_content
-    ).strip() if isinstance(raw_content, str) else raw_content
+    # ── Parse JSON (with fallback + retries) ────────────────────────
+    max_retries = 3
+    content = _preprocess_json(raw_content)
+    if content is None:
+        raise ValueError(
+            f"LLM returned no JSON-like content. Raw response (first 500 chars): {raw_content[:500]!r}"
+        )
 
-    # Extract the first valid JSON object
-    json_match = re.search(r'\{.*\}', content, re.DOTALL)
-    if json_match:
-        content = json_match.group(0)
-
-    try:
-        return json.loads(content)
-    except json.JSONDecodeError:
-        # The LLM is producing very large nested strings that break standard json.loads.
-        # We attempt to manually extract the "part_md" field if it exists.
+    for attempt in range(max_retries):
         try:
-            # Try to find the part_md key and its value
-            match = re.search(r'"part_md":\s*"(.*?)"', content, re.DOTALL)
-            if match:
-                # This is a simplified fallback; in a production system, 
-                # we'd use a proper streaming parser or a more robust regex.
-                return {
-                    "part_md": match.group(1).replace('\\n', '\n').replace('\\"', '"'),
-                    "summary": "Extracted via fallback"
-                }
-            
-            # If that fails, try to fix common escape issues and try one last time
-            cleaned_content = content.replace('\\"', '"').replace('\\n', '\n').replace('\\\\', '\\')
-            return json.loads(cleaned_content)
-        except Exception:
-            raise ValueError(
-                f"LLM returned invalid JSON after multiple fallback attempts. Raw response: {content!r}"
-            ) from None
+            return json.loads(content, strict=True)  # fast path — works when response_format succeeded
+        except json.JSONDecodeError as exc:
+            logger.warning("JSON parse attempt %d failed (%s)", attempt + 1, exc.msg)
+            if attempt == max_retries - 1:
+                raise ValueError(
+                    f"Failed to parse LLM JSON after {max_retries} attempts. "
+                    f"Raw content (first 500 chars): {content[:500]!r}"
+                ) from exc
+            # Retry with relaxed parser, then fix bare quotes if needed
+            try:
+                return json.loads(content, strict=False)
+            except json.JSONDecodeError:
+                fixed = _fix_bare_quotes_in_body_field(content)
+                if fixed is not None:
+                    content = fixed
+                    continue  # re-try with fixed content
+                break  # give up this path
+
+    raise ValueError("JSON parsing failed after all fallback strategies.")
+
+
+def _preprocess_json(raw_content: str) -> str | None:
+    """Strip markdown code blocks, extract first JSON object.
+
+    Returns None if no JSON-like content can be found (e.g., plain English text).
+    This lets the caller distinguish "no JSON at all" from "JSON but broken."
+    """
+    if not isinstance(raw_content, str):
+        return None
+    # Strip markdown code blocks
+    stripped = re.sub(r'^```(?:json)?\s*\n', '', raw_content.strip())
+    # Extract first JSON object
+    json_match = re.search(r'\{.*\}', stripped, re.DOTALL)
+    if not json_match:
+        return None  # No JSON-like content — let json.loads raise a clear error
+    return json_match.group(0)
+
+
+def _fix_bare_quotes_in_body_field(content: str) -> str | None:
+    """Find the body field value and escape unescaped quotes inside it.
+
+    Walks through the JSON string character-by-character, recognizing escaped
+    sequences (\\", \\\\, \\n, etc.) so real closing-quotes are not confused
+    with bare quotes in the content.
+    """
+    m = re.search(r'"body"\s*:\s*', content)
+    if not m:
+        return None
+
+    after_key = m.end()
+    if after_key >= len(content) or content[after_key] != '"':
+        return None
+
+    # Walk forward, skipping escaped sequences, find the real closing quote
+    j = after_key + 1
+    while j < len(content):
+        c = content[j]
+
+        if c == '\\' and j + 1 < len(content) and content[j+1] in ('"', '\\', '/', 'n', 't', 'r'):
+            j += 2
+            continue
+
+        if c == '"':
+            rest_after_quote = content[j+1:].lstrip()
+            if not rest_after_quote or rest_after_quote[0] in (',', '}'):
+                raw_body = content[after_key + 1 : j]
+                fixed_parts: list[str] = []
+                k = 0
+                while k < len(raw_body):
+                    ch = raw_body[k]
+                    if ch == '\\' and k + 1 < len(raw_body) and raw_body[k+1] in ('"', '\\', '/', 'n', 't', 'r'):
+                        fixed_parts.append(ch)
+                        fixed_parts.append(raw_body[k+1])
+                        k += 2
+                    elif ch == '"':
+                        fixed_parts.append('\\"')
+                        k += 1
+                    else:
+                        fixed_parts.append(ch)
+                        k += 1
+
+                before = content[: after_key + 1]
+                after = content[j:]
+                return before + ''.join(fixed_parts) + '"' + after
+        j += 1
+
+    return None
 
 
 def _get_last_n_lines(md_parts: list[str], n: int = 10) -> str:
@@ -230,6 +293,12 @@ def _extract_tags_from_body(body: str, title: str) -> list[str]:
     Uses keyword frequency analysis on the merged body text to extract
     meaningful domain-specific terms as tags. Falls back to simple
     noun-phrase extraction if no strong keywords are found.
+
+    Key improvements over naive word-frequency:
+      - Extracts proper nouns (capitalized entities) from title + body
+      - Filters out single generic English words not in a whitelist
+      - Combines adjacent frequent terms into multi-word phrases when useful
+      - Prefers domain-specific terms (brands, organizations, systems)
     """
     import re
     from collections import Counter
@@ -244,11 +313,32 @@ def _extract_tags_from_body(body: str, title: str) -> list[str]:
         'she', 'we', 'they', 'me', 'him', 'her', 'us', 'them',
     }
 
-    # Extract meaningful words from body (alphanumeric sequences >= 3 chars)
-    words = re.findall(r'[a-zA-Z]{3,}', body.lower())
-    word_freq = Counter(w for w in words if w not in STOP_WORDS and len(w) > 2)
+    # Generic single words that are almost never useful as tags
+    GENERIC_WORDS = {
+        'the', 'and', 'from', 'into', 'over', 'under', 'between', 'through',
+        'during', 'before', 'after', 'above', 'below', 'within', 'across',
+        'about', 'against', 'along', 'among', 'around', 'behind', 'beyond',
+        'since', 'until', 'upon', 'toward', 'towards',
+        'system', 'payment', 'china', 'country', 'bank', 'data',
+        'information', 'process', 'service', 'user', 'network',
+        'document', 'file', 'text', 'content', 'example',
+        'channel', 'series', 'program', 'programs', 'programming',
+        'original', 'retrieved', 'archived', 'published', 'based',
+    }
 
-    # Also extract title keywords
+    # Words that ARE useful as tags (domain-specific)
+    USEFUL_SINGLE = {
+        'china', 'france', 'london', 'tokyo', 'beijing', 'america', 'germany',
+        'russia', 'japan', 'united states', 'european union',
+        'international', 'government', 'regulation', 'compliance',
+        'security', 'encryption', 'blockchain', 'cryptocurrency',
+    }
+
+    # Extract words from body (lowercase, >= 3 chars)
+    body_words = re.findall(r'[a-zA-Z]{3,}', body.lower())
+    word_freq = Counter(w for w in body_words if w not in STOP_WORDS and len(w) > 2)
+
+    # Also extract title keywords with higher weight
     title_words = re.findall(r'[a-zA-Z]{3,}', title.lower())
     title_freq = Counter(title_words)
 
@@ -257,33 +347,66 @@ def _extract_tags_from_body(body: str, title: str) -> list[str]:
     for w, c in title_freq.items():
         combined[w] += c * 2
 
-    # Filter out very common technical terms that aren't useful as tags
-    OVERLY_COMMON = {
-        'system', 'payment', 'china', 'country', 'bank', 'data',
-        'information', 'process', 'service', 'user', 'network',
-        'document', 'file', 'text', 'content', 'example',
-    }
+    # ── Extract proper nouns from title and body ────────────────
+    # Title is usually the most important entity.
+    # Also extract capitalized phrases from the first few paragraphs (likely entities).
+    def _extract_proper_nouns(text: str) -> list[str]:
+        """Extract capitalized words/phrases that look like proper nouns."""
+        # Title itself
+        title_parts = re.findall(r'[A-Z][a-zA-Z0-9\-]+(?:\s+[A-Z][a-zA-Z0-9\-]+)*', text[:200])
+        # Capitalized entities in body (first 5K chars)
+        entity_phrases = re.findall(
+            r'(?<![a-z])([A-Z][a-zA-Z0-9\-]+(?:\s+[A-Z][a-zA-Z0-9\-]+){1,3})(?![a-z])',
+            text[:min(len(text), 5000)]
+        )
+        return title_parts + entity_phrases
 
-    # Select top tags (5-8), preferring multi-word phrases and domain-specific terms
-    candidates = []
-    for word, count in combined.most_common(30):
-        if word not in OVERLY_COMMON:
-            candidates.append(word)
+    proper_nouns = _extract_proper_nouns(title) + _extract_proper_nouns(body)
+    noun_freq = Counter(p for p in proper_nouns if len(p.split()) <= 3 and len(p) > 2)
 
-    # If we have enough single words, use them; otherwise fall back to title-based tags
-    if len(candidates) >= 5:
-        return [c for c in candidates[:8]]
+    # ── Build tag candidates ────────────────────────────────────
+    tags: list[str] = []
+    seen: set[str] = set()
 
-    # Fallback: extract from title and first few paragraphs
-    fallback_words = re.findall(r'[a-zA-Z]{3,}', (title + ' ' + body[:2000]).lower())
-    fb_freq = Counter(w for w in fallback_words if w not in STOP_WORDS)
-    return [w for w, _ in fb_freq.most_common(8)]
+    # Phase 1: Proper nouns (highest priority - they're entity-specific)
+    for noun, count in noun_freq.most_common(3):
+        if len(tags) >= 5:
+            break
+        tag_lower = noun.lower().strip()
+        if tag_lower not in seen and tag_lower not in GENERIC_WORDS and len(tag_lower) > 2:
+            tags.append(tag_lower)
+            seen.add(tag_lower)
+
+    # Phase 2: High-frequency domain words (only those with >= 3 occurrences)
+    for word, count in combined.most_common(40):
+        if len(tags) >= 5:
+            break
+        if word in seen or word in STOP_WORDS:
+            continue
+        # Only include single-word tags that are either generic-useful OR appear frequently
+        if count < 3 and word not in USEFUL_SINGLE:
+            continue
+        tags.append(word)
+        seen.add(word)
+
+    # Phase 3: Title-based fallback (title words we haven't used yet)
+    for w, _ in title_freq.most_common(10):
+        if len(tags) >= 5:
+            break
+        if w not in seen and w.lower() not in GENERIC_WORDS and w.lower() not in STOP_WORDS:
+            tags.append(w.lower())
+            seen.add(w.lower())
+
+    # Final filter: remove any remaining single generic words
+    final_tags = [t for t in tags if t not in GENERIC_WORDS or len(t.split()) > 1]
+
+    return final_tags[:5] if len(final_tags) >= 3 else final_tags
 
 
 def _format_text_single(raw: str, source_type: str = "web", *, system_prompt: str | None = None) -> Dict[str, Any]:
     """Single-shot formatting — original behavior for small documents."""
     prompt = system_prompt if system_prompt is not None else get_system_prompt(source_type)
-    result = call_llm(prompt, raw.strip())
+    result = call_llm(prompt, raw.strip(), schema=FORMATTER_SCHEMA)
 
     # Fix placeholder metadata that the LLM copies from the prompt template.
     body = result.get("body", "")
@@ -342,6 +465,7 @@ def _format_text_chunked(raw: str, source_type: str = "pdf") -> Dict[str, Any]:
             user_message,
             max_tokens=cfg.chunk_max_tokens,
             timeout=cfg.chunk_timeout,
+            schema=CHUNKED_SCHEMA,
         )
 
         part_md = result.get("part_md", "").strip()

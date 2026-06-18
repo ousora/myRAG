@@ -50,7 +50,7 @@ DO NOT include: UI labels, TOC items, navigation links, repeated headers from ch
 - level 1: document title (only if it's clearly a title, not a generic heading)
 - level 2: major content sections
 - level 3: sub-sections within a major section
-- level 2 is the default for content sections
+- **Default to level=2 for all content sections** unless there is clear nesting in the source text
 
 ## Output Structure
 The final markdown file is assembled from JSON fields as follows:
@@ -70,7 +70,36 @@ The body MUST contain hierarchical `##` and `###` markdown headings throughout.
 - Add blank lines before and after every structural element: headings, code blocks, lists.
 
 ## Body Formatting
-Preserve paragraph breaks (double newline). Single newlines within paragraphs are fine. Do not add extra formatting — just clean text.'''
+Preserve paragraph breaks (double newline). Single newlines within paragraphs are fine. Do not add extra formatting — just clean text.
+
+## Tags (CRITICAL)
+- Must be a list of 1-5 strings. **Prefer 2-3 tags** — quality over quantity.
+- Use lowercase English words only, max 3 words per tag.
+- **Use domain-specific terms and proper nouns**, not generic common words:
+  - ✅ "cable television", "Disney acquisition", "FX Productions"
+  - ❌ NOT: "original", "retrieved", "disney", "fox", "channel", "june" (these are just frequent English words)
+- Tags should describe the document's core subject matter so a reader can understand what it's about from tags alone.
+
+### Tag Quality Rules (CRITICAL)
+- Do NOT use single common English words as tags — every tag should be either a **multi-word phrase** (2+ words) or a **proper noun/brand name**.
+- Avoid these generic categories of words as standalone tags:
+  - Place names used in isolation: "china", "france", "london", "tokyo"
+  - Business roles/concepts: "banking", "company", "government", "service", "system", "market"
+  - Adjectives/adverbs: "important", "new", "old", "large"
+- At least one tag MUST contain a technical term, organization name, system name, or domain-specific concept that uniquely identifies this document.
+- Self-check: for each tag, ask "If someone searched this exact string on Google, would they find THIS specific article?" If no → replace it.
+
+## Self-Correction Checklist (CRITICAL)
+Before returning your JSON output, verify ALL of these conditions:
+1. `title` is a non-empty string
+2. `tags` is a list with 1-5 strings, all lowercase English words
+3. `metadata.sections` is a list of objects with "level" (int) and "title" (string) keys
+4. `body` is a non-empty string containing markdown content
+5. The body does NOT contain the document title as a heading (no duplicate `# Title`)
+6. No trailing commas in JSON arrays or objects
+
+If ANY condition fails, fix it before returning your response.'''
+
 
 CHUNKED_SYSTEM_PROMPT = '''\
 You are a document structure extractor processing part {chunk_label} of a large document split into chunks.
@@ -136,13 +165,54 @@ Code blocks, tables, lists, key technical terms, dates, names, numbers, statisti
 ONE clear sentence per chunk (e.g., "Covers the database schema design and indexing strategy.").
 
 {first_chunk_extra}
-{title_block}
-'''
+{title_block}'''
+
+
+FEW_SHOT_EXAMPLES = '''\
+─── FEW-SHOT EXAMPLES ───
+
+Example 1: Python Tutorial PDF →
+Input preview: "Python is a programming language... Chapter 1: Basics..."
+{{
+  "title": "Python Tutorial - Beginner",
+  "tags": ["python", "programming"],
+  "metadata": {{
+    "source_type": "pdf_clip",
+    "total_words": 1200,
+    "sections": [
+      {{"level": 2, "title": "Basics"}},
+      {{"level": 3, "title": "Variables and Types"}}
+    ],
+    "created_at": "2024-06-01T12:00:00Z",
+    "modified_date": null
+  }},
+  "body": "# Python Tutorial - Beginner\n\n## Basics\n\nPython is a programming language...\n\n### Variables and Types\n\nVariables store data..."
+}}
+
+Example 2: Wikipedia Article →
+Input preview: "FX Networks is an American... Contents hide (Top)... Search Wikipedia"
+{{
+  "title": "FX Networks",
+  "tags": ["cable television", "Disney acquisition"],
+  "metadata": {{
+    "source_type": "web",
+    "total_words": 800,
+    "sections": [
+      {{"level": 2, "title": "History"}},
+      {{"level": 2, "title": "Programming"}}
+    ],
+    "created_at": "2024-06-01T12:00:00Z",
+    "modified_date": null
+  }},
+  "body": "# FX Networks\n\n## History\n\nFX Networks is an American television network...\n\n## Programming\n\nThe network airs..."
+}}
+
+Follow these examples for formatting consistency.'''
 
 
 def get_system_prompt(source_type: str = "web") -> str:
     """Return formatted system prompt for a given source type."""
-    return SYSTEM_PROMPT.format(source_type=source_type)
+    return SYSTEM_PROMPT.format(source_type=source_type) + FEW_SHOT_EXAMPLES
 
 
 def get_chunked_system_prompt(chunk_index: int, total_chunks: int, title: str = "") -> str:
@@ -174,4 +244,85 @@ def get_chunked_system_prompt(chunk_index: int, total_chunks: int, title: str = 
         chunk_label=chunk_label,
         title_block=title_block,
         first_chunk_extra=first_chunk_extra,
-    )
+    ) + FEW_SHOT_EXAMPLES
+
+
+# ── Output validation ────────────────────────────────────────────────────
+
+
+def validate_format_output(result: dict) -> list[str]:
+    """Validate the formatter output against expected schema.
+
+    Returns a list of error messages (empty if valid).
+    """
+    errors = []
+
+    # title
+    title = result.get("title")
+    if not isinstance(title, str) or not title.strip():
+        errors.append(f"Missing or invalid 'title': got {type(title).__name__} = {title!r}")
+    elif len(title.strip()) > 200:
+        errors.append(f"title too long ({len(title)} chars)")
+
+    # tags
+    tags = result.get("tags")
+    if not isinstance(tags, list):
+        errors.append(f"'tags' must be a list, got {type(tags).__name__}")
+    elif len(tags) == 0:
+        errors.append("'tags' is empty (must have 1-5)")
+    elif len(tags) > 5:
+        errors.append(f"'tags' has {len(tags)} items (max 5)")
+    else:
+        for i, tag in enumerate(tags):
+            if not isinstance(tag, str):
+                errors.append(f"tags[{i}] is not a string")
+            elif len(tag.strip()) == 0:
+                errors.append(f"tags[{i}] is empty")
+
+    # metadata
+    meta = result.get("metadata", {})
+    if not isinstance(meta, dict):
+        errors.append("'metadata' must be an object")
+    else:
+        sections = meta.get("sections", [])
+        if not isinstance(sections, list):
+            errors.append("'metadata.sections' must be a list")
+        elif len(sections) > 0 and isinstance(sections[0], dict):
+            for i, sec in enumerate(sections):
+                if "level" not in sec or "title" not in sec:
+                    errors.append(f"section[{i}] missing 'level' or 'title'")
+
+    # body
+    body = result.get("body")
+    if not isinstance(body, str) or not body.strip():
+        errors.append(f"Missing or empty 'body': got {type(body).__name__} = {str(body)[:50]!r}")
+
+    return errors
+
+
+def try_fix_common_issues(result: dict) -> dict:
+    """Attempt to fix common formatting issues without re-calling the LLM."""
+    fixed = dict(result)
+    
+    # Ensure tags is a list of strings
+    if isinstance(fixed.get("tags"), str):
+        fixed["tags"] = [fixed["tags"]]
+    elif not isinstance(fixed.get("tags"), list):
+        fixed["tags"] = []
+
+    # Post-process: filter out single common English words that are too generic.
+    GENERIC_SINGLE_WORDS = {
+        "china", "france", "london", "tokyo", "beijing", "america", 
+        "banking", "company", "government", "service", "system", "market",
+        "important", "new", "old", "large", "small", "major", "national",
+    }
+    
+    if isinstance(fixed.get("tags"), list):
+        fixed["tags"] = [t for t in fixed["tags"] 
+                         if not (len(t.split()) == 1 and t.lower() in GENERIC_SINGLE_WORDS)]
+
+    # Ensure metadata exists
+    if "metadata" not in fixed or not isinstance(fixed.get("metadata"), dict):
+        fixed.setdefault("metadata", {})
+
+    return fixed

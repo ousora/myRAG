@@ -1,6 +1,5 @@
 """Write formatted results to markdown files."""
 
-import hashlib
 import os
 import re
 
@@ -17,6 +16,10 @@ def write_to_md(result, output_dir):
     """
     os.makedirs(output_dir, exist_ok=True)
 
+    # Validate required fields before writing
+    if not result.get("title"):
+        raise ValueError(f"Missing 'title' in formatter output")
+
     title = result["title"]
     safe_name = _safe_filename(title)
     file_path = os.path.join(output_dir, f"{safe_name}.md")
@@ -24,18 +27,27 @@ def write_to_md(result, output_dir):
     metadata = result.get("metadata", {})
 
     lines = []
-    # Title with blank line after (required for proper markdown rendering)
+
+    # YAML front matter (standard format for Obsidian, VS Code)
+    _write_yaml_frontmatter(lines, result)
+    lines.append("---")
+    lines.append("")
+
+    # Title with blank line after
     lines.append(f"# {title}")
     lines.append("")
 
-    # Structured YAML-style metadata block
+    # Structured metadata block (word count, section outline)
     _write_metadata_block(lines, result)
 
-    # Body content
+    # Body content — strip the first H1 since we already have a title above
     body = result.get("body", "")
     if body and isinstance(body, str) and body.strip():
         sections = metadata.get("sections", [])
-        _write_body_with_sections(lines, body, sections)
+        # Remove the first H1 heading (e.g., "# China National Clearing Center")
+        # since we already render it above as the document title.
+        stripped_body = re.sub(r'^#\s+.*\n', '', body, count=1)
+        _write_body_with_sections(lines, stripped_body.strip(), sections)
 
     md_content = "\n".join(lines).rstrip() + "\n"
 
@@ -48,69 +60,76 @@ def write_to_md(result, output_dir):
 def _safe_filename(title):
     """Generate a safe filename from title.
 
-    Keeps ASCII alphanumerics and basic punctuation; replaces others with underscore.
-    Appends short hash suffix for titles containing non-ASCII characters
-    (e.g., Chinese, Japanese) to avoid collisions and unreadable filenames.
+    Preserves Unicode characters (UTF-8 paths are standard on modern systems).
+    Only removes characters that are truly problematic in filenames.
+
+    Args:
+        title: Document title string
+
+    Returns:
+        Safe filename without extension
     """
-    # Keep ASCII alphanumerics plus hyphen, dot, space (for readability)
-    safe = "".join(c if c.isascii() and (c.isalnum() or c in "-_. ") else "_" for c in title)
+    # Remove only characters that cause issues across all filesystems
+    safe = re.sub(r'[/\\:*?"<>|]', '_', title)
+    return safe.strip()
 
-    # Collapse multiple underscores/spaces into one
-    safe = re.sub(r"[_\s]+", "_", safe).strip("_")
 
-    # Append hash suffix when non-ASCII characters were present
-    if any(not c.isascii() for c in title):
-        short_hash = hashlib.md5(title.encode("utf-8")).hexdigest()[:6]
-        safe = f"{safe}_{short_hash}"
+def _write_yaml_frontmatter(lines, result):
+    """Write YAML front matter block.
 
-    return safe
+    Fields written (when present and non-empty):
+      - title     — document title
+      - source_file — original document path
+      - created_at  — ISO-8601 timestamp of ingestion
+      - modified_date — last modification date (if available)
+      - tags        — list of tag strings
+    """
+    metadata = result.get("metadata", {})
+    source_file = metadata.get("source_file") or ""
+    created_at = metadata.get("created_at") or ""
+    modified_date = metadata.get("modified_date")
+    tags = result.get("tags", [])
+
+    lines.append("---")
+    if title := result.get("title"):
+        lines.append(f"title: {repr(title)}")  # use repr for safe YAML string quoting
+    if source_file:
+        lines.append(f"source: {repr(source_file)}")
+    if created_at:
+        lines.append(f"created_at: {created_at}")
+    if modified_date:
+        lines.append(f"modified_date: {repr(modified_date)}")
+    if tags:
+        # YAML list format for tags
+        lines.append("tags:")
+        for tag in tags:
+            lines.append(f'  - "{tag}"')
 
 
 def _write_metadata_block(lines, result):
-    """Write a structured YAML-style metadata block.
+    """Write a structured metadata block.
 
     Fields written (when present and non-empty):
-      - source_file  — original document path
-      - created_at   — ISO-8601 timestamp of ingestion
-      - modified_date — last modification date (if available)
-      - tags         — comma-separated list
-      - total_words  — word count
-      - sections     — numbered heading outline with levels
+      - Words — word count (tags are already in YAML front matter)
+      - Sections — numbered heading outline with levels
     """
     metadata = result.get("metadata", {})
-    source_file = metadata.get("source_file", "")
-    created_at = metadata.get("created_at", "")
-    modified_date = metadata.get("modified_date", None)
-    tags = result.get("tags", metadata.get("tags", []))
     total_words = metadata.get("total_words")
     sections_list = metadata.get("sections", [])
 
     meta_lines: list[str] = []
 
-    if source_file:
-        meta_lines.append(f"- **Source:** {source_file}")
-    if created_at:
-        meta_lines.append(f"- **Created:** {created_at}")
-    if modified_date:
-        meta_lines.append(f"- **Modified:** {modified_date}")
-
-    # Tags and word count on one line (compact)
-    compact_parts: list[str] = []
-    if tags:
-        compact_parts.append(", ".join(tags))
+    # Word count
     if total_words:
-        compact_parts.append(str(total_words))
-    if compact_parts:
-        meta_lines.append("- **Tags / Words:** " + " | ".join(compact_parts))
+        meta_lines.append(f"- **Words:** {total_words}")
 
-    # Section outline (numbered)
+    # Section outline (numbered, starting from 1)
     if sections_list:
         section_items = []
-        for s in sections_list:
+        for idx, s in enumerate(sections_list, start=1):
             level = s.get("level", 2)
-            indent = "  " * (level - 2)  # level-2 is base, no indent
-            prefix = f"{s.get('number', '')} {indent}" if s.get("number") else indent
-            section_items.append(f"{prefix}- **{s['title']}**")
+            indent = "  " * max(level - 3, 0)  # H2/H3 get no extra indent beyond base
+            section_items.append(f"{idx}. {indent}**{s['title']}**")
         meta_lines.append("")
         meta_lines.append("- **Sections:**")
         for item in section_items:
