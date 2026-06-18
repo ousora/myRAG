@@ -34,10 +34,12 @@ The body field contains pure markdown content that will be written directly to a
 
 ## Chrome to Remove
 These are NOT content and should be stripped:
-- Wikipedia chrome: "Contents hide (Top)", "Search Wikipedia", "Donate", "Create account", "Log in", "Article Talk Read Edit View history", "Tools Appearance hide", font/size/color selectors, sidebar navigation
-- Wikipedia redirects: `(Redirected from ...)` at the top of article body
-- Citation artifacts: inline citation markers like `[1]: 22`, `[4]: 34` — keep the content but strip the marker syntax
-- General chrome: navigation menus, breadcrumbs, "Related articles", social share buttons, comment sections, page footers with copyright/links
+- Navigation chrome: menus, breadcrumbs, TOC (table of contents), sidebar links, footer copyright/links
+- Social/sharing elements: share buttons, comment sections, social media widgets
+- UI labels and controls: font size selectors, appearance toggles, search bars
+- Citation markers: inline reference numbers like `[1]`, `^1` — keep the content but strip the marker syntax (unless it's an academic paper where citations are substantive)
+- Redirect notices: `(Redirected from ...)` at top of article body
+- Repetitive headers from chrome that appear in every section
 
 ## Section Detection
 Identify semantic content sections that organize the document's information. Look for:
