@@ -75,18 +75,16 @@ Preserve paragraph breaks (double newline). Single newlines within paragraphs ar
 ## Tags (CRITICAL)
 - Must be a list of 1-5 strings. **Prefer 2-3 tags** — quality over quantity.
 - Use lowercase English words only, max 3 words per tag.
-- **Use domain-specific terms and proper nouns**, not generic common words:
-  - ✅ "cable television", "Disney acquisition", "FX Productions"
-  - ❌ NOT: "original", "retrieved", "disney", "fox", "channel", "june" (these are just frequent English words)
-- Tags should describe the document's core subject matter so a reader can understand what it's about from tags alone.
+- **Use domain-specific terms and proper nouns**, not generic common words.
+- At least one tag MUST contain a technical term, organization name, system name, or concept that uniquely identifies this document's subject matter.
 
 ### Tag Quality Rules (CRITICAL)
-- Do NOT use single common English words as tags — every tag should be either a **multi-word phrase** (2+ words) or a **proper noun/brand name**.
-- Avoid these generic categories of words as standalone tags:
-  - Place names used in isolation: "china", "france", "london", "tokyo"
-  - Business roles/concepts: "banking", "company", "government", "service", "system", "market"
-  - Adjectives/adverbs: "important", "new", "old", "large"
-- At least one tag MUST contain a technical term, organization name, system name, or domain-specific concept that uniquely identifies this document.
+- Do NOT use single common English words as standalone tags — every tag should either be a **multi-word phrase** describing the topic, or a **proper noun/brand/name**.
+- Avoid these categories as standalone tags:
+  - Place names used in isolation (e.g., just "china" without context)
+  - Generic business roles/concepts (e.g., "banking", "company", "system", "service")
+  - Adjectives/adverbs (e.g., "important", "new", "old")
+- Tags should describe the document's core subject matter so a reader can understand what it's about from tags alone.
 - Self-check: for each tag, ask "If someone searched this exact string on Google, would they find THIS specific article?" If no → replace it.
 
 ## Self-Correction Checklist (CRITICAL)
@@ -189,22 +187,22 @@ Input preview: "Python is a programming language... Chapter 1: Basics..."
   "body": "# Python Tutorial - Beginner\n\n## Basics\n\nPython is a programming language...\n\n### Variables and Types\n\nVariables store data..."
 }}
 
-Example 2: Wikipedia Article →
-Input preview: "FX Networks is an American... Contents hide (Top)... Search Wikipedia"
+Example 2: Research Paper →
+Input preview: "Deep learning has transformed computer vision... Introduction to Transformers..."
 {{
-  "title": "FX Networks",
-  "tags": ["cable television", "Disney acquisition"],
+  "title": "Transformer Architecture Review",
+  "tags": ["deep learning", "neural networks"],
   "metadata": {{
-    "source_type": "web",
+    "source_type": "pdf_clip",
     "total_words": 800,
     "sections": [
-      {{"level": 2, "title": "History"}},
-      {{"level": 2, "title": "Programming"}}
+      {{"level": 2, "title": "Introduction"}},
+      {{"level": 2, "title": "Architecture"}}
     ],
     "created_at": "2024-06-01T12:00:00Z",
     "modified_date": null
   }},
-  "body": "# FX Networks\n\n## History\n\nFX Networks is an American television network...\n\n## Programming\n\nThe network airs..."
+  "body": "# Transformer Architecture Review\\n\\n## Introduction\\n\\nDeep learning has transformed computer vision...\\n\\n## Architecture\\n\\nThe transformer model uses attention mechanisms..."
 }}
 
 Follow these examples for formatting consistency.'''

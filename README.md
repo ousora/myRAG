@@ -50,6 +50,12 @@ cleaned = TextCleaner().clean(raw_text)
 
 LLM-powered: extracts title, tags, section hierarchy. **Auto-chunks large texts** (>28K chars) at paragraph boundaries — each chunk gets the last 10 lines of previous markdown output + cumulative summary as context for continuity.
 
+**JSON Schema enforcement**: `call_llm()` accepts a `schema=` parameter to send JSON Schema via `response_format`, letting llama.cpp / OpenAI servers enforce output structure natively (schemas in [constants.py](src/formatters/constants.py)).
+
+**Tag quality**: Extracts proper nouns and domain-specific multi-word phrases; filters generic single words ("banking", "system").
+
+**Output validation**: `validate_format_output()` + `try_fix_common_issues()` for post-processing without re-calling LLM.
+
 ```python
 from formatters import format_text_async, format_text_with_system, call_llm, write_to_md
 
@@ -136,6 +142,7 @@ myrag/
 │   │   └── text_cleaner.py
 │   ├── formatters/           # LLM formatter + prompts + markdown writer
 │   │   ├── __init__.py
+│   │   ├── constants.py      # JSON schemas for response_format
 │   │   ├── prompts.py
 │   │   └── writer.py
 │   ├── chunkers/             # LangChain MarkdownHeaderTextSplitter wrapper

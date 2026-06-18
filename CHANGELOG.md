@@ -4,6 +4,19 @@
 
 ### Changed
 
+- **Formatter JSON Schema enforcement**: `call_llm()` now accepts a `schema=` parameter that sends JSON Schema via `response_format`, letting llama.cpp / OpenAI servers enforce output structure natively. Schemas defined in new `constants.py` file. ([src/formatters/constants.py](src/formatters/constants.py), [src/formatters/__init__.py](src/formatters/__init__.py))
+- **Formatter JSON parsing robustness**: Multi-level retry — `strict=True` fast path, then `strict=False`, then bare-quote fix for body field (`_fix_bare_quotes_in_body_field()`). Bare quotes inside string values no longer cause parse failures. ([src/formatters/__init__.py](src/formatters/__init__.py))
+- **Tag extraction quality**: Removed generic single-word tags ("banking", "company", "system"), introduced proper noun extraction from title + body, multi-word phrase merging, and a whitelist of useful domain-specific terms. Tags now describe document subject matter so a reader can understand what it's about at a glance. ([src/formatters/__init__.py](src/formatters/__init__.py))
+- **Few-shot examples added**: Prompts now include concrete input/output examples for both single-shot and chunked formatting, improving output consistency across LLM calls. ([src/formatters/prompts.py](src/formatters/prompts.py))
+- **Few-shot examples generalised**: Replaced FX Networks-specific example with a generic research paper example so tags demonstrate domain-agnostic patterns rather than topic-specific values. ([src/formatters/prompts.py](src/formatters/prompts.py))
+
+### Added
+
+- **Output validation helpers**: `validate_format_output(result) → list[str]` checks required fields; `try_fix_common_issues(result)` auto-fixes bad tags / missing metadata without re-calling LLM. ([src/formatters/prompts.py](src/formatters/prompts.py))
+- **JSON schema constants**: `FORMATTER_SCHEMA` and `CHUNKED_SCHEMA` extracted from inline prompts into [src/formatters/constants.py](src/formatters/constants.py) for reuse by `call_llm(schema=...)`. ([src/formatters/constants.py](src/formatters/constants.py))
+
+### Changed
+
 - **Parser lazy loading**: Moved MarkItDown/Trafilatura imports from module level into `__init__`. Parsers now load on first use, allowing the module to be imported even when optional deps are missing (fail-fast in `__init__`). ([src/parsers/dispatcher.py](src/parsers/dispatcher.py))
 - **TrafilaturaParser encoding**: Now reads HTML files with UTF-8 → GBK fallback instead of passing filepath directly. Fixes silent parse failures on non-UTF-8 encoded Chinese web pages.
 
