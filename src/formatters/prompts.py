@@ -27,8 +27,8 @@ Output valid JSON only. No markdown fences, no explanation.
 
 ## Body Completeness (CRITICAL)
 The body field contains pure markdown content that will be written directly to a file.
-- **The document title is NOT part of the body** — it already appears as `# Title` on line 1. Do NOT include the title in the body text, even if it appears at the top of the source text (e.g., Wikipedia article titles). Repeating the title causes duplicate headings and is a critical error.
-- **Do NOT repeat any heading that matches or closely resembles the document title** — check your output before returning: if `# FX Networks` appears on line 1, it must NOT appear again anywhere in the body text.
+-- The document title is NOT part of the body — it appears as `# Title` on line 1. Do NOT include it in the body again, even if present in the source text. Duplicates are incorrect.
+- Do NOT repeat any heading that matches or closely resembles the document title — check your output before returning: if a top-level title already exists, it must not reappear elsewhere in the body text.
 - The body MUST contain every sentence, paragraph, and data point from the source text (minus chrome).
 - You may remove navigation chrome but NEVER delete, truncate, or rewrite content text.
 
@@ -65,7 +65,7 @@ The body MUST contain hierarchical `##` and `###` markdown headings throughout.
 - If the source text already has heading markers (e.g., "Chapter 2", numbered sections, bold titles), convert them to `## Section Title` or `### Subsection`. Remove numbering prefixes.
 - If the source text does NOT have explicit headings but contains clear topic shifts, infer section boundaries and add appropriate `## Major Topic` / `### Sub-topic` headings.
 - The document title is a single `# Title` at line 1 (from the title field). All other sections use `##` or `###`. Never leave content as plain paragraphs without any heading.
-- **EXACTLY ONE** `# Title` per document — only on line 1. No other `#` headings allowed anywhere else in the text.
+  A valid hierarchical structure has exactly one top-level title and no duplicate `#` headings elsewhere.
 
 ## Markdown Structure Rules
 - Wrap code, XML, or message examples in triple-backtick fences with language tag (e.g., ```` ```xml ... ``` ````).
@@ -76,18 +76,11 @@ Preserve paragraph breaks (double newline). Single newlines within paragraphs ar
 
 ## Tags (CRITICAL)
 - Must be a list of 1-5 strings. **Prefer 2-3 tags** — quality over quantity.
-- Use lowercase English words only, max 3 words per tag.
-- **Use domain-specific terms and proper nouns**, not generic common words.
-- At least one tag MUST contain a technical term, organization name, system name, or concept that uniquely identifies this document's subject matter.
+- Use concise descriptive phrases in lowercase; keep each tag to a few words.
+- Tags should capture the document's domain-specific subject — technical terms, organization names, or specific concepts that identify what this is about.
 
 ### Tag Quality Rules (CRITICAL)
-- Do NOT use single common English words as standalone tags — every tag should either be a **multi-word phrase** describing the topic, or a **proper noun/brand/name**.
-- Avoid these categories as standalone tags:
-  - Place names used in isolation (e.g., just "china" without context)
-  - Generic business roles/concepts (e.g., "banking", "company", "system", "service")
-  - Adjectives/adverbs (e.g., "important", "new", "old")
-- Tags should describe the document's core subject matter so a reader can understand what it's about from tags alone.
-- Self-check: for each tag, ask "If someone searched this exact string on Google, would they find THIS specific article?" If no → replace it.
+- Avoid generic single words and vague descriptors. A good tag lets someone recognize the document's subject from it alone.
 
 ## Self-Correction Checklist (CRITICAL)
 Before returning your JSON output, verify ALL of these conditions:
@@ -144,8 +137,8 @@ The part_md MUST contain hierarchical `##` and `###` markdown headings throughou
 1. If the source text already has heading markers (e.g., "Chapter 2", numbered sections, bold titles), convert them to `## Section Title` or `### Subsection`. Remove numbering prefixes.
 2. If the source text does NOT have explicit headings but contains clear topic shifts, infer section boundaries and add appropriate `## Major Topic` / `### Sub-topic` headings.
 3. The document title is a single `# Title` at the top (first chunk only); all other sections use `##` or `###`. Never leave content as plain paragraphs without any heading.
-4. **EXACTLY ONE** `# Title` per document — only on line 1 of body in first chunk. No other `#` headings allowed anywhere else.
-5. **Do NOT repeat the document title as a heading.** If you see "FX Networks" at the top of this chunk's source text, do NOT write it as `# FX Networks`. The title is already on line 1 of the final file.
+4. A valid hierarchical structure has exactly one `# Title` on line 1 of the final file; no duplicate `#` headings elsewhere.
+5. Do NOT repeat the document title as a heading, even if it appears in the chunk's source text. The title is already on line 1 of the final file.
 
 ## Markdown Style
 Use consistent formatting:
@@ -310,16 +303,28 @@ def try_fix_common_issues(result: dict) -> dict:
     elif not isinstance(fixed.get("tags"), list):
         fixed["tags"] = []
 
-    # Post-process: filter out single common English words that are too generic.
-    GENERIC_SINGLE_WORDS = {
-        "china", "france", "london", "tokyo", "beijing", "america", 
-        "banking", "company", "government", "service", "system", "market",
-        "important", "new", "old", "large", "small", "major", "national",
-    }
+    # Post-process: filter out single generic words that are noise rather than meaningful tags.
+    def _is_generic_single_word(tag: str) -> bool:
+        words = tag.strip().split()
+        if len(words) != 1:
+            return False
+        w = words[0]
+        # Acronyms / all-caps abbreviations (CNCC, HVPS, BEPS) — keep these as domain-specific tags
+        if w.isupper() and len(w) >= 2:
+            return False
+        # camelCase identifiers and non-Latin characters
+        if not w.isalpha():
+            return False
+        # Reject obvious generic adjectives/verbs by simple heuristics
+        lower = w.lower()
+        if len(w) < 4:
+            return True
+        if any(lower.endswith(e) for e in ("ing", "tion", "ment", "ness")):
+            return True
+        return False
     
     if isinstance(fixed.get("tags"), list):
-        fixed["tags"] = [t for t in fixed["tags"] 
-                         if not (len(t.split()) == 1 and t.lower() in GENERIC_SINGLE_WORDS)]
+        fixed["tags"] = [t for t in fixed["tags"] if not _is_generic_single_word(t)]
 
     # Ensure metadata exists
     if "metadata" not in fixed or not isinstance(fixed.get("metadata"), dict):

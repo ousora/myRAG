@@ -1,0 +1,67 @@
+# Custom regex rules for cleaning extracted text.
+---
+rules:
+  - pattern: '^WikipediaThe Free Encyclopedia$'
+    replace: ''
+    flags: MULTILINE
+
+  - pattern: '^(Search Wikipedia|Search)$'
+    replace: ''
+    flags: MULTILINE
+
+  - pattern: '^Create account$|^Log in$'
+    replace: ''
+    flags: MULTILINE
+
+  - pattern: '^(Donate|Edit|View history)\s*$'
+    replace: ''
+    flags: MULTILINE
+
+  - pattern: '^Contents hide$\n\(Top\)$'
+    replace: '[TABLE OF CONTENTS REMOVED]'
+    flags: MULTILINE
+
+  - pattern: '^(Tools|Appearance hide)$'
+    replace: ''
+    flags: MULTILINE
+
+  - pattern: 'This page was last edited on|^Text is available under|^Privacy policy|^About Wikipedia'
+    replace: '[END OF ARTICLE]'
+    flags: MULTILINE
+
+  - pattern: '^(Wikimedia Foundation|Powered by MediaWiki)$'
+    replace: ''
+    flags: MULTILINE
+
+  - pattern: '(Categories:.*|This article needs additional citations).*$'
+    replace: ''
+    flags: MULTILINE
+
+  # Appearance settings menu (Wikipedia)
+  - pattern: '^(Small|Standard|Large)$'
+    replace: ''
+    flags: MULTILINE
+
+  - pattern: '^(Wide|Color|Automatic|Light|Dark)$'
+    replace: ''
+    flags: MULTILINE
+
+  # Wiki navigation elements
+  - pattern: '^Article$|^Talk$|^Read$|^Edit$'
+    replace: ''
+    flags: MULTILINE
+
+  - pattern: '^See also$|^Notes$|^References$|^External links$'
+    replace: ''
+    flags: MULTILINE
+
+  # "From Wikipedia" attribution (keep only the important part)
+  - pattern: '^From Wikipedia, the free encyclopedia$'
+    replace: '[ARTICLE START]'
+    flags: MULTILINE
+
+
+  # Remaining appearance settings
+  - pattern: '^(Text|Width)$'
+    replace: ''
+    flags: MULTILINE

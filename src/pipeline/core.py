@@ -88,11 +88,12 @@ class TextCleaner:
     The actual implementation lives in parsers/text_cleaner.py (YAML config support).
     """
 
-    def __init__(self, *, remove_page_breaks=True, collapse_whitespace=True):
+    def __init__(self, *, remove_page_breaks=True, collapse_whitespace=True, rules_config="clean_rules.yaml"):
         from parsers.text_cleaner import TextCleaner as _RealCleaner  # noqa: F811
         self._cleaner = _RealCleaner(
             remove_page_breaks=remove_page_breaks,
             collapse_whitespace=collapse_whitespace,
+            rules_config=rules_config,
         )
 
     def clean(self, text: str) -> str:
@@ -111,7 +112,7 @@ class Chunker:
         return cls._RealChunker(**kwargs)
 
 
-def process_file(filepath: str, *, remove_page_breaks=True, collapse_whitespace=True, chunk_size=512) -> list[dict]:
+def process_file(filepath: str, *, remove_page_breaks=True, collapse_whitespace=True, rules_config="conf/clean_rules.yaml", chunk_size=512) -> list[dict]:
     """Parse a single file and return structured chunks (traditional RAG).
 
     Pipeline: parser → cleaner → chunker → output dict list.
@@ -126,7 +127,7 @@ def process_file(filepath: str, *, remove_page_breaks=True, collapse_whitespace=
         return []
 
     raw_text = parser.parse(filepath)
-    cleaned = TextCleaner(remove_page_breaks=remove_page_breaks, collapse_whitespace=collapse_whitespace).clean(raw_text)
+    cleaned = TextCleaner(remove_page_breaks=remove_page_breaks, collapse_whitespace=collapse_whitespace, rules_config=rules_config).clean(raw_text)
     chunks = Chunker(chunk_size=chunk_size).chunk(cleaned)
 
     result = [
@@ -138,7 +139,7 @@ def process_file(filepath: str, *, remove_page_breaks=True, collapse_whitespace=
 
 
 def process_file_hybrid(filepath: str, *, doc_id="doc_0", remove_page_breaks=True, 
-                        collapse_whitespace=True, chunk_size=512, store_path=None):
+                        collapse_whitespace=True, rules_config="conf/clean_rules.yaml", chunk_size=512, store_path=None):
     """Parse file with LLM formatter → chunker → embedder → sqlite-vec (Hybrid A+B).
 
     Args:
@@ -162,7 +163,7 @@ def process_file_hybrid(filepath: str, *, doc_id="doc_0", remove_page_breaks=Tru
         return {"chunks": [], "document": {}}
 
     raw_text = parser.parse(filepath)
-    cleaned = TextCleaner(remove_page_breaks=remove_page_breaks, collapse_whitespace=collapse_whitespace).clean(raw_text)
+    cleaned = TextCleaner(remove_page_breaks=remove_page_breaks, collapse_whitespace=collapse_whitespace, rules_config=rules_config).clean(raw_text)
 
     # 2. LLM Format (async)
     cfg = _get_config()

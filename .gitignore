@@ -40,6 +40,9 @@ logs/
 # Test artifacts (not tracked in git)
 .test/
 
+# E2E test documents and outputs
+tmp/
+
 # LLM response debug logs
 test/llmoutput/
 

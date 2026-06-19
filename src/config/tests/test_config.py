@@ -81,6 +81,7 @@ class TestGetConfig:
     """Verify that get_config() loads from the correct file."""
 
     def test_get_config_returns_instance(self):
+        get_config.cache_clear()  # clear lru_cache so mock takes effect
         with patch.object(Path, "exists", return_value=True), \
              patch.object(Path, "read_text") as mock_read:
             mock_read.return_value = (
@@ -92,6 +93,7 @@ class TestGetConfig:
         assert cfg.chunk_threshold_chars == 30000
 
     def test_get_config_caches(self):
+        get_config.cache_clear()  # clear lru_cache so mock takes effect
         with patch.object(Path, "exists", return_value=True), \
              patch.object(Path, "read_text") as mock_read:
             mock_read.return_value = (

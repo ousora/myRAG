@@ -66,6 +66,24 @@ from pipeline import _ingest_markdown
 _ingest_markdown("output/doc.md", store_path="data/myrag.db")
 ```
 
+## Testing Workflows
+
+When testing formatter/pipeline changes with real documents:
+
+- **Input**: Place raw test documents in `tmp/doc/` (create if needed)
+- **Intermediate output** (LLM JSON responses): Written to `tmp/raw/` — useful for debugging LLM behavior
+- **Final markdown**: Output written to `tmp/out/`
+
+Example workflow:
+```bash
+cp /path/to/document.txt tmp/doc/my-doc.txt
+uv run python -c "from formatters import format_md; ... # process tmp/doc/my-doc.txt → tmp/out/"
+cat tmp/raw/*.txt   # inspect LLM raw output if needed
+cat tmp/out/my-doc.md  # review final markdown
+```
+
+Run `git status` to verify no unintended files are committed (tmp/ should be gitignored).
+
 ## Pitfalls
 
 - The `cleaners/` module is a facade — canonical implementation is in `parsers/text_cleaner.py` with YAML config support
