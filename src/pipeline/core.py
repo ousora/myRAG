@@ -76,6 +76,35 @@ def _render_markdown_with_sections(result: dict) -> str:
     return "\n\n".join(lines) + "\n"
 
 
+def _match_entities_to_chunks(chunks: list[dict], entities: list[dict]) -> list[dict]:
+    """Match document-level entities to individual chunks by text presence.
+
+    Scans each chunk's text for entity names (case-insensitive).
+    Only entities that actually appear in a chunk get tagged on that chunk.
+    This keeps entity search granular — querying 'GPT-4' returns only chunks
+    that mention GPT-4, not every chunk from the same document.
+
+    Args:
+        chunks: List of chunk dicts, each with at least a 'text' key.
+        entities: List of entity dicts with 'name' keys from formatter output.
+
+    Returns:
+        Same chunks list with 'entity_names' added to each chunk.
+    """
+    if not entities:
+        return chunks
+
+    for chunk in chunks:
+        chunk_text_lower = chunk["text"].lower()
+        matched = [
+            e["name"]
+            for e in entities
+            if e["name"].lower() in chunk_text_lower
+        ]
+        chunk["entity_names"] = matched
+    return chunks
+
+
 def _resolve_parser(filepath: str):
     from parsers.dispatcher import resolve_parser as rp
     return rp(filepath)
@@ -174,6 +203,10 @@ def process_file_hybrid(filepath: str, *, doc_id="doc_0", remove_page_breaks=Tru
     formatted_md = _render_markdown_with_sections(result)
     chunker = Chunker(chunk_size=chunk_size)
     all_chunks = chunker.chunk(formatted_md)
+
+    # Match document-level entities to individual chunks (Phase C)
+    entities = result.get("metadata", {}).get("entities", [])
+    all_chunks = _match_entities_to_chunks(all_chunks, entities)
 
     # Build summary text before the try block so it's always available in the except handler.
     title = result.get("title", "Untitled")

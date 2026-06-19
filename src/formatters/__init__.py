@@ -78,9 +78,28 @@ def call_llm(system_prompt: str, user_message: str, *,
         response = httpx.post(cfg.llm_endpoint, json=payload, timeout=timeout or cfg.llm_timeout)
         response.raise_for_status()
     except httpx.HTTPError as e:
-        logger.error("LLM call failed after %.1fs: %s",
-                      (timeout or cfg.llm_timeout), e)
-        raise RuntimeError(f"LLM API request failed: {e}") from e
+        # Some llama.cpp backends fail on JSON Schema enforcement
+        # (peg-grammar incompatibility). Retry without schema if this happens.
+        resp_for_retry = getattr(e, "response", None)
+        if schema is not None and resp_for_retry is not None and resp_for_retry.status_code == 500:
+            err_body = resp_for_retry.text
+            if "peg" in err_body.lower() or "format" in err_body.lower():
+                logger.warning("Schema-based response_format rejected by server, retrying without schema")
+                payload.pop("response_format", None)
+                try:
+                    response = httpx.post(cfg.llm_endpoint, json=payload, timeout=timeout or cfg.llm_timeout)
+                    response.raise_for_status()
+                except httpx.HTTPError as e2:
+                    logger.error("LLM call failed (no schema fallback): %s", e2)
+                    raise RuntimeError(f"LLM API request failed: {e2}") from e2
+            else:
+                logger.error("LLM call failed after %.1fs: %s",
+                             (timeout or cfg.llm_timeout), e)
+                raise RuntimeError(f"LLM API request failed: {e}") from e
+        else:
+            logger.error("LLM call failed after %.1fs: %s",
+                          (timeout or cfg.llm_timeout), e)
+            raise RuntimeError(f"LLM API request failed: {e}") from e
 
     try:
         raw_content = response.json()["choices"][0]["message"]["content"]

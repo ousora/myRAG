@@ -16,10 +16,15 @@ llm:
 
 # ── Embedding Service (embedders) ────────────────────────────────────
 embedding:
-  # OpenAI-compatible embeddings endpoint (bge-m3 via vLLM / Ollama)
+  mode: "remote"            # ← "remote" or "local" (one-click switch)
+
+  # When mode == "remote":
   base_url: "http://localhost:11435"
   model: "bge-m3"
   timeout: 60                # seconds for HTTP request
+
+  # When mode == "local":
+  # local_model: "BAAI/bge-m3"   # HF model name, auto-downloads on first use
 
 # ── Formatter Settings ───────────────────────────────────────────────
 formatter:

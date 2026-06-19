@@ -40,6 +40,20 @@ FORMATTER_SCHEMA = {
                 },
                 "created_at": {"type": "string"},
                 "modified_date": {"type": ["string", "null"]},
+                "entities": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "required": ["name", "type"],
+                        "properties": {
+                            "name": {"type": "string"},
+                            "type": {
+                                "type": "string",
+                                "enum": ["PERSON", "ORG", "PRODUCT", "LOCATION", "CONCEPT"],
+                            },
+                        },
+                    },
+                },
             },
         },
         # body is the largest field — must be a string (may contain quotes, newlines).

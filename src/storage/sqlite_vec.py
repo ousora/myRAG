@@ -92,7 +92,8 @@ class SQLiteVecStore:
                 source_doc_id TEXT NOT NULL,
                 chunk_index INTEGER DEFAULT 0,
                 section_path TEXT,
-                word_count INTEGER
+                word_count INTEGER,
+                entity_names TEXT DEFAULT '[]'
             );
 
             CREATE INDEX IF NOT EXISTS idx_chunks_source ON chunks(source_doc_id);
@@ -119,13 +120,15 @@ class SQLiteVecStore:
         self._setup_schema()
         
         section_json = json.dumps(chunk_data.get("section_path", ["General"]))
+        entity_names_json = json.dumps(chunk_data.get("entity_names", []))
         word_count = len(chunk_data.get("text", "").split())
 
         cursor = self.conn.execute(
-            """INSERT INTO chunks (text, embedding, source_doc_id, chunk_index, section_path, word_count)
-               VALUES (?, ?, ?, ?, ?, ?)""",
+            """INSERT INTO chunks (text, embedding, source_doc_id, chunk_index, section_path, word_count, entity_names)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
             (chunk_data["text"], _SQLITE_VEC.serialize_float32(embedding), doc_id, 
-             chunk_index, json.dumps(chunk_data.get("section_path", ["General"])), word_count)
+             chunk_index, json.dumps(chunk_data.get("section_path", ["General"])), word_count,
+             entity_names_json)
         )
 
         self.conn.execute(

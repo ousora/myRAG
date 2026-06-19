@@ -71,6 +71,8 @@ class Config:
         self.embedding_base_url: str   = emb.get("base_url", "http://localhost:11435")
         self.embedding_model: str      = emb.get("model", "bge-m3")
         self.embedding_timeout: int    = emb.get("timeout", 60)
+        self.embedding_mode: str       = emb.get("mode", "remote")
+        self.embedding_local_model: str | None = emb.get("local_model")
 
         # ── Formatter ──
         fmt = raw.get("formatter", {})
@@ -89,6 +91,16 @@ class Config:
     def _validate(self) -> list[str]:
         """Return a list of validation error messages, or [] if valid."""
         errors: list[str] = []
+
+        # Embedding mode validation
+        if self.embedding_mode not in ("remote", "local"):
+            errors.append(f"embedding.mode must be 'remote' or 'local' (got {self.embedding_mode!r})")
+        elif self.embedding_mode == "remote":
+            if not self.embedding_base_url:
+                errors.append("embedding.base_url required when mode=remote")
+        elif self.embedding_mode == "local":
+            if not self.embedding_local_model:
+                errors.append("embedding.local_model required when mode=local")
 
         # Formatter settings must be positive
         for field in ("chunk_threshold_chars", "chunk_max_tokens", "chunk_timeout"):

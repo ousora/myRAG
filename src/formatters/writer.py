@@ -4,6 +4,79 @@ import os
 import re
 
 
+def _insert_wikilinks(body: str, entities: list[dict]) -> str:
+    """Replace entity mentions with [[wikiname]] format for .md display.
+
+    Only called from write_to_md() — never used in the chunk/embed pipeline.
+    The chunker and embedder always receive clean text without wikilinks.
+
+    CRITICAL: Skips code blocks, inline code, and existing links to avoid corruption.
+    Uses longest-match-first to prevent short entity names from overwriting long ones.
+    Applies replacements back-to-front to prevent string offset shift bugs.
+    """
+    if not entities:
+        return body
+
+    # 1. Extract protected ranges (code blocks, inline code, existing links)
+    protected_ranges = _extract_protected_ranges(body)
+
+    # 2. Collect all replacements from longest to shortest entity name
+    replacements = []
+    for e in sorted(entities, key=lambda x: -len(x["name"])):
+        pattern = re.escape(e["name"])
+        for match in re.finditer(pattern, body):
+            pos_start, pos_end = match.start(), match.end()
+            if not _is_inside_protected(pos_start, protected_ranges):
+                replacement = f'[[{e["name"]}]]'
+                # Skip if this position was already claimed by a longer entity
+                if not any(ps <= pos_start < pe for ps, pe, _ in replacements):
+                    replacements.append((pos_start, pos_end, replacement))
+
+    # 3. Apply back-to-front so earlier positions stay valid
+    for start, end, replacement in sorted(replacements, key=lambda x: -x[0]):
+        body = body[:start] + replacement + body[end:]
+
+    return body
+
+
+def _extract_protected_ranges(text: str) -> list[tuple[int, int]]:
+    """Find all protected regions where wikilink insertion is unsafe.
+
+    Returns sorted list of (start, end) tuples covering:
+    - Code blocks (```...``` with optional language tag)
+    - Inline code (`...`)
+    - Existing wikilinks ([[...]])
+    - Existing markdown links ([text](url))
+    """
+    protected = []
+
+    # Fenced code blocks: ``` ... ``` (including language tag)
+    for m in re.finditer(r'```[\s\S]*?```', text):
+        protected.append((m.start(), m.end()))
+
+    # Inline code: `...` (single backtick pairs, not nested)
+    for m in re.finditer(r'(?<!`)`(?!`)([^`]*)`(?!`)', text):
+        protected.append((m.start(), m.end()))
+
+    # Existing wikilinks: [[...]]
+    for m in re.finditer(r'\[\[.*?\]\]', text):
+        protected.append((m.start(), m.end()))
+
+    # Existing markdown links: [text](url)
+    for m in re.finditer(r'\[[^\]]*\]\([^)]*\)', text):
+        protected.append((m.start(), m.end()))
+
+    return sorted(protected)
+
+
+def _is_inside_protected(position: int, protected_ranges: list[tuple[int, int]]) -> bool:
+    """Check if a character position falls within any protected range."""
+    for start, end in protected_ranges:
+        if start <= position < end:
+            return True
+    return False
+
+
 def write_to_md(result, output_dir):
     """Format structured result into markdown and save it.
 
@@ -46,8 +119,14 @@ def write_to_md(result, output_dir):
         sections = metadata.get("sections", [])
         # Remove the first H1 heading (e.g., "# China National Clearing Center")
         # since we already render it above as the document title.
-        stripped_body = re.sub(r'^#\s+.*\n', '', body, count=1)
-        _write_body_with_sections(lines, stripped_body.strip(), sections)
+        stripped_body = re.sub(r'^#\s+.*\n', '', body, count=1).strip()
+
+        # Apply wikilinks for .md display only (entities extracted by formatter)
+        entities = metadata.get("entities", [])
+        if entities:
+            stripped_body = _insert_wikilinks(stripped_body, entities)
+
+        _write_body_with_sections(lines, stripped_body, sections)
 
     md_content = "\n".join(lines).rstrip() + "\n"
 

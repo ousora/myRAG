@@ -10,7 +10,7 @@
 |---|------|-------|------------|
 | A | Rewrite chunker: replace LangChain splitters with pure Python | `src/chunkers/__init__.py` | ⭐⭐ |
 | B | bge-m3 embedding client supports remote/local dual mode | `src/embedders/bge_m3.py`, `conf/config.yaml` | ⭐⭐⭐ |
-| C | Add entity extraction to formatter, output wikilink-formatted markdown | `src/formatters/writer.py`, prompt templates | ⭐⭐ |
+| C | Add entity extraction to formatter; .md outputs wikilinks (display), chunk text stays clean (entity_names stored as metadata for retrieval) | `src/formatters/writer.py`, prompt templates, `src/pipeline/core.py` | ⭐⭐ |
 | D | Add entities + relations tables in sqlite-vec (optional) | `src/storage/sqlite_vec.py` | ⭐⭐ |
 
 ---
@@ -243,52 +243,49 @@ Default `max_tokens_per_batch=8192` (~500 chars × 32 chunks), safe for bge-m3 o
 
 Remote API and locally downloaded models from HuggingFace Hub may differ in version (even with the same name), resulting in incompatible vector spaces. **After switching modes, ALL documents must be re-indexed** — mixing old and new vectors severely degrades retrieval quality.
 
-Add explicit warning in config and code:
+Add explicit warning in the **pipeline layer** (`src/pipeline/core.py`), not in the Embedder class — the Embedder doesn't know about DB paths:
+
 ```python
-class Embedder:
-    def __init__(self, *, base_url="", model=""):
-        from config import get_config
-        cfg = get_config()
-        self.mode = cfg.embedding_mode
+# In process_file_hybrid() or process_file_with_md():
+if cfg.embedding_mode == "local" and Path(store_path).exists():
+    logger.warning(
+        "Switched to local embedding mode. Existing vectors were computed with "
+        "a different model version.\n"
+        "All documents must be re-indexed for consistent retrieval."
+    )
+# Optionally block until --force-reindex flag is set.
 ```
 
 ### ⚠️ Config Mutual Exclusion and Environment Variable Override
 
-Config validation using flat attributes:
+Integrate embedding config validation into the existing `Config._validate()` method (`src/config.py`, lines 89-106):
+
+> ⚠️ **Current `_validate()` only checks formatter & pipeline settings** — embedding validation must be added here, not as a standalone function.
+
 ```python
-def validate_embedding_config(cfg):
-    mode = cfg.embedding_mode  # ← flat attribute, not cfg.get("embedding", {}).get("mode")
-    if mode == "remote":
-        assert cfg.embedding_base_url, "base_url required when mode=remote"
-    elif mode == "local":
-        assert cfg.embedding_local_model, "local_model required when mode=local"
-    else:
-        raise ValueError(f"Unknown embedding mode: {mode}")
+# Extend Config._validate() — add after pipeline checks
+self.embedding_mode = emb.get("mode", "remote")     # ← NEW flat attribute
+self.embedding_local_model = emb.get("local_model")   # ← NEW flat attribute
+
+# Validate mutual exclusion
+mode = self.embedding_mode
+if mode == "remote":
+    if not self.embedding_base_url:
+        errors.append("embedding.base_url required when mode=remote")
+elif mode == "local":
+    if not self.embedding_local_model:
+        errors.append("embedding.local_model required when mode=local")
+else:
+    errors.append(f"Unknown embedding mode: {mode!r}")
 ```
 
-> ⚠️ **Config attribute path note** — The Config class uses flat attributes (e.g. `cfg.embedding_base_url`), not nested objects. New fields added by this plan:
-> - `cfg.embedding_mode` (str) — `"remote"` | `"local"`
+> ⚠️ **New flat attributes** — `Config` class uses flat attributes (`cfg.embedding_base_url`), not nested objects:
+> - `cfg.embedding_mode` (str) — `\"remote\"` | `\"local\"`
 > - `cfg.embedding_local_model` (str, optional) — HF model name when mode=local
 
 Support environment variable overrides for deployment flexibility:
-- `$EMBEDDING_MODE` → overrides `cfg.embedding_mode`
+- `$EMBEDDING_MODE` → overrides `cfg.embedding_mode` (checked in `_resolve_config_path()` or in `__init__` before setting `self.embedding_mode`)
 - `$HF_HOME` → standard HF cache directory (already supported by sentence-transformers)
-
-### ⚠️ Vector Space Consistency Warning (P0 — CRITICAL)
-
-The vector space consistency warning should be placed in the **pipeline layer** (`core.py`) where `store_path` is available, not in the Embedder class itself. The Embedder doesn't know about DB paths.
-
-In `process_file()` or `_ingest_markdown()`:
-```python
-if cfg.embedding_mode == "local" and Path(store_path).exists():
-    logger.warning(
-        "Switched to local embedding mode. Existing vectors were computed with a different model version.\n"
-        "All documents must be re-indexed for consistent retrieval."
-    )
-# User should confirm before proceeding; optionally block until --force-reindex flag is set.
-```
-
-Remote API and locally downloaded models from HuggingFace Hub may differ in version (even with the same name), resulting in incompatible vector spaces. **After switching modes, ALL documents must be re-indexed** — mixing old and new vectors severely degrades retrieval quality.
 
 ### ⚠️ GPU Auto-Detection and Progress Bar
 
@@ -376,9 +373,35 @@ fingerprint = model.model_hash()  # verify against known-good fingerprint on fir
 
 ### Design Objective
 
-Inspired by LLM Wiki's interlinked markdown KB concept — the formatter outputs `.md` with automatic `[[entity_name]]` insertion, and relations are queried via fts5 reverse lookup.
+Inspired by LLM Wiki's interlinked markdown KB concept — the formatter outputs `.md` files with automatic `[[entity_name]]` insertion for display (Obsidian/VS Code), while **chunk text stored in the vector DB stays clean** (no wikilink syntax noise in embeddings).
 
-**Core idea**: The formatter prompt returns an `entities` field containing extracted entities and their types. writer.py inserts wikilinks at corresponding positions in the body text when writing .md files.
+**Core idea**: The formatter prompt returns an `entities` field containing extracted entities and their types. The pipeline takes **two separate paths**:
+
+```
+LLM formatter output: {title, tags, metadata: {sections, entities}, body}
+    │
+    ├──→ Path A (Retrieval — vector DB):
+    │      chunker.chunk(body)          ← clean text, no wikilinks
+    │         → match entities into chunk.entity_names[]  (JSON metadata)
+    │         → embed → sqlite-vec      ← clean vectors, no [[noise]]
+    │
+    └──→ Path B (Display — .md file):
+           writer._insert_wikilinks(body, entities)  ← wikilinks added here
+              → write .md file          ← Obsidian-compatible, human-readable
+```
+
+**Why two paths**:
+- `[[Entity Name]]` in embedding text adds ~2–3 tokens of noise per mention, diluting the semantic vector signal. Keeping chunk text clean improves retrieval quality.
+- `.md` files are **only for human browsing** (Obsidian wiki-links, VS Code preview). The retrieval system queries the vector DB, not the `.md` files directly.
+- Entity search via `entity_names` JSON column in sqlite-vec avoids fts5 dependency and is simpler than a full relation graph.
+
+**Entity search in sqlite-vec**: Add `entity_names TEXT` column (JSON array) to the `chunks` table, parallel to `section_path`. Queried via:
+```sql
+SELECT text, source_doc_id FROM chunks 
+WHERE entity_names LIKE '%"GPT-4"%'
+ORDER BY vec_distance_cosine(embedding, ?) ASC;
+```
+This covers cross-doc entity reverse-lookup without polluting embedding text.
 
 ### Prompt Changes
 
@@ -403,10 +426,29 @@ Prompt constraint example:
 > Extract key entities (people, organizations, products, locations, concepts) from the document. For each entity, provide a `name` and a `type`. The name must match exactly how it appears in the text.
 
 > ⚠️ **Prompt Details (P1)** — must add these critical constraints for output stability:
-> - Use `temperature=0` (deterministic output)
+> - **Temperature strategy**: Set formatter to `temperature=0` globally (recommended). The formatter is a structure extractor, not a creative writer — deterministic output ensures the same document always produces the same entities and body. If body text quality suffers at 0, split into **two LLM calls**: body formatting at 0.1–0.3, entity extraction as a second call at `temperature=0` with a lightweight prompt. Either way, entity names must be reproducible.
 > - Restrict entity type set to `PERSON | ORG | PRODUCT | LOCATION | CONCEPT`, no free-form new types
 > - Entity name **must** exactly match original text (no normalization or synonym expansion)
 > - Include 2–3 few-shot examples for consistency
+>
+> ⚠️ **Validator update** — After adding `metadata.entities` to the prompt schema, extend `validate_format_output()` in `src/formatters/prompts.py` to validate:
+> ```python
+> # Inside validate_format_output(), add after section validation:
+> entities = meta.get("entities", [])
+> if not isinstance(entities, list):
+>     errors.append("'metadata.entities' must be a list")
+> else:
+>     valid_types = {"PERSON", "ORG", "PRODUCT", "LOCATION", "CONCEPT"}
+>     for i, e in enumerate(entities):
+>         if not isinstance(e, dict):
+>             errors.append(f"entities[{i}] is not a dict")
+>         else:
+>             if "name" not in e or not isinstance(e.get("name"), str):
+>                 errors.append(f"entities[{i}] missing 'name'")
+>             if e.get("type") not in valid_types:
+>                 errors.append(f"entities[{i}].type='{e.get('type')}' not in {valid_types}")
+> ```
+> This catches LLM output drift (wrong field names, wrong types, unexpected formats) before it reaches the pipeline.
 
 ### Writer.py Changes
 
@@ -481,6 +523,75 @@ Key constraints:
 - **Skip existing links** — content in `[text](url)` format should not get wrapped with another wikilink layer.
 - **Longest match first** — replace "AI Agent" before "AI", preventing short entities from overwriting long ones.
 - **Back-to-front replacement** — collect all replacement positions then apply in descending offset order to avoid string offset shift bugs.
+
+### Entity Names in Chunk Metadata (Retrieval Path)
+
+For entity-based retrieval (Path A in the Design Objective), store entity names alongside each chunk in the vector DB. The wikilinks go only into the `.md` display file — the chunk text stored in sqlite-vec stays clean.
+
+**Implementation in `src/pipeline/core.py`** (after `chunker.chunk()` and before `embedder.store_chunks()`):
+
+```python
+def _match_entities_to_chunks(chunks: list[dict], entities: list[dict]) -> list[dict]:
+    """Match document-level entities to individual chunks by text presence.
+
+    Scans each chunk's text for entity names (case-insensitive).
+    Only entities that actually appear in a chunk get tagged on that chunk.
+    This keeps entity search granular — querying 'GPT-4' returns only chunks
+    that mention GPT-4, not every chunk from the same document.
+    """
+    for chunk in chunks:
+        chunk_text_lower = chunk["text"].lower()
+        matched = [
+            e["name"]
+            for e in entities
+            if e["name"].lower() in chunk_text_lower
+        ]
+        chunk["entity_names"] = matched          # ← NEW: JSON array of entity names
+    return chunks
+```
+
+**sqlite-vec schema update** — add `entity_names TEXT` column to `chunks` table:
+
+```sql
+ALTER TABLE chunks ADD COLUMN entity_names TEXT DEFAULT '[]';
+-- Queried via:
+SELECT text, source_doc_id FROM chunks 
+WHERE entity_names LIKE '%"GPT-4"%'
+ORDER BY vec_distance_cosine(embedding, ?) ASC;
+```
+
+Pattern matches existing `section_path` storage (JSON array in TEXT column, serialized with `json.dumps()`).
+
+**Why per-chunk matching instead of document-level tagging?**
+
+| Approach | Precision | Recall | Complexity |
+|----------|-----------|--------|------------|
+| Tag all doc entities on every chunk | Low — chunks unrelated to entity still match | High — entity anywhere in doc matches all chunks | Zero |
+| Match entity text per chunk | High — only chunks mentioning the entity match | Medium — cross-chunk entity mentions lost | Low |
+| LLM re-extract per chunk | High | High | High (N LLM calls) |
+
+Per-chunk text matching (middle row) is the recommended default — best precision/complexity tradeoff. Cross-chunk entities are acceptably rare at 512-char chunk sizes.
+
+**Pipeline flow change summary** for `process_file_hybrid()` and `process_file_with_md()`:
+
+```python
+# Current flow:
+#   LLM output → chunk → embed → sqlite-vec
+#   LLM output → write_to_md
+
+# New flow (Phase C):
+#   LLM output → chunk → match entities to chunks → embed (clean text) → sqlite-vec
+#   LLM output → write_to_md(body with wikilinks)  ← .md file has [[Entity]] for display
+#                ↑ writer._insert_wikilinks(body, entities)
+```
+
+### ⚠️ Chunker + Wikilink Independence
+
+The chunker receives raw body text from the LLM formatter — **no wikilinks present**. This means:
+- `markdown-it-py` sees standard markdown (no `[[` syntax to handle or ignore)
+- No special handling needed in the chunker for wikilinks
+- The two paths (retrieval vs display) are completely independent — changing wikilink format in the writer doesn't affect vector quality
+- `_insert_wikilinks()` is called only in `write_to_md()`, never in the chunk/embed pipeline
 
 ### Unit Test Requirements (P1)
 
@@ -562,7 +673,7 @@ CI outputs dataset hash: `EVAL_DATASET_HASH=a3f7c9d1e2b4 — golden v1 (2025-06)
 
 ### Why Last?
 
-Approach C (wikilink in markdown + fts5) covers 80% of relationship tree needs at minimal cost. The relation table is an advanced feature:
+| Approach C (`entity_names` JSON column in chunks table) covers 80% of relationship tree needs at minimal cost — no new tables required. The relation table is an advanced feature for multi-hop traversal:
 
 ```sql
 -- Entity index table (proposed addition)
@@ -627,17 +738,17 @@ The current pipeline has a B index: `store_document()` creates an embedding of t
 ## VI. Implementation Order and Dependencies
 
 ```
-Phase 1 (independent) ──→ Phase 2 (depends on C) ──→ Phase 3 (optional)
-    A                        B + C                         D
-   chunker                  embedder+formatter             relations table
-   ~30 min                 ~1 hour                      optional
+Phase 1 (independent) ──→ Phase 2 (depends on Phase 1) ──→ Phase 3 (optional)
+    A                        B + C                              D
+   chunker                  embedder+formatter                  relations table
+   ~30 min                 ~1 hour                           optional
 ```
 
 | Phase | Change | Risk | Rollback Plan |
 |-------|--------|------|---------------|
 | **Phase 1** | A: Rewrite chunker | Low — pure Python, test-covered | `git revert` one file |
 | **Phase 2a** | B: Local embedder | Medium — model download, perf diff | Config toggle back to remote |
-| **Phase 2b** | C: Entity extraction | Medium — prompt quality determines outcome | Prompt tweak, no schema change |
+| **Phase 2b** | C: Entity extraction + entity_names | Medium — prompt quality + schema migration | Prompt tweak; `ALTER TABLE chunks DROP COLUMN entity_names` if migration already ran |
 | **Phase 3** | D: Relations table | Low — pure DDL, backward-compatible | Drop tables |
 
 ### ⚠️ E2E Regression Required After Phase 1 (P0)
@@ -660,11 +771,15 @@ If E2E fails, the chunker output format has breaking changes — rollback to Pha
 ```
 src/chunkers/__init__.py          ← Rewrite (remove LangChain import)
 src/embedders/bge_m3.py           ← Add LocalEmbedder + config switch
+src/embedders/local_bge.py        ← New file: LocalEmbedder class
 conf/config.yaml                  ← Add embedding.mode field
 conf/config.example.yaml          ← Sync update example config
-src/formatters/writer.py          ← _insert_wikilinks() function
-pyproject.toml                    ← Remove langchain-text-splitters, add local-embeddings extra
-src/storage/sqlite_vec.py         ← Optional: entities/relations table init (Phase 3)
+src/config.py                     ← Add embedding_mode, embedding_local_model flat attrs + validation in _validate()
+src/formatters/writer.py          ← _insert_wikilinks() function (display path only)
+src/formatters/prompts.py         ← Add entities field to output schema + update validate_format_output()
+src/pipeline/core.py              ← _match_entities_to_chunks() + entity_names in chunk metadata
+src/storage/sqlite_vec.py         ← Add entity_names TEXT column to chunks table (ALTER TABLE) + Optional: entities/relations table init (Phase 3)
+pyproject.toml                    ← Remove langchain-text-splitters, add markdown-it-py + local-embeddings extra
 ```
 
 ---
@@ -740,7 +855,7 @@ docker run --rm -v $(pwd)/models:/app/models huggingface-cli download BAAI/bge-m
 |-------|---------------|---------------|
 | **A (chunker)** | `git revert` one file | No impact — pure refactor, doesn't change storage format |
 | **B (embedder)** | Config toggle → back to `mode: remote` | Existing local vectors can still be used; new data written with remote mode |
-| **2b (wikilink)** | Prompt rollback + writer revert | Wikilinks are in .md files — cleanable via `sed -i 's/\[\[//g' output/*.md`, but better to regenerate from version control |
+| **2b (wikilink + entity_names)** | Prompt rollback + writer revert + revert pipeline/core.py | Wikilinks are in .md files — cleanable via `sed -i 's/\[\[//g' output/*.md`; `ALTER TABLE chunks DROP COLUMN entity_names` if migration ran |
 | **D (relations table)** | DROP TABLE entities, relations; remove migration script | ALTER TABLE vec_chunks DROP COLUMN entity_ids |
 
 ---
@@ -751,7 +866,7 @@ docker run --rm -v $(pwd)/models:/app/models huggingface-cli download BAAI/bge-m
 |--------|---------|------|
 | A: Zero LangChain | Eliminates dependency hell, cleaner debugging | ~30 min, test-covered |
 | B: Local bge-m3 | No network dependency, offline usable | Config toggle + model download (~1.5GB) |
-| C: Wikilink graph | Entity search, cross-doc relations | Prompt quality is the bottleneck |
+| C: Entity graph + entity_names | Entity search, cross-doc relations; clean chunk vectors (no wikilink noise) | Prompt quality is the bottleneck; `entity_names` column migration |
 
 **Recommendation start with Phase 1 (A)** — smallest change, lowest risk, immediate payoff visible. Phases B+C of Phase 2 can proceed in parallel; D on demand.
 
@@ -764,7 +879,7 @@ Every phase completion requires updating user documentation:
 | Phase | README Addition | CHANGELOG.md |
 |-------|-----------------|---------------|
 | **B** | `local-embeddings` install instructions, first-time model download notice (~1.5GB), CPU performance benchmarks | Add `embedding.mode` config field docs |
-| **C** | Wikilink format description (impact on Obsidian/GitHub renderers) | Add entity extraction prompt change notes |
+| **C** | Wikilink format description (impact on Obsidian/GitHub renderers); entity_names column schema; `_match_entities_to_chunks` pipeline flow | Add entity extraction prompt change + `entity_names` column migration notes |
 | **D** | Relations table query examples | N/A (optional feature, not in CHANGELOG) |
 
 Before release, users must be notified: **After enabling wikilinks, output markdown files remain compatible with standard markdown renderers. However, Obsidian and similar tools will parse them as wiki links.**

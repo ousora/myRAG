@@ -17,6 +17,7 @@ Output valid JSON only. No markdown fences, no explanation.
     "source_type": "{source_type}",
     "total_words": 0,
     "sections": [{{"level": 2, "title": "Section Name"}}],
+    "entities": [{{"name": "GPT-4", "type": "PRODUCT"}}],
     "created_at": "ISO-8601",
     "modified_date": null
   }},
@@ -87,11 +88,30 @@ Before returning your JSON output, verify ALL of these conditions:
 1. `title` is a non-empty string
 2. `tags` is a list with 1-5 strings, all lowercase English words
 3. `metadata.sections` is a list of objects with "level" (int) and "title" (string) keys
-4. `body` is a non-empty string containing markdown content
-5. The body does NOT contain the document title as a heading (no duplicate `# Title`)
-6. No trailing commas in JSON arrays or objects
+4. `metadata.entities` (if present) is a list of objects, each with "name" (string) and "type" (one of PERSON, ORG, PRODUCT, LOCATION, CONCEPT)
+5. `body` is a non-empty string containing markdown content
+6. The body does NOT contain the document title as a heading (no duplicate `# Title`)
+7. No trailing commas in JSON arrays or objects
 
-If ANY condition fails, fix it before returning your response.'''
+If ANY condition fails, fix it before returning your response.
+
+─── ENTITY EXTRACTION ───
+
+Extract key entities from the document text. An entity is a specific named thing that the document discusses.
+
+Entity types:
+- PERSON: individual people mentioned by name
+- ORG: organizations, companies, institutions, agencies
+- PRODUCT: products, services, technologies, tools, frameworks
+- LOCATION: geographic places, countries, cities, regions
+- CONCEPT: abstract ideas, technical concepts, methodologies, standards
+
+Rules:
+- Extract at most 10 entities per document.
+- The entity name must match exactly how it appears in the original text. Do NOT normalize, shorten, or paraphrase.
+- Only include entities that are substantively discussed in the document, not just mentioned in passing.
+- Do NOT include the document title, tags, or generic terms as entities.
+- If no notable entities are found, return an empty list (never null/missing).'''
 
 
 CHUNKED_SYSTEM_PROMPT = '''\
@@ -175,6 +195,9 @@ Input preview: "Python is a programming language... Chapter 1: Basics..."
     "sections": [
       {{"level": 2, "title": "Basics"}},
       {{"level": 3, "title": "Variables and Types"}}
+    ],
+    "entities": [
+      {{"name": "Python", "type": "PRODUCT"}}
     ],
     "created_at": "2024-06-01T12:00:00Z",
     "modified_date": null
@@ -284,6 +307,23 @@ def validate_format_output(result: dict) -> list[str]:
             for i, sec in enumerate(sections):
                 if "level" not in sec or "title" not in sec:
                     errors.append(f"section[{i}] missing 'level' or 'title'")
+
+        # entities
+        entities = meta.get("entities", [])
+        if not isinstance(entities, list):
+            errors.append("'metadata.entities' must be a list")
+        else:
+            valid_types = {"PERSON", "ORG", "PRODUCT", "LOCATION", "CONCEPT"}
+            for i, e in enumerate(entities):
+                if not isinstance(e, dict):
+                    errors.append(f"entities[{i}] is not a dict, got {type(e).__name__}")
+                else:
+                    if "name" not in e or not isinstance(e.get("name"), str):
+                        errors.append(f"entities[{i}] missing 'name'")
+                    if not e.get("type"):
+                        errors.append(f"entities[{i}] missing 'type'")
+                    elif e["type"] not in valid_types:
+                        errors.append(f"entities[{i}].type={e['type']!r} not in {valid_types}")
 
     # body
     body = result.get("body")

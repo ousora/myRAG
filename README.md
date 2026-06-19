@@ -1,8 +1,8 @@
 # myRAG — RAG Pipeline
 
 ```
-.doc/file → parse → clean → format ─┬→ write_to_md()  → readable .md
-                                    └→ chunk → embed → sqlite-vec
+.doc/file → parse → clean → format ─┬→ write_to_md() → readable .md (with [[wikilinks]])
+                                    └→ chunk → match entities → embed → sqlite-vec
 ```
 
 > Large texts (>28K chars) are auto-split at paragraph boundaries and processed chunk-by-chunk. Each chunk receives the last 10 lines of previous markdown output + cumulative summary as context for continuity.
@@ -13,13 +13,17 @@
 Raw file (.pdf/.docx/.html/.md/.txt)
     ↓ parser.parse()              # MarkItDown / Trafilatura → text
     ↓ cleaner.clean()             # TextCleaner: noise removal
-    ↓ formatter.format_text()     # LLM → {title, tags, sections, body}
+    ↓ formatter.format_text()     # LLM → {title, tags, sections, entities, body}
     │                             # Small docs: single-shot. Large docs: auto-chunked
-    ├→ write_to_md(result)        # readable .md file
+    │
+    ├→ write_to_md(result)        # .md file with [[Entity]] wikilinks
+    │                              # (entities extracted by LLM, matched to text)
+    │
     └→ _render_markdown_with_sections(result)
-        ↓ chunker.chunk(md)       # LangChain MarkdownHeaderTextSplitter
-        ↓ embedder.store_chunks() # bge-m3 → 1024-d vectors
-        ↓ SQLiteVecStore          # sqlite-vec: chunks + FTS5 + documents
+        ↓ chunker.chunk(body)     # markdown-it-py (pure Python, no LangChain)
+        ↓ _match_entities()       # tag chunks with entity_names from text match
+        ↓ embedder.store_chunks() # bge-m3 → 1024-d (remote API or local CPU)
+        ↓ SQLiteVecStore          # sqlite-vec: chunks + entity_names + FTS5
 ```
 
 ## Pipeline Components
@@ -71,7 +75,7 @@ md_path = write_to_md(result, "output/")    # readable markdown
 
 ### 4. Chunker (`src/chunkers/`)
 
-LangChain `MarkdownHeaderTextSplitter` splits on `##`/`###` boundaries. Oversized sections get `RecursiveCharacterTextSplitter` fallback. Plain text without headers auto-detected.
+Pure Python markdown splitting via `markdown-it-py` (no LangChain dependency). Splits on `##`/`###` boundaries with hierarchical metadata tracking. Consecutive headings with no body text between are merged into one section. Oversized sections get recursive character split with sentence-aware boundaries (Chinese `。！？` + English `.!?`). Plain text without headers auto-detected.
 
 ```python
 from chunkers import Chunker
@@ -81,15 +85,22 @@ chunks = Chunker(chunk_size=512, chunk_overlap=64).chunk(markdown_text)
 
 ### 5. Embedder + Storage
 
-bge-m3 embeddings → sqlite-vec database with FTS5 full-text index.
+bge-m3 embeddings → sqlite-vec database with FTS5 full-text index + entity_names column.
+
+**Dual embedding mode** — set `embedding.mode` in config to switch:
+- `"remote"` (default): calls HTTP API at `embedding.base_url` (vLLM / Ollama compatible)
+- `"local"`: uses sentence-transformers (`uv sync --extra local-embeddings`), CPU inference, no network dependency
+
+**Entity search** — `entity_names` column stores entity mentions per chunk for cross-doc entity lookup:
 
 ```python
-# Read + ingest from an existing .md file
-from pipeline.ingest import _ingest_markdown
+# Query by entity name
+db.conn.execute(
+    "SELECT text FROM chunks WHERE entity_names LIKE ?",
+    ['%"GPT-4"%']
+).fetchall()
 
-_ingest_markdown("output/report.md", store_path="data/myrag.db")
-
-# Or query directly
+# Build + query
 from embedders import Embedder
 from storage.sqlite_vec import SQLiteVecStore
 
@@ -105,6 +116,7 @@ hits = db.search_chunks(e.embed("your question"), k=5)
 ```bash
 # Install uv first: curl -LsSf https://astral.sh/uv/install.sh | sh
 uv sync --extra dev --extra sqlite-vec
+# For local bge-m3 embedding (CPU inference, offline): uv sync --extra local-embeddings
 cp conf/config.example.yaml conf/config.yaml
 # Edit conf/config.yaml with your endpoints
 ```
@@ -140,13 +152,16 @@ myrag/
 │   ├── parsers/              # MarkItDown + Trafilatura dispatcher
 │   │   ├── dispatcher.py
 │   │   └── text_cleaner.py
-│   ├── formatters/           # LLM formatter + prompts + markdown writer
+│   ├── formatters/           # LLM formatter + prompts + markdown writer + wikilinks
 │   │   ├── __init__.py
-│   │   ├── constants.py      # JSON schemas for response_format
+│   │   ├── constants.py      # JSON schemas for response_format (incl. entities)
 │   │   ├── prompts.py
 │   │   └── writer.py
-│   ├── chunkers/             # LangChain MarkdownHeaderTextSplitter wrapper
-│   ├── embedders/            # bge-m3 embedding client (OpenAI-compatible API)
+│   ├── chunkers/             # Pure Python markdown-it-py chunker (no LangChain)
+│   ├── embedders/            # bge-m3: remote HTTP API + local sentence-transformers
+│   │   ├── __init__.py
+│   │   ├── bge_m3.py         # Unified Embedder with mode dispatch
+│   │   └── local_bge.py      # LocalEmbedder via sentence-transformers
 │   └── storage/              # SQLiteVecStore
 │       └── sqlite_vec.py
 ├── conf/
@@ -168,14 +183,19 @@ Single file: `conf/config.yaml` (gitignored). Template at `conf/config.example.y
 llm:
   endpoint: "http://your-llm:8081/v1/chat/completions"
   model: "your-model-name"
-  temperature: 0.3
-  max_tokens: 16384            # Chunked mode uses this per-chunk
-  timeout: 300                 # seconds for HTTP request
+  temperature: 0.0                # 0 for deterministic entity extraction
+  max_tokens: 16384
+  timeout: 300
 
 embedding:
+  mode: "remote"                  # "remote" (HTTP API) or "local" (sentence-transformers)
+
+  # When mode == "remote":
   base_url: "http://your-embedder:11435"
   model: "bge-m3"
-  timeout: 60
+
+  # When mode == "local":
+  # local_model: "BAAI/bge-m3"    # Auto-downloaded on first use (~1.1GB)
 ```
 
 Resolution chain: `$MYRAG_CONFIG` → `conf/config.yaml` → `conf/config.example.yaml`.

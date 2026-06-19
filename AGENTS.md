@@ -4,7 +4,7 @@
 
 myRAG is a RAG (Retrieval-Augmented Generation) data pipeline that converts raw documents (.pdf, .docx, .html, .md, .txt) into structured markdown and vector embeddings for semantic search. The pipeline: parse → clean → LLM-format → chunk → embed → sqlite-vec storage.
 
-**Tech stack**: Python 3.10+, LangChain text splitters, bge-m3 embeddings (OpenAI-compatible API), sqlite-vec for local vector storage.
+**Tech stack**: Python 3.10+, markdown-it-py (pure Python markdown chunker), bge-m3 embeddings (remote API or local sentence-transformers), sqlite-vec for local vector storage.
 
 ## Key Directories
 
