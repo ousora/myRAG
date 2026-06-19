@@ -11,10 +11,10 @@ Pipeline flow:
 
 Hybrid Retrieval (A + B):
     A: Chunk-level index — fine-grained search, direct answer generation
-       [chunk] → bge-m3 embedding → FAISS/Milvus vector DB
+       [chunk] → bge-m3 embedding → sqlite-vec vector DB
     
     B: Document-level index — coarse-grained context fallback
-       [doc_summary] → bge-m3 embedding → FAISS/Milvus vector DB
+       [doc_summary] → bge-m3 embedding → sqlite-vec vector DB
 
 Usage (traditional RAG):
     from pipeline.core import process_file, process_directory
@@ -29,8 +29,8 @@ Usage (LLM-formatted + Hybrid A+B):
         doc_id="doc_001"
     )
     # Returns: {
-    #   "chunks": list[dict]  (A - fine-grained, ready for FAISS/Milvus)
-    #   "document": dict      (B - coarse-grained, ready for FAISS/Milvus)
+    #   "chunks": list[dict]  (A - fine-grained, ready for sqlite-vec)
+    #   "document": dict      (B - coarse-grained, ready for sqlite-vec)
     # }
 
 Usage (LLM-formatted + Markdown output):

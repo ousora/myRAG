@@ -37,7 +37,7 @@ Tests live alongside source: `src/chunkers/tests/`, `src/formatters/tests/`, `sr
 2. **Hybrid A+B indexing**: Chunk-level fine-grained search (A) + document-level coarse-grained context fallback (B). Both stored in sqlite-vec.
 3. **Auto-chunking for large docs**: Texts >28K chars are split at paragraph boundaries; each chunk receives last 10 lines of previous output + cumulative summary as context.
 4. **Config resolution chain**: `$MYRAG_CONFIG` → `conf/config.yaml` → `conf/config.example.yaml`. All endpoints configurable via YAML.
-5. **Facade pattern removed** — `cleaners/` directory deleted; use `parsers.text_cleaner.TextCleaner` directly.
+5. **Facade pattern** — `TextCleaner` and `Chunker` classes in `pipeline.core` are thin facades that delegate to `parsers.text_cleaner.TextCleaner` and `chunkers.Chunker` respectively. The canonical implementations live in their own modules with full feature support (YAML config, markdown-it-py chunking).
 
 ## Conventions
 

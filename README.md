@@ -58,7 +58,7 @@ LLM-powered: extracts title, tags, section hierarchy. **Auto-chunks large texts*
 
 **Tag quality**: Extracts proper nouns and domain-specific multi-word phrases; filters generic single words ("banking", "system").
 
-**Output validation**: `validate_format_output()` + `try_fix_common_issues()` for post-processing without re-calling LLM.
+**Output validation**: `validate_format_output()` and `try_fix_common_issues()` from `formatters.prompts` for post-processing without re-calling LLM. Import as: `from formatters.prompts import validate_format_output, try_fix_common_issues`.
 
 ```python
 from formatters import format_text_async, format_text_with_system, call_llm, write_to_md
@@ -75,7 +75,7 @@ md_path = write_to_md(result, "output/")    # readable markdown
 
 ### 4. Chunker (`src/chunkers/`)
 
-Pure Python markdown splitting via `markdown-it-py` (no LangChain dependency). Splits on `##`/`###` boundaries with hierarchical metadata tracking. **Every heading creates a new section boundary** (previously consecutive headings without body were merged). Oversized sections get recursive character split with sentence-aware boundaries (Chinese `。！？` + English `.!?`). Plain text without headers auto-detected.
+Pure Python markdown splitting via `markdown-it-py` (no LangChain dependency). Splits on `##`/`###` boundaries with hierarchical metadata tracking. **Each heading updates the section metadata context** — consecutive headings without body text share one text section but each gets its own metadata. Oversized sections get recursive character split with sentence-aware boundaries (Chinese `。！？` + English `.!?`). Plain text without headers auto-detected.
 
 ```python
 from chunkers import Chunker
@@ -109,7 +109,7 @@ e = Embedder()
 hits = db.search_chunks(e.embed("your question"), k=5)
 ```
 
-**Hybrid search** — `search_chunks()` supports vector similarity + FTS5 full-text via `hybrid_search()`, with results fused using Reciprocal Rank Fusion (RRF) for fair ranking of both signals. **Section filter** uses wildcard LIKE matching: `db.search_chunks(..., section_filter=["Services"])` matches any chunk whose `section_path` contains "Services".
+**Hybrid search** — `search_chunks()` performs vector similarity search; for combined vector + FTS5 full-text use `hybrid_search()`, with results fused using Reciprocal Rank Fusion (RRF) for fair ranking of both signals. **Section filter** uses wildcard LIKE matching: `db.search_chunks(..., section_filter=["Services"])` matches any chunk whose `section_path` contains "Services".
 
 ## Quick Start
 
@@ -134,6 +134,9 @@ python -m pipeline ingest output/doc.md --store data/doc.db
 
 # 3. Generate .md and auto-ingest (two-step, transparent)
 python -m pipeline process input.pdf --store data/doc.db
+
+# Hybrid mode: generate .md + ingest in one command with LLM formatting
+python -m pipeline hybrid input.pdf --store data/doc.db
 
 # Traditional (no LLM, no storage)
 python -m pipeline process-file input.txt --chunk-size 512
@@ -185,7 +188,7 @@ Single file: `conf/config.yaml` (gitignored). Template at `conf/config.example.y
 llm:
   endpoint: "http://your-llm:8081/v1/chat/completions"
   model: "your-model-name"
-  temperature: 0.0                # 0 for deterministic entity extraction
+  temperature: 0.3                # Default; set to 0.0 for deterministic entity extraction
   max_tokens: 16384
   timeout: 300
 
