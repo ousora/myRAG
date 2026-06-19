@@ -1,4 +1,4 @@
-"""Tests for LangChain-based Chunker."""
+"""Tests for markdown-it-py based Chunker."""
 
 from chunkers import Chunker, chunk_text
 

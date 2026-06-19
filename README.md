@@ -75,7 +75,7 @@ md_path = write_to_md(result, "output/")    # readable markdown
 
 ### 4. Chunker (`src/chunkers/`)
 
-Pure Python markdown splitting via `markdown-it-py` (no LangChain dependency). Splits on `##`/`###` boundaries with hierarchical metadata tracking. Consecutive headings with no body text between are merged into one section. Oversized sections get recursive character split with sentence-aware boundaries (Chinese `。！？` + English `.!?`). Plain text without headers auto-detected.
+Pure Python markdown splitting via `markdown-it-py` (no LangChain dependency). Splits on `##`/`###` boundaries with hierarchical metadata tracking. **Every heading creates a new section boundary** (previously consecutive headings without body were merged). Oversized sections get recursive character split with sentence-aware boundaries (Chinese `。！？` + English `.!?`). Plain text without headers auto-detected.
 
 ```python
 from chunkers import Chunker
@@ -94,7 +94,7 @@ bge-m3 embeddings → sqlite-vec database with FTS5 full-text index + entity_nam
 **Entity search** — `entity_names` column stores entity mentions per chunk for cross-doc entity lookup:
 
 ```python
-# Query by entity name
+# Query by entity name (uses wildcard LIKE matching on JSON array)
 db.conn.execute(
     "SELECT text FROM chunks WHERE entity_names LIKE ?",
     ['%"GPT-4"%']
@@ -108,6 +108,8 @@ db = SQLiteVecStore("data/myrag.db")
 e = Embedder()
 hits = db.search_chunks(e.embed("your question"), k=5)
 ```
+
+**Hybrid search** — `search_chunks()` supports vector similarity + FTS5 full-text via `hybrid_search()`, with results fused using Reciprocal Rank Fusion (RRF) for fair ranking of both signals. **Section filter** uses wildcard LIKE matching: `db.search_chunks(..., section_filter=["Services"])` matches any chunk whose `section_path` contains "Services".
 
 ## Quick Start
 
@@ -211,5 +213,5 @@ print(cfg.llm_endpoint)  # from your config file
 ```bash
 cd /home/colinvan/workspace/myrag
 uv run pytest -v
-# 39 tests: chunkers 8 + formatters 9 + storage 13 + integration 9
+# 71 tests: chunkers 8 + formatters 9 + storage 13 + integration 9 + config 9 + parsers 12 + embedders 5
 ```

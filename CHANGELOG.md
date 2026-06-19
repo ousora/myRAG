@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+### Fixed
+
+- **Issue 1: conftest.py test collection error** — Removed empty `src/storage/tests/__init__.py` that caused pytest to resolve conftest as `tests.conftest` with missing module. (src/storage/tests/)
+- **Issue 3: Chunker adjacent-heading merge bug** — `_split_by_headings()` now creates a new section at every heading boundary, not only when body content exists between headings. Previously consecutive headings without body were merged into one section, giving all sub-chunks wrong `section_path` metadata. (src/chunkers/__init__.py)
+- **Issue 4: Formatter module-level config caching** — `_CHUNK_THRESHOLD_CHARS` was evaluated at import time and cached. Replaced with `_get_chunk_threshold()` lazy-evaluated function so config changes take effect on each call. (src/formatters/__init__.py)
+- **Issue 5: LLM schema fallback only caught HTTP 500** — Expanded retry to include 503 and 429 status codes for better coverage of schema-incompatible backends. Added HTTP status code to warning log message. (src/formatters/__init__.py)
+- **Issue 6: Entity substring false positives** — `_match_entities_to_chunks()` now uses `re.search(r'\b...\b')` word-boundary matching instead of plain `in` substring check. Previously "AI" matched inside "algorithm". (src/pipeline/core.py)
+- **Issue 7: hybrid_search rank not normalized** — Replaced naive tuple sort `(fts_rank, vec_score)` with RRF (Reciprocal Rank Fusion) algorithm. FTS5 BM25 rank and cosine distance had vastly different scales, causing FTS to completely dominate. Now both signals contribute fairly via `1/(rank + k)`. (src/storage/sqlite_vec.py)
+- **Issue 8: section_filter LIKE query always returned empty** — `json_extract(section_path, '$')` returns full JSON array string `'["General"]'`, so `LIKE '"General"'` did not match. Changed to `LIKE '%General%'` wildcard matching. (src/storage/sqlite_vec.py)
+- **Issue 2: Two inconsistent markdown generation paths** — `process_file_hybrid()` now accepts optional `md_output_dir` parameter and delegates to `write_to_md()` for structured markdown output, same as `process_file_with_md()`. Both pipelines now produce identical `.md` content. (src/pipeline/core.py)
+
 ### Changed
 
 - **Chunker zero LangChain**: Replaced `langchain-text-splitters` (MarkdownHeaderTextSplitter + RecursiveCharacterTextSplitter) with pure Python + `markdown-it-py`. Same output format (`text`, `section_path`, `metadata`), all 8 existing tests pass. Headers parsed via markdown-it-py AST (handles ATX + setext headers natively). Consecutive headings with no body text between them are merged into one section. (src/chunkers/__init__.py, pyproject.toml)

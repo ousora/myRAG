@@ -189,7 +189,7 @@ class SQLiteVecStore:
                 conditions.append(
                     "json_extract(section_path, '$') LIKE ?"
                 )
-                params.append(json.dumps(s))
+                params.append(f"%{s}%")
 
         where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
 
@@ -303,24 +303,38 @@ class SQLiteVecStore:
                 })
 
         combined = {}
-        
-        for r in fts_results:
-            if r[0] not in combined:
-                combined[r[0]] = {"text": None, "section_path": [], "source_doc_id": "", 
-                                   "chunk_index": 0, "word_count": 0, "_fts_rank": r[1]}
+
+        # Build lookup maps for FTS results by rowid
+        fts_map = {r[0]: r[1] for r in fts_results}
 
         for v in vec_results:
             if v["id"] not in combined:
                 combined[v["id"]] = dict(v)
+            # Compute cosine distance if not already computed
+            if "_vec_score" not in combined[v["id"]]:
                 emb_str = _SQLITE_VEC.serialize_float32(query_vector)
                 combined[v["id"]]["_vec_score"] = self.conn.execute(
                     "SELECT vec_distance_cosine(embedding, ?) FROM chunks WHERE id=?",
                     [emb_str, v["id"]]
                 ).fetchone()[0]
 
-        result_list = list(combined.values())
-        
-        return sorted(result_list, key=lambda x: (x.get("_fts_rank", 999), x.get("_vec_score", 1.0)))[:k]
+        # Reciprocal Rank Fusion: score = 1/(rank + k) where k=60 is a common constant
+        # FTS rank from BM25 (lower=better); vec_distance_cosine (lower=better).
+        # Convert both to reciprocal rank scores for fair comparison.
+        rrf_k = 60
+        total_results = max(len(fts_map), len(vec_results), 1)
+
+        result_list = []
+        for doc_id, data in combined.items():
+            fts_rank = fts_map.get(doc_id, total_results + 1)
+            vec_score = data.get("_vec_score", 1.0)
+            # Normalize cosine distance to [0, 1] range first
+            norm_vec = min(max(vec_score, 0.0), 1.0)
+            # RRF score: higher is better
+            rrf_score = (1.0 / (fts_rank + rrf_k)) + (1.0 / (int(norm_vec * total_results) + 1 + rrf_k))
+            result_list.append({k: v for k, v in data.items() if not k.startswith("_")} | {"_rrf_score": rrf_score})
+
+        return sorted(result_list, key=lambda x: -x["_rrf_score"])[:k]
 
     def get_chunks_by_doc(self, doc_id: str) -> list[dict]:
         """Retrieve all chunks for a specific document."""

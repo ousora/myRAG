@@ -30,7 +30,11 @@ def _get_config():
 # ── Chunking threshold ──────────────────────────────────────────────────
 # Texts above this many characters trigger chunked processing.
 # ~28K chars ≈ 7000 tokens — safe for most local LLMs.
-_CHUNK_THRESHOLD_CHARS = _get_config().chunk_threshold_chars
+
+
+def _get_chunk_threshold() -> int:
+    """Lazy-evaluate the chunk threshold from config on each call."""
+    return _get_config().chunk_threshold_chars
 
 _executor = None
 
@@ -81,10 +85,11 @@ def call_llm(system_prompt: str, user_message: str, *,
         # Some llama.cpp backends fail on JSON Schema enforcement
         # (peg-grammar incompatibility). Retry without schema if this happens.
         resp_for_retry = getattr(e, "response", None)
-        if schema is not None and resp_for_retry is not None and resp_for_retry.status_code == 500:
+        schema_fallback_codes = {500, 503, 429}
+        if schema is not None and resp_for_retry is not None and resp_for_retry.status_code in schema_fallback_codes:
             err_body = resp_for_retry.text
             if "peg" in err_body.lower() or "format" in err_body.lower():
-                logger.warning("Schema-based response_format rejected by server, retrying without schema")
+                logger.warning("Schema-based response_format rejected by server (HTTP %d), retrying without schema", resp_for_retry.status_code)
                 payload.pop("response_format", None)
                 try:
                     response = httpx.post(cfg.llm_endpoint, json=payload, timeout=timeout or cfg.llm_timeout)
@@ -118,7 +123,7 @@ def call_llm(system_prompt: str, user_message: str, *,
     import datetime
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     input_hash = hashlib.md5(user_message.encode()).hexdigest()[:8]
-    output_path = f"test/llmoutput/resp_{timestamp}_{input_hash}.txt"
+    output_path = f"tmp/raw/resp_{timestamp}_{input_hash}.txt"
     with open(output_path, "w", encoding="utf-8") as f:
         f.write(raw_content)
     logger.info("Saved raw response to %s", output_path)
@@ -239,7 +244,7 @@ def _get_last_n_lines(md_parts: list[str], n: int = 10) -> str:
     return "\n".join(lines[-n:])
 
 
-def _split_by_paragraph(text: str, max_chars: int = _CHUNK_THRESHOLD_CHARS) -> list[str]:
+def _split_by_paragraph(text: str, max_chars: int | None = None) -> list[str]:
     """Split text at paragraph boundaries, chunk oversized paragraphs at sentences.
 
     Normal paragraphs are grouped up to max_chars. If a single paragraph exceeds
@@ -248,9 +253,10 @@ def _split_by_paragraph(text: str, max_chars: int = _CHUNK_THRESHOLD_CHARS) -> l
     Chunks do NOT physically overlap — continuity across chunks is provided
     via the prompt context (last 10 lines of previous output + summary).
 
+
     Args:
         text: The cleaned text to split.
-        max_chars: Maximum characters per chunk (≈ tokens × 4).
+        max_chars: Maximum characters per chunk (≈ tokens × 4). Defaults to config value.
 
     Returns:
         List of paragraph-boundary-aligned text chunks, each ≤ max_chars.
@@ -260,6 +266,10 @@ def _split_by_paragraph(text: str, max_chars: int = _CHUNK_THRESHOLD_CHARS) -> l
 
     if not paragraphs:
         return []
+
+    # Resolve default threshold from config (lazy, per-call)
+    if max_chars is None:
+        max_chars = _get_chunk_threshold()
 
     chunks: list[str] = []
     current: list[str] = []
@@ -576,7 +586,8 @@ def format_text(raw: str, source_type: str = "web") -> Dict[str, Any]:
 
     # Auto-dispatch based on text length
     raw_len = len(raw)
-    if raw_len > _CHUNK_THRESHOLD_CHARS:
+    threshold = _get_chunk_threshold()
+    if raw_len > threshold:
         logger.info("Large text: %d chars — calling chunked processor", raw_len)
         return _format_text_chunked(raw, source_type)
 
@@ -590,7 +601,8 @@ def _format_text_async_impl(raw: str, source_type: str, *, system_prompt: str | 
         raise ValueError("Input text is empty")
 
     raw_len = len(raw)
-    if raw_len > _CHUNK_THRESHOLD_CHARS:
+    threshold = _get_chunk_threshold()
+    if raw_len > threshold:
         return _format_text_chunked(raw, source_type)
 
     return _format_text_single(raw, source_type, system_prompt=system_prompt)
@@ -627,7 +639,8 @@ def format_text_with_system(raw: str, source_type: str = "web", *, system_prompt
         raise ValueError("Input text is empty")
 
     raw_len = len(raw)
-    if raw_len > _CHUNK_THRESHOLD_CHARS:
+    threshold = _get_chunk_threshold()
+    if raw_len > threshold:
         return _format_text_chunked(raw, source_type)
 
     return _format_text_single(raw, source_type, system_prompt=system_prompt)

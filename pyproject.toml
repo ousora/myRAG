@@ -11,7 +11,7 @@ dependencies = [
     "markitdown[pdf]>=0.1",         # Universal doc conversion (PDF, DOCX, MD, TXT)
     "trafilatura>=1.12",            # HTML content extraction
     "httpx>=0.27",                  # HTTP client for LLM + embedding APIs
-    "markdown-it-py>=3.0,<4",      # Markdown parser (replaces LangChain chunker)
+    "markdown-it-py>=3.0,<4",      # Markdown parser (header-aware chunking)
     "PyYAML>=6.0",                  # Config loader (conf/config.yaml, clean_rules.yaml)
 ]
 

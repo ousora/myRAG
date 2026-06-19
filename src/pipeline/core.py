@@ -45,6 +45,7 @@ Usage (LLM-formatted + Markdown output):
 
 import httpx
 import logging
+import re
 from pathlib import Path
 
 from config import get_config_lazy as _get_config
@@ -99,7 +100,7 @@ def _match_entities_to_chunks(chunks: list[dict], entities: list[dict]) -> list[
         matched = [
             e["name"]
             for e in entities
-            if e["name"].lower() in chunk_text_lower
+            if re.search(r'\b' + re.escape(e["name"].lower()) + r'\b', chunk_text_lower)
         ]
         chunk["entity_names"] = matched
     return chunks
@@ -168,22 +169,24 @@ def process_file(filepath: str, *, remove_page_breaks=True, collapse_whitespace=
 
 
 def process_file_hybrid(filepath: str, *, doc_id="doc_0", remove_page_breaks=True, 
-                        collapse_whitespace=True, rules_config="conf/clean_rules.yaml", chunk_size=512, store_path=None):
+                        collapse_whitespace=True, rules_config="conf/clean_rules.yaml", chunk_size=512, store_path=None, md_output_dir=None):
     """Parse file with LLM formatter → chunker → embedder → sqlite-vec (Hybrid A+B).
 
     Args:
         filepath: Path to the document file.
         doc_id: Unique identifier for this document in the index.
-        chunk_size: Max characters per chunk (LangChain splitter).
+        chunk_size: Max characters per chunk.
         store_path: Optional path to sqlite-vec database. If provided, chunk
                     vectors are persisted for later retrieval.
+        md_output_dir: Optional directory to write structured markdown (via write_to_md).
 
     Returns dict with:
         chunks  — list of dicts with embedding data (A - fine-grained)
         document — single dict with summary + embedding (B - coarse-grained)
         db_path  — path to sqlite-vec DB if store_path was provided, else None
+        md_path  — path to generated .md file if md_output_dir was provided, else None
     """
-    from formatters import format_text_async
+    from formatters import format_text_async, write_to_md
     
     # 1. Parse & Clean
     parser = _resolve_parser(filepath)
@@ -198,6 +201,12 @@ def process_file_hybrid(filepath: str, *, doc_id="doc_0", remove_page_breaks=Tru
     cfg = _get_config()
     future = format_text_async(cleaned, source_type="pdf")
     result = future.result(timeout=cfg.format_timeout)
+
+    # Write structured markdown if output_dir provided (same path as process_file_with_md)
+    md_path = None
+    if md_output_dir:
+        md_path = write_to_md(result, md_output_dir)
+        logger.info("  → Markdown written to %s", md_path)
 
     # 3. Render markdown with headers from metadata.sections, then chunk
     formatted_md = _render_markdown_with_sections(result)
@@ -269,7 +278,7 @@ def process_file_hybrid(filepath: str, *, doc_id="doc_0", remove_page_breaks=Tru
         "chunks": stored_chunks,       # A - fine-grained index
         "document": stored_doc,         # B - coarse-grained index
         "format_result": result,        # Original LLM output (for metadata)
-        "md_path": None,               # TODO: write_to_md() if configured
+        "md_path": md_path,            # Path to structured .md file (write_to_md output)
         "db_path": db_path,             # sqlite-vec DB path (None if not persisted)
     }
 

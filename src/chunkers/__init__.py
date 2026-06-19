@@ -1,4 +1,4 @@
-"""Text chunking — pure Python (no LangChain).
+"""Text chunking — pure Python via markdown-it-py.
 
 Uses markdown-it-py for header-aware markdown splitting with hierarchical metadata.
 Oversized chunks (> chunk_size) get a secondary recursive character split with overlap.
@@ -147,14 +147,13 @@ class Chunker:
     def _split_by_headings(self, lines: list[str], headings: list[dict]) -> list[dict]:
         """Split text at heading boundaries, tracking active heading hierarchy.
 
-        CRITICAL: Consecutive headings with no body content between them
-        are merged into one section. A boundary is created only when there
-        is actual non-heading content before a new heading.
+        A new section starts at each heading boundary. If there is body content
+        between two headings, the first heading's section captures that content.
+        The next heading begins a fresh section with its own metadata context.
 
         Each section gets metadata reflecting the current heading context:
         e.g. {"H1": "Doc Title", "H2": "Section A", "H3": "Sub"}
         """
-        heading_lines = {h["line"] for h in headings}
         total_lines = len(lines)
 
         active: dict[str, str] = {}
@@ -172,7 +171,7 @@ class Chunker:
 
             if heading_at_line is not None:
                 h = heading_at_line
-                # Boundary only if there was body content since the last section start
+                # Boundary: there was body content since the last section start
                 if last_body_line >= section_start:
                     text = "\n".join(lines[section_start:line_idx]).strip()
                     if text:
@@ -180,9 +179,12 @@ class Chunker:
                             "text": text,
                             "metadata": dict(active),
                         })
-                    section_start = line_idx
 
-                # Update active hierarchy
+                # Always advance section_start to this heading line so the next
+                # heading starts a new section (even if no body between them).
+                section_start = line_idx
+
+                # Update active hierarchy for the new section context
                 active[h["key"]] = h["title"]
                 current_level = h["level"]
                 for k in list(active.keys()):
@@ -210,7 +212,7 @@ class Chunker:
     def _metadata_to_section_path(metadata: dict) -> list[str]:
         """Convert metadata dict to a flat section_path list.
 
-        LangChain-compatible metadata: {"H1": "Title", "H2": "Section", "H3": "Sub"}
+        Metadata keys: {"H1": "Title", "H2": "Section", "H3": "Sub"}
         → section_path: ["Section"] or ["Section", "Sub"]
 
         If there's no H1 (document title), the top-level header is used directly.
