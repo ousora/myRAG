@@ -1,10 +1,12 @@
 """Shared fixtures for storage tests."""
 
-import sys
 
+def _debug_import_snapshot():
+    """Debug helper (not a test): check what sqlite_vec resolves to during pytest.
 
-def test_debug_import():
-    """Debug: check what sqlite_vec resolves to during pytest."""
+    Call manually from the console, not via pytest collection.
+    """
+    import sys
     print("\n=== DEBUG ===")
     print("sys.modules keys with 'sqlite':", [k for k in sys.modules if 'sqlite' in k])
     if 'sqlite_vec' in sys.modules:

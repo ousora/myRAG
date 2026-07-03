@@ -8,6 +8,8 @@ import logging
 from pathlib import Path
 from typing import Protocol, runtime_checkable
 
+from myrag.exceptions import ParserNotFoundError
+
 logger = logging.getLogger(__name__)
 
 
@@ -58,11 +60,11 @@ class MarkItDownParser(TextParser):
         try:
             from markitdown import MarkItDown
             self._converter = MarkItDown()
-        except ImportError:
-            raise RuntimeError(
-                "markitdown is required for this parser. "
-                "Install with: pip install markitdown"
-            ) from None
+        except ImportError as exc:
+            raise ParserNotFoundError(
+                filepath="<markitdown>",
+                available_parsers=[],
+            ) from exc
 
     def parse(self, filepath: str) -> str:
         result = self._converter.convert(filepath)
@@ -85,11 +87,11 @@ class TrafilaturaParser(TextParser):
             import trafilatura
             # Store function reference only, lighter than storing the whole module.
             self._extract = trafilatura.extract
-        except ImportError:
-            raise RuntimeError(
-                "trafilatura is required for this parser. "
-                "Install with: pip install trafilatura"
-            ) from None
+        except ImportError as exc:
+            raise ParserNotFoundError(
+                filepath="<trafilatura>",
+                available_parsers=[],
+            ) from exc
 
     def parse(self, filepath: str) -> str:
         path = Path(filepath)

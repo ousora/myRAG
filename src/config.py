@@ -87,6 +87,7 @@ class Config:
         # ── Logging ──
         log_cfg = raw.get("logging", {})
         self.log_max_bytes: int = log_cfg.get("max_bytes", 5 * 1024 * 1024)
+        self.debug_log_llm_responses: bool = log_cfg.get("debug_log_llm_responses", False)
 
     def _validate(self) -> list[str]:
         """Return a list of validation error messages, or [] if valid."""
@@ -128,18 +129,26 @@ def get_config() -> Config:
     """Load and cache configuration. Safe to call repeatedly from any module."""
     path = _resolve_config_path()
     if path is None:
-        return Config({})
+        cfg = Config({})
+    else:
+        import yaml
+        raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        cfg = Config(raw)
 
-    import yaml
-    raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-    return Config(raw)
+    errors = cfg._validate()
+    if errors:
+        raise ValueError(
+            "Configuration validation failed:\n  - " + "\n  - ".join(errors)
+        )
+
+    return cfg
 
 
 def get_config_lazy() -> Config:
     """Lazy-loaded config — returns the cached instance on first call.
 
-    This helper is intended for modules that need to access config values
-    without importing ``get_config`` directly (avoids circular imports).
+    Thin wrapper around ``get_config()`` for callers that need to defer
+    configuration loading until explicitly invoked (e.g., CLI entry points).
     Prefer calling ``get_config()`` from new code when possible.
     """
     return get_config()

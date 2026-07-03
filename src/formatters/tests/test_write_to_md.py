@@ -1,5 +1,4 @@
 import os
-import pytest
 from formatters.writer import write_to_md
 
 def test_write_to_md_from_doc():

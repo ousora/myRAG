@@ -37,7 +37,25 @@ import logging
 
 from config import get_config
 
+from myrag.exceptions import EmbeddingError
+
 logger = logging.getLogger(__name__)
+
+# Expected embedding dimension for bge-m3 models. Other models may differ,
+# but this serves as a sanity check to catch misconfigured endpoints early.
+EXPECTED_EMBEDDING_DIMENSION = 1024
+
+
+def _validate_embedding_dimension(embedding: list[float]) -> None:
+    """Assert that the returned embedding has the expected dimensionality."""
+    if len(embedding) != EXPECTED_EMBEDDING_DIMENSION:
+        raise EmbeddingError(
+            message=(
+                f"Embedding dimension mismatch: expected {EXPECTED_EMBEDDING_DIMENSION}, "
+                f"got {len(embedding)}. Check that your endpoint serves the correct model."
+            ),
+            context={"expected_dim": EXPECTED_EMBEDDING_DIMENSION, "actual_dim": len(embedding)},
+        )
 
 
 class Embedder:
@@ -51,7 +69,7 @@ class Embedder:
     Explicit arguments override config for remote mode only.
     """
 
-    def __new__(cls, **kwargs):
+    def __new__(cls, **kwargs):  # type: ignore[override]
         cfg = get_config()
         mode = getattr(cfg, "embedding_mode", "remote")
 
@@ -59,10 +77,9 @@ class Embedder:
             from .local_bge import LocalEmbedder
 
             instance = object.__new__(LocalEmbedder)
-            # Read local_model from config and pass to LocalEmbedder
             local_model = getattr(cfg, "embedding_local_model", None) or "BAAI/bge-m3"
             instance.__init__(model_name=local_model)
-            return instance
+            return instance  # type: ignore[return-value]
 
         return super().__new__(cls)
 
@@ -93,9 +110,14 @@ class Embedder:
         data = resp.json()
 
         if isinstance(text, str):
-            return data["data"][0]["embedding"]
+            emb = data["data"][0]["embedding"]
+            _validate_embedding_dimension(emb)
+            return emb
         else:
-            return [d["embedding"] for d in data["data"]]
+            embeddings = [d["embedding"] for d in data["data"]]
+            for e in embeddings:
+                _validate_embedding_dimension(e)
+            return embeddings
 
     def store_chunk(
         self,
@@ -155,7 +177,38 @@ class Embedder:
         }
 
 
+def create_embedder(
+    mode: str | None = None, *, base_url: str = "", model: str = "", validate: bool = False
+) -> "Embedder":
+    """Create an embedder instance for the given mode.
+
+    Args:
+        mode: ``"remote"`` or ``"local"``. Defaults to config's ``embedding.mode``.
+        base_url: Override for remote mode endpoint (ignored in local mode).
+        model: Override for the embedding model name.
+        validate: If True, performs a test embedding and validates dimension on creation.
+                  Raises :class:`EmbeddingError` if dimension mismatch is detected.
+
+    Returns:
+        An Embedder instance whose concrete class depends on *mode*.
+    """
+    if mode is None:
+        cfg = get_config()
+        mode = getattr(cfg, "embedding_mode", "remote")
+
+    if mode == "local":
+        from .local_bge import LocalEmbedder
+        local_model = model or (getattr(get_config(), "embedding_local_model", None) or "BAAI/bge-m3")
+        return LocalEmbedder(model_name=local_model)  # type: ignore[return-value]
+
+    e = Embedder(base_url=base_url, model=model)
+    if validate:
+        _validate_embedding_dimension(e.embed("validation"))
+    return e
+
+
 def embed_texts(texts: list[str], **kwargs) -> list[list[float]]:
     """Convenience wrapper."""
-    e = Embedder(**kwargs)
+    mode = kwargs.pop("mode", None)
+    e = create_embedder(mode=mode, **kwargs)
     return e.embed(texts)

@@ -6,6 +6,7 @@ LLM/embedding services (uses plain-text input).
 
 import os
 import tempfile
+from concurrent.futures import Future
 from pathlib import Path
 
 
@@ -59,12 +60,24 @@ def test_process_directory_nested(tmp_path: Path) -> None:
     assert len(chunks) >= 2
 
 
-def test_process_file_hybrid_no_llm_fallback() -> None:
+def _mock_format_future(text, source_type="pdf", **kwargs):
+    future = Future()
+    future.set_result({
+        "title": "Test",
+        "tags": ["test"],
+        "metadata": {"sections": [], "entities": []},
+        "body": text,
+    })
+    return future
+
+
+def test_process_file_hybrid_no_llm_fallback(monkeypatch) -> None:
     """process_file_hybrid returns a valid structure even without LLM service.
 
     The pipeline should handle missing embedding services gracefully and still
     return chunks with metadata (no silent failures).
     """
+    monkeypatch.setattr("formatters.format_text_async", _mock_format_future)
     from pipeline import process_file_hybrid
 
     # Create a small text file — no external parser needed
@@ -88,8 +101,9 @@ def test_process_file_hybrid_no_llm_fallback() -> None:
         Path(path).unlink(missing_ok=True)
 
 
-def test_process_file_with_md(tmp_path: Path) -> None:
+def test_process_file_with_md(tmp_path: Path, monkeypatch) -> None:
     """process_file_with_md generates a markdown file."""
+    monkeypatch.setattr("formatters.format_text_async", _mock_format_future)
     from pipeline import process_file_with_md
 
     txt = tmp_path / "sample.txt"

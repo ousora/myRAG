@@ -7,7 +7,12 @@ from unittest.mock import Mock, patch
 
 import pytest
 
-from formatters import format_text, format_text_async
+from formatters import (
+    format_text,
+    format_text_async,
+    _preprocess_json,
+    _fix_bare_quotes_in_body_field,
+)
 from formatters.prompts import get_system_prompt
 
 
@@ -114,3 +119,83 @@ class TestGetSystemPrompt:
     def test_includes_source_type(self):
         prompt = get_system_prompt(source_type="markdown")
         assert "markdown" in prompt
+
+
+class TestPreprocessJson:
+    """Tests for _preprocess_json — strip markdown fences, extract first JSON object."""
+
+    def test_plain_valid_json(self):
+        assert json.loads(_preprocess_json('{"a": 1}')) == {"a": 1}
+
+    def test_markdown_fence_json(self):
+        raw = '```json\n{"x": [1,2,3]}\n```'
+        result = _preprocess_json(raw)
+        assert json.loads(result) == {"x": [1, 2, 3]}
+
+    def test_no_fence_but_wrapped_with_text(self):
+        raw = "Here is the answer:\n{ \"hello\": \"world\" }"
+        result = _preprocess_json(raw)
+        assert '"hello"' in result and '"world"' in result
+
+    def test_balanced_braces_returns_first_object(self):
+        """Balanced brace matching should return only the first complete JSON object."""
+        raw = '{"a": 1} explanation {"b": 2}'
+        result = _preprocess_json(raw)
+        parsed = json.loads(result)
+        assert parsed == {"a": 1}, "Should stop at the first balanced }"
+
+    def test_no_json_returns_none(self):
+        assert _preprocess_json("just plain english text") is None
+
+    def test_non_string_input_returns_none(self):
+        assert _preprocess_json(12345) is None
+
+
+class TestFixBareQuotes:
+    """Tests for _fix_bare_quotes_in_body_field — escape unescaped quotes in body value."""
+
+    def test_no_body_key_returns_none(self):
+        content = '{"title": "Test"}'
+        assert _fix_bare_quotes_in_body_field(content) is None
+
+    def test_empty_content_returns_none(self):
+        assert _fix_bare_quotes_in_body_field("") is None
+
+    def test_simple_valid_json_returns_none(self):
+        """Valid JSON with no bare quotes — function returns None (no fix needed)."""
+        content = '{"title": "Test", "body": "Hello world"}'
+        result = _fix_bare_quotes_in_body_field(content)
+        assert result is None
+
+    def test_valid_json_with_proper_escapes_returns_none(self):
+        """JSON with properly escaped quotes — function returns None (no fix needed)."""
+        content = '{"title": "Test", "body": "He said \\"hi\\""}'
+        result = _fix_bare_quotes_in_body_field(content)
+        assert result is None
+
+    def test_valid_json_is_parseable(self):
+        """Confirm the original valid JSON parses correctly."""
+        content = '{"title": "Test", "body": "Hello world"}'
+        parsed = json.loads(content)
+        assert parsed == {"title": "Test", "body": "Hello world"}
+
+    def test_escaped_quotes_are_parseable(self):
+        """Confirm the original escaped JSON parses correctly."""
+        content = '{"title": "Test", "body": "He said \\"hi\\""}'
+        parsed = json.loads(content)
+        assert parsed["body"] == 'He said "hi"'
+
+    def test_bare_quote_inside_value_gets_escaped(self):
+        """Bare quotes inside body value get escaped so JSON becomes parseable."""
+        q = chr(34)  # literal double-quote character
+        content = '{"title": "Test", "body": "She said ' + q + 'hello' + q + ' world"}'
+        result = _fix_bare_quotes_in_body_field(content)
+        assert result is not None
+        parsed = json.loads(result)
+        # After escaping, the body should contain the bare quotes as literal chars.
+        assert isinstance(parsed["body"], str)
+
+    def test_quote_before_body_key_not_matched(self):
+        """Malformed body key (quotes inside the key name) — regex won't match."""
+        content = '{"bo"dy": "Test"}'
+        result = _fix_bare_quotes_in_body_field(content)

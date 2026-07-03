@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib
 import json
 import sys
 from datetime import datetime, timezone
@@ -11,10 +12,10 @@ from typing import Optional
 # ---------------------------------------------------------------------------
 # Dynamic loader for the third-party ``sqlite-vec`` package.
 #
-# Our own file is named ``storage.sqlite_vec``, so a bare ``import sqlite_vec``
-# resolves back to us (the local module), not the real package.  We bypass all
-# name resolution by loading directly from the filesystem path discovered via
-# ``importlib.metadata.distribution("sqlite-vec").files``.
+# Strategy 1: direct ``import sqlite_vec`` — works when installed normally.
+# Strategy 2: filesystem path via
+#   ``importlib.metadata.distribution("sqlite-vec").files`` — robust across
+#   editable installs, wheels, and different Python versions.
 # ---------------------------------------------------------------------------
 _sqlite_vec: Optional[object] = None
 
@@ -22,15 +23,30 @@ _sqlite_vec: Optional[object] = None
 def _load_sqlite_vec() -> object:
     """Return the third-party ``sqlite_vec`` module (loaded once).
 
-    Raises RuntimeError if the ``sqlite-vec`` package is not installed.
+    Tries two strategies in order:
+      1. ``importlib.import_module("sqlite_vec")`` — works for pip/uv-installed
+         packages (the canonical case).
+      2. Locate via distribution metadata → file-based loading — robust across
+         editable installs, wheels, and different Python versions.
+
+    Raises RuntimeError if neither strategy succeeds.
     """
     global _sqlite_vec
     if _sqlite_vec is not None:
         return _sqlite_vec
 
-    from importlib.metadata import PackageNotFoundError, distribution
-    import importlib.util
+    # Strategy 1: Direct import (canonical install path).
+    try:
+        _sqlite_vec = importlib.import_module("sqlite_vec")
+        return _sqlite_vec
+    except ImportError:
+        pass
 
+    from importlib.metadata import PackageNotFoundError, distribution
+    import importlib.util as _util
+
+    # Strategy 2: Locate __init__.py via the distribution's file list — robust
+    # across editable installs, wheels, and different Python versions.
     try:
         dist = distribution("sqlite-vec")
     except PackageNotFoundError as exc:  # type: ignore[attr-defined]
@@ -40,8 +56,6 @@ def _load_sqlite_vec() -> object:
             "(or: uv add --dev sqlite-vec)"
         ) from exc
 
-    # Locate __init__.py via the distribution's file list — robust across
-    # editable installs, wheels, and different Python versions.
     init_py = next(
         (f for f in dist.files or [] if str(f) == "sqlite_vec/__init__.py"),
         None,
@@ -52,10 +66,10 @@ def _load_sqlite_vec() -> object:
             "The installed version may be corrupted or incompatible."
         )
 
-    spec = importlib.util.spec_from_file_location(
+    spec = _util.spec_from_file_location(
         "_third_party_sqlite_vec", str(dist.locate_file(init_py)),
     )
-    mod = importlib.util.module_from_spec(spec)  # type: ignore[union-attr]
+    mod = _util.module_from_spec(spec)  # type: ignore[union-attr]
     sys.modules["_third_party_sqlite_vec"] = mod
     spec.loader.exec_module(mod)  # type: ignore[union-attr]
     _sqlite_vec = mod
@@ -83,7 +97,7 @@ class SQLiteVecStore:
         self.conn.execute("PRAGMA journal_mode=WAL")
 
     def _setup_schema(self):
-        """Create tables if they don't exist."""
+        """Create tables and FTS sync triggers if they don't exist."""
         self.conn.executescript("""
             CREATE TABLE IF NOT EXISTS chunks (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -112,34 +126,46 @@ class SQLiteVecStore:
             );
 
             CREATE INDEX IF NOT EXISTS idx_documents_source ON documents(source_file);
+
+            -- Keep FTS index in sync with chunks table on INSERT/UPDATE/DELETE.
+            CREATE TRIGGER IF NOT EXISTS chunks_ai AFTER INSERT ON chunks BEGIN
+                INSERT INTO chunks_fts(rowid, text) VALUES (new.id, new.text);
+            END;
+            CREATE TRIGGER IF NOT EXISTS chunks_au AFTER UPDATE ON chunks BEGIN
+                INSERT INTO chunks_fts(chunks_fts, rowid, text)
+                    VALUES('delete', old.id, old.text);
+                INSERT INTO chunks_fts(rowid, text) VALUES (new.id, new.text);
+            END;
+            CREATE TRIGGER IF NOT EXISTS chunks_ad AFTER DELETE ON chunks BEGIN
+                INSERT INTO chunks_fts(chunks_fts, rowid, text)
+                    VALUES('delete', old.id, old.text);
+            END;
         """)
 
     def upsert_chunk(self, chunk_data: dict, *, doc_id: str, 
                      embedding: list[float], chunk_index: int = 0) -> dict:
-        """Insert or update a chunk with its embedding."""
+        """Insert a chunk with its embedding.
+
+        The AFTER INSERT trigger on chunks automatically syncs the new row
+        into chunks_fts, so no manual FTS insert is needed here.
+        """
         self._setup_schema()
-        
-        section_json = json.dumps(chunk_data.get("section_path", ["General"]))
-        entity_names_json = json.dumps(chunk_data.get("entity_names", []))
+
+        section_path = chunk_data.get("section_path", ["General"])
+        entity_names = chunk_data.get("entity_names", [])
         word_count = len(chunk_data.get("text", "").split())
 
         cursor = self.conn.execute(
             """INSERT INTO chunks (text, embedding, source_doc_id, chunk_index, section_path, word_count, entity_names)
                VALUES (?, ?, ?, ?, ?, ?, ?)""",
-            (chunk_data["text"], _SQLITE_VEC.serialize_float32(embedding), doc_id, 
-             chunk_index, json.dumps(chunk_data.get("section_path", ["General"])), word_count,
-             entity_names_json)
-        )
-
-        self.conn.execute(
-            "INSERT INTO chunks_fts(rowid, text) VALUES (?, ?)",
-            (cursor.lastrowid, chunk_data["text"])
+            (chunk_data["text"], _SQLITE_VEC.serialize_float32(embedding), doc_id,
+             chunk_index, json.dumps(section_path), word_count, json.dumps(entity_names))
         )
 
         return {
             "id": cursor.lastrowid,
             "text": chunk_data["text"],
-            "section_path": json.loads(section_json),
+            "section_path": section_path,
             "source_doc_id": doc_id,
             "chunk_index": chunk_index,
             "word_count": word_count,
@@ -170,6 +196,12 @@ class SQLiteVecStore:
         except json.JSONDecodeError:
             return []
 
+    @staticmethod
+    def _escape_like_pattern(pattern: str) -> str:
+        """Escape SQL LIKE wildcards (%) and (_) in a user-provided pattern."""
+        escaped = pattern.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        return f"{escaped}"
+
     def search_chunks(self, query_vector: list[float], *, k: int = 10,
                       source_doc_id: Optional[str] = None, section_filter: Optional[list[str]] = None) -> list[dict]:
         """Search chunks by vector similarity (cosine distance)."""
@@ -186,10 +218,11 @@ class SQLiteVecStore:
             
         if section_filter:
             for s in section_filter:
+                escaped = self._escape_like_pattern(s)
                 conditions.append(
                     "json_extract(section_path, '$') LIKE ?"
                 )
-                params.append(f"%{s}%")
+                params.append(f"%{escaped}%")
 
         where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
 
@@ -275,6 +308,29 @@ class SQLiteVecStore:
         """Hybrid search: vector similarity + full-text (FTS5)."""
         self._setup_schema()
 
+        # Empty queries fall back to pure vector search if a vector is provided.
+        if not query_text.strip():
+            if query_vector:
+                emb_str = _SQLITE_VEC.serialize_float32(query_vector)
+                results = self.conn.execute(
+                    """SELECT c.id, c.text, json_each.value as section_path, 
+                                 c.source_doc_id, c.chunk_index, c.word_count
+                         FROM chunks c, json_each(c.section_path)
+                         ORDER BY vec_distance_cosine(embedding, ?) ASC
+                         LIMIT ?""",
+                    [emb_str, k]
+                ).fetchall()
+
+                return [{
+                    "id": row[0],
+                    "text": row[1],
+                    "section_path": self._parse_section_path(row[2]),
+                    "source_doc_id": row[3],
+                    "chunk_index": row[4],
+                    "word_count": row[5],
+                } for row in results]
+            return []
+
         fts_results = self.conn.execute(
             "SELECT rowid, rank FROM chunks_fts WHERE chunks_fts MATCH ? LIMIT ?",
             (query_text, k)
@@ -307,34 +363,54 @@ class SQLiteVecStore:
         # Build lookup maps for FTS results by rowid
         fts_map = {r[0]: r[1] for r in fts_results}
 
-        for v in vec_results:
-            if v["id"] not in combined:
-                combined[v["id"]] = dict(v)
-            # Compute cosine distance if not already computed
-            if "_vec_score" not in combined[v["id"]]:
-                emb_str = _SQLITE_VEC.serialize_float32(query_vector)
-                combined[v["id"]]["_vec_score"] = self.conn.execute(
-                    "SELECT vec_distance_cosine(embedding, ?) FROM chunks WHERE id=?",
-                    [emb_str, v["id"]]
-                ).fetchone()[0]
+        if vec_results:
+            for v in vec_results:
+                if v["id"] not in combined:
+                    combined[v["id"]] = dict(v)
+                # Compute cosine distance if not already computed
+                if "_vec_score" not in combined[v["id"]]:
+                    emb_str = _SQLITE_VEC.serialize_float32(query_vector)
+                    combined[v["id"]]["_vec_score"] = self.conn.execute(
+                        "SELECT vec_distance_cosine(embedding, ?) FROM chunks WHERE id=?",
+                        [emb_str, v["id"]]
+                    ).fetchone()[0]
 
-        # Reciprocal Rank Fusion: score = 1/(rank + k) where k=60 is a common constant
-        # FTS rank from BM25 (lower=better); vec_distance_cosine (lower=better).
-        # Convert both to reciprocal rank scores for fair comparison.
-        rrf_k = 60
-        total_results = max(len(fts_map), len(vec_results), 1)
+            # Reciprocal Rank Fusion: score = 1/(rank + k) where k=60 is a common constant
+            # FTS rank from BM25 (lower=better); vec_distance_cosine (lower=better).
+            # Convert both to reciprocal rank scores for fair comparison.
+            rrf_k = 60
+            total_results = max(len(fts_map), len(vec_results), 1)
 
-        result_list = []
-        for doc_id, data in combined.items():
-            fts_rank = fts_map.get(doc_id, total_results + 1)
-            vec_score = data.get("_vec_score", 1.0)
-            # Normalize cosine distance to [0, 1] range first
-            norm_vec = min(max(vec_score, 0.0), 1.0)
-            # RRF score: higher is better
-            rrf_score = (1.0 / (fts_rank + rrf_k)) + (1.0 / (int(norm_vec * total_results) + 1 + rrf_k))
-            result_list.append({k: v for k, v in data.items() if not k.startswith("_")} | {"_rrf_score": rrf_score})
+            result_list = []
+            for doc_id, data in combined.items():
+                fts_rank = fts_map.get(doc_id, total_results + 1)
+                vec_score = data.get("_vec_score", 1.0)
+                # Normalize cosine distance to [0, 1] range first
+                norm_vec = min(max(vec_score, 0.0), 1.0)
+                # RRF score: higher is better
+                rrf_score = (1.0 / (fts_rank + rrf_k)) + (1.0 / (int(norm_vec * total_results) + 1 + rrf_k))
+                result_list.append({k: v for k, v in data.items() if not k.startswith("_")} | {"_rrf_score": rrf_score})
 
-        return sorted(result_list, key=lambda x: -x["_rrf_score"])[:k]
+            return sorted(result_list, key=lambda x: -x["_rrf_score"])[:k]
+        else:
+            # Text-only query (no vector): return FTS results directly without RRF scoring.
+            result_list = []
+            for row in fts_results:
+                chunk_id = row[0]  # rowid from chunks_fts
+                chunk_data = self.conn.execute(
+                    "SELECT id, text, section_path, source_doc_id, chunk_index, word_count FROM chunks WHERE id=?",
+                    (chunk_id,)
+                ).fetchone()
+                if chunk_data:
+                    result_list.append({
+                        "id": chunk_data[0],
+                        "text": chunk_data[1],
+                        "section_path": self._parse_section_path(chunk_data[2]),
+                        "source_doc_id": chunk_data[3],
+                        "chunk_index": chunk_data[4],
+                        "word_count": chunk_data[5],
+                    })
+            return result_list[:k]
 
     def get_chunks_by_doc(self, doc_id: str) -> list[dict]:
         """Retrieve all chunks for a specific document."""

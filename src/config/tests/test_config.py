@@ -1,10 +1,8 @@
 """Tests for configuration loading and validation."""
 
-import os
 from pathlib import Path
-from unittest.mock import patch, mock_open
+from unittest.mock import patch
 
-import pytest
 
 from config import Config, get_config
 

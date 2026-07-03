@@ -12,14 +12,14 @@ class TestEmbedderInit:
 
     def test_init_uses_config_defaults(self, monkeypatch):
         """Embedder should fall back to config when params are empty."""
-        from embedders.bge_m3 import Embedder
-
         class FakeConfig:
             embedding_base_url = "http://config-url"
             embedding_model = "bge-m3-from-config"
             embedding_timeout = 120
 
-        monkeypatch.setattr("config.get_config", lambda: FakeConfig())
+        monkeypatch.setattr("embedders.bge_m3.get_config", lambda: FakeConfig())
+
+        from embedders.bge_m3 import Embedder
 
         e = Embedder()
         assert e.model == "bge-m3-from-config"

@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import logging
 
+from .bge_m3 import _validate_embedding_dimension
+
 logger = logging.getLogger(__name__)
 
 
@@ -48,7 +50,9 @@ class LocalEmbedder:
             - list[str] input: list[list[float]] (batch embeddings)
         """
         if isinstance(text, str):
-            return self._model.encode(text).tolist()
+            emb = self._model.encode(text).tolist()
+            _validate_embedding_dimension(emb)
+            return emb
 
         # Batch encoding with memory protection
         all_embeddings: list[list[float]] = []
@@ -57,7 +61,7 @@ class LocalEmbedder:
         for i in range(0, len(text), effective_bs):
             batch = text[i:i + effective_bs]
             try:
-                embeddings = self._model.encode(batch)  # (batch_n, 1024) numpy
+                embeddings = self._model.encode(batch)  # (batch_n, EXPECTED_EMBEDDING_DIMENSION) numpy
             except RuntimeError as e:
                 if "out of memory" in str(e).lower():
                     logger.warning(
@@ -65,9 +69,13 @@ class LocalEmbedder:
                         i, i + effective_bs,
                     )
                     for item in batch:
-                        all_embeddings.append(self._model.encode(item).tolist())
+                        emb = self._model.encode(item).tolist()
+                        _validate_embedding_dimension(emb)
+                        all_embeddings.append(emb)
                     continue
                 raise
+            for e in embeddings.tolist():
+                _validate_embedding_dimension(e)
             all_embeddings.extend(embeddings.tolist())
 
         return all_embeddings

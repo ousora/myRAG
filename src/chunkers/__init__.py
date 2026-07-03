@@ -56,13 +56,12 @@ class Chunker:
     # Public API
     # ------------------------------------------------------------------
 
-    def chunk(self, text: str, *, section_path=None) -> list[dict]:
+    def chunk(self, text: str) -> list[dict]:
         """Split text into chunks with semantic context.
 
         Args:
             text: Markdown text to split. Falls back to plain-text splitting
                   when no markdown headers are detected.
-            section_path: Ignored — section_path is auto-derived from headers.
 
         Returns:
             List of dicts with 'text', 'section_path', and 'metadata' keys.
@@ -156,6 +155,9 @@ class Chunker:
         """
         total_lines = len(lines)
 
+        # Pre-build a lookup from line index → heading dict for O(1) access.
+        heading_by_line: dict[int, dict] = {h["line"]: h for h in headings}
+
         active: dict[str, str] = {}
         sections: list[dict] = []
         section_start = 0
@@ -163,11 +165,7 @@ class Chunker:
 
         for line_idx in range(total_lines):
             line = lines[line_idx]
-            heading_at_line = None
-            for h in headings:
-                if h["line"] == line_idx:
-                    heading_at_line = h
-                    break
+            heading_at_line = heading_by_line.get(line_idx)
 
             if heading_at_line is not None:
                 h = heading_at_line
@@ -326,52 +324,96 @@ class Chunker:
 
         return chunks
 
+    # Common English abbreviations that should NOT trigger a sentence split.
+    _SENTENCE_ABBREVIATIONS: frozenset[str] = frozenset({
+        'mr', 'mrs', 'ms', 'dr', 'prof', 'sr', 'jr', 'sgt', 'cpl', 'pvt',
+        'gen', 'adm', 'col', 'maj', 'capt', 'lt', 'st', 'ave',
+        'blvd', 'dept', 'est', 'inc', 'ltd', 'corp', 'co', 'vol', 'vs',
+        'eg', 'ie', 'etc', 'approx', 'asp', 'avg', 'cf', 'cm', 'eq',
+        'fig', 'govt', 'jan', 'feb', 'mar', 'apr', 'jun', 'jul', 'aug',
+        'sep', 'oct', 'nov', 'dec', 'min', 'max', 'msg', 'num', 'opp',
+        'orig', 'p', 'pp', 'pred', 'pres', 'repr', 'rev', 'sec', 'sen',
+        'rep', 'sq', 'sra', 'ssa', 'us', 'usa', 'uk', 'un', 'nato',
+        'who', 'fbi', 'cia', 'na', 'no', 'nos', 'pt', 'pts',
+    })
+
+    def _is_abbreviation_boundary(self, text: str, dot_pos: int) -> bool:
+        """Return True if the '.' at *dot_pos* follows a known abbreviation."""
+        before = text[:dot_pos].rstrip()
+        match = re.search(r'([A-Za-z]+(?:\.[A-Za-z]+)*\.?)$', before + '.')
+        if not match:
+            return False
+        abbr_raw = match.group(1).lower().rstrip('.')
+        candidates = {abbr_raw, re.sub(r'\.', '', abbr_raw)}
+        return bool(candidates & self._SENTENCE_ABBREVIATIONS)
+
     def _split_by_sentence(self, text: str) -> list[str]:
-        """Split text at sentence boundaries (Chinese + English punctuation)."""
-        # Sentence boundary pattern: Chinese punctuation or English sentence end
-        sentences = re.split(
-            r"(?<=[。！？.!?])\s*",
-            text,
-        )
-        sentences = [s.strip() for s in sentences if s.strip()]
+        """Split text at sentence boundaries (Chinese + English punctuation).
 
-        # Re-merge sentences into chunks
-        chunks: list[str] = []
-        current = ""
+        Known abbreviations (Mr., Dr., U.S.A., etc.) are preserved — the split
+        only fires on periods that follow a non-abbreviation token.
+        """
+        # Step 1: Split on Chinese sentence-ending punctuation unconditionally.
+        parts = re.split(r'(?<=[。！？])\s*', text)
 
-        for sent in sentences:
-            if len(sent) > self.chunk_size:
-                # Single sentence too long — flush and fall back to char split
-                if current:
-                    chunks.append(current)
-                    current = ""
-                # Character-level fallback for this sentence
-                for i in range(0, len(sent), self.chunk_size):
-                    chunks.append(sent[i:i + self.chunk_size])
+        # Step 2: For each segment, find English '.' positions that are NOT
+        # abbreviation boundaries and split there too.
+        sentences: list[str] = []
+        for seg in parts:
+            if not seg.strip():
+                continue
+            if any(c in seg for c in '。！？'):
+                sentences.append(seg.strip())
                 continue
 
-            candidate = (current + sent).strip() if current else sent
-            if len(candidate) <= self.chunk_size:
-                current = candidate
-            else:
-                if current:
-                    chunks.append(current)
-                current = sent
+            # Find positions of '.' that are sentence boundaries (not abbreviations).
+            boundary_positions: list[int] = []
+            for i, ch in enumerate(seg):
+                if ch == '.' and not self._is_abbreviation_boundary(seg, i):
+                    boundary_positions.append(i)
 
-        if current:
-            chunks.append(current)
+            if not boundary_positions:
+                sentences.append(seg.strip())
+                continue
 
-        return chunks
+            # Split at each sentence-boundary '.' (keep the dot with the previous piece).
+            pieces = []
+            prev = 0
+            for bp in boundary_positions:
+                pieces.append(seg[prev:bp + 1].strip())
+                prev = bp + 1
+            if prev < len(seg):
+                pieces.append(seg[prev:].strip())
+
+            sentences.extend(p.strip() for p in pieces if p.strip())
+
+        return sentences
 
     def _apply_overlap(self, chunks: list[str]) -> list[str]:
-        """Apply chunk_overlap by prepending tail of previous chunk."""
-        if self.chunk_overlap <= 0:
+        """Apply chunk_overlap by prepending tail of previous chunk.
+
+        Extends the overlap window back to the nearest whitespace boundary so
+        that words are never split in the middle — continuity across chunks is
+        preserved at natural word edges instead of arbitrary character cuts.
+        """
+        if self.chunk_overlap <= 0 or len(chunks) <= 1:
             return chunks
 
         result: list[str] = [chunks[0]]
         for i in range(1, len(chunks)):
-            prev_tail = chunks[i - 1][-self.chunk_overlap:]
-            result.append(prev_tail + chunks[i])
+            prev_text = chunks[i - 1]
+            # Take up to chunk_overlap chars from the end of the previous chunk.
+            raw_tail = prev_text[-self.chunk_overlap:] if len(prev_text) > self.chunk_overlap else prev_text
+
+            # Walk backwards through raw_tail finding the last whitespace char.
+            overlap_start = 0
+            for j in range(len(raw_tail) - 1, -1, -1):
+                if raw_tail[j].isspace():
+                    overlap_start = j + 1
+                    break
+
+            prev_chunk_overlap = raw_tail[overlap_start:]
+            result.append(prev_chunk_overlap + chunks[i])
         return result
 
 

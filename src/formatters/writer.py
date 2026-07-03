@@ -91,7 +91,7 @@ def write_to_md(result, output_dir):
 
     # Validate required fields before writing
     if not result.get("title"):
-        raise ValueError(f"Missing 'title' in formatter output")
+        raise ValueError("Missing 'title' in formatter output")
 
     title = result["title"]
     safe_name = _safe_filename(title)

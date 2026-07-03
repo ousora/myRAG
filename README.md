@@ -30,15 +30,17 @@ Raw file (.pdf/.docx/.html/.md/.txt)
 
 ### 1. Parser (`src/parsers/`)
 
-**MarkItDown** (pdf, docx, md, txt) + **Trafilatura** (html). Single `resolve_parser()` dispatcher.
+**MarkItDown** (pdf, docx, md, txt) + **Trafilatura** (html). Single `resolve_parser()` dispatcher with lazy import — parsers load on first use (fail-fast in `__init__`). TrafilaturaParser handles HTML encoding with UTF-8 → GBK fallback.
 
-- Lazy import: parsers are loaded on first use (fail-fast in `__init__`).
-- TrafilaturaParser handles HTML encoding with UTF-8 → GBK fallback.
+Missing dependencies raise `ParserNotFoundError` from [`myrag.exceptions`](src/myrag/exceptions.py) for structured error handling:
 
 ```python
-from parsers.dispatcher import resolve_parser
-parser = resolve_parser("report.pdf")
-text = parser.parse("report.pdf")
+from myrag.exceptions import ParserNotFoundError
+
+try:
+    parser = resolve_parser("report.pdf")
+except ParserNotFoundError as e:
+    print(f"Parser not available: {e}")
 ```
 
 ### 2. TextCleaner (`src/parsers/text_cleaner.py`)
@@ -91,6 +93,8 @@ bge-m3 embeddings → sqlite-vec database with FTS5 full-text index + entity_nam
 - `"remote"` (default): calls HTTP API at `embedding.base_url` (vLLM / Ollama compatible)
 - `"local"`: uses sentence-transformers (`uv sync --extra local-embeddings`), CPU inference, no network dependency
 
+**Dimension validation**: Both remote and local backends validate embedding dimension on every call. Mismatched dimensions raise `EmbeddingError` with context about expected vs actual size.
+
 **Entity search** — `entity_names` column stores entity mentions per chunk for cross-doc entity lookup:
 
 ```python
@@ -101,15 +105,15 @@ db.conn.execute(
 ).fetchall()
 
 # Build + query
-from embedders import Embedder
+from embedders import Embedder, create_embedder  # Factory function respects config.mode
 from storage.sqlite_vec import SQLiteVecStore
 
 db = SQLiteVecStore("data/myrag.db")
-e = Embedder()
+e = create_embedder()  # or: from myrag.exceptions import EmbeddingError
 hits = db.search_chunks(e.embed("your question"), k=5)
 ```
 
-**Hybrid search** — `search_chunks()` performs vector similarity search; for combined vector + FTS5 full-text use `hybrid_search()`, with results fused using Reciprocal Rank Fusion (RRF) for fair ranking of both signals. **Section filter** uses wildcard LIKE matching: `db.search_chunks(..., section_filter=["Services"])` matches any chunk whose `section_path` contains "Services".
+**Hybrid search** — `search_chunks()` performs vector similarity search; for combined vector + FTS5 full-text use `hybrid_search()`, with results fused using Reciprocal Rank Fusion (RRF) for fair ranking of both signals. **Section filter** uses wildcard LIKE matching: `db.search_chunks(..., section_filter=["Services"])` matches any chunk whose `section_path` contains "Services". **Empty query fallback**: when `query_text=""` but `query_vector` is provided, returns pure vector results (avoids FTS5 MATCH '' syntax error).
 
 ## Quick Start
 
@@ -165,9 +169,11 @@ myrag/
 │   ├── chunkers/             # Pure Python markdown-it-py chunker (no LangChain)
 │   ├── embedders/            # bge-m3: remote HTTP API + local sentence-transformers
 │   │   ├── __init__.py
-│   │   ├── bge_m3.py         # Unified Embedder with mode dispatch
+│   │   ├── bge_m3.py         # Unified Embedder with mode dispatch + dimension validation
 │   │   └── local_bge.py      # LocalEmbedder via sentence-transformers
-│   └── storage/              # SQLiteVecStore
+│   ├── myrag/                # Shared utilities
+│   │   └── exceptions.py     # Typed exception hierarchy (ParserNotFoundError, EmbeddingError, etc.)
+│   └── storage/              # SQLiteVecStore with FTS5 full-text search
 │       └── sqlite_vec.py
 ├── conf/
 │   ├── config.yaml           # Your endpoints (gitignored)
@@ -218,3 +224,13 @@ cd /home/colinvan/workspace/myrag
 uv run pytest -v
 # 71 tests: chunkers 8 + formatters 9 + storage 13 + integration 9 + config 9 + parsers 12 + embedders 5
 ```
+
+### Linting
+
+```bash
+uv run ruff check .    # Zero tolerance — all edits must pass clean lint
+```
+
+## Configuration Validation
+
+`get_config()` validates required fields (LLM endpoint, model name) on every call. Invalid configs raise `ValueError` with descriptive messages before any pipeline work begins. Debug logging of LLM responses controlled by `debug_log_llm_responses: true` in config (gated by `logging.debug`).

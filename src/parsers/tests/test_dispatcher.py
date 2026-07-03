@@ -1,6 +1,5 @@
 """Tests for the parser dispatcher module."""
 
-import logging
 
 
 class TestRegisterParser:

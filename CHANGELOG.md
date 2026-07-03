@@ -1,5 +1,44 @@
 # Changelog — myRAG Pipeline
 
+## [0.6.0] — 2026-07-03
+
+### Added
+
+- **Unified exception system** (`src/myrag/exceptions.py`): `MyRagException` base class + typed exceptions: `ParserNotFoundError`, `EmbeddingError`, `ChunkingError`, `FormattingError`, `StorageError`. Enables structured error handling across all pipeline stages.
+- **Config validation on startup**: `get_config()` now validates required fields (LLM endpoint, model name) before any pipeline work begins; descriptive errors for invalid configs.
+- **Embedding dimension validation**: Both remote and local backends validate embedding dimension on every call; mismatched dimensions raise `EmbeddingError` with context about expected vs actual size.
+- **Embedder factory function** (`create_embedder()`): Factory pattern replaces direct `Embedder()` instantiation, respects config's `embedding.mode`. Union type for `Embedder | LocalEmbedder` in public API. Optional `validate=True` parameter performs a test embedding at construction time to catch dimension mismatches early.
+- **Debug LLM response logging**: New config flag `debug_log_llm_responses: true` gates full LLM request/response logging via `logging.debug()`. Disabled by default; useful for debugging JSON parsing issues without polluting production logs.
+
+### Changed
+
+- **CJK-aware chunk threshold** (`_detect_cjk_ratio()`): Chunk size scales down from 28000 chars to ~7000 when text is ≥50% CJK (Chinese/Japanese/Korean), based on character-to-token ratio of 1:1 for CJK vs 4:1 for English. Linear interpolation at 10–50% CJK density.
+- **Multi-language tag extraction**: `_detect_body_script()` detects text script; `_tokenize_cjk()` uses bigram + whitespace tokenization for CJK; `_tokenize_latin()` uses `[a-zA-Z]{3,}` regex; multi-language stopword sets (English, Chinese, Japanese); `_extract_cjk_entities()` extracts named-entity-like phrases from CJK text.
+- **Sentence-split abbreviation handling**: `_SENTENCE_ABBREVIATIONS` set with 50+ common abbreviations ("Mr.", "Dr.", "U.S.A.", etc.) prevents false sentence boundary detection in title/initials/acronyms contexts.
+- **O(n) heading lookup** (`_split_by_headings()`): Pre-build `heading_by_line` dict for constant-time per-line lookups instead of O(n*m) nested loop scanning.
+- **Chunker overlap word-boundary preservation**: `_apply_overlap()` now extends back to nearest whitespace boundary before truncating, preserving words intact across chunk boundaries instead of cutting mid-word.
+
+### Fixed
+
+- **FTS5 sync triggers** (`chunks_ai/au/ad`): SQLite content-synced virtual table pattern ensures FTS5 index stays in sync with `chunks` table on INSERT/UPDATE/DELETE without manual trigger maintenance.
+- **JSON serialization dead code removed**: `upsert_chunk()` passes original dicts directly to INSERT instead of round-tripping through `json.dumps`/`json.loads`.
+- **Hybrid search empty query fallback**: Returns pure vector results when `query_text=""` and `query_vector` provided; returns `[]` otherwise (avoids FTS5 MATCH '' syntax error).
+- **Section filter LIKE escaping**: Wildcard LIKE matching now properly escapes `\`, `%`, `_` characters with single-char escape prefix for SQLite `ESCAPE '\'`.
+- **EmbeddingError missing context kwarg**: Added `context: dict | None = None` parameter to `EmbeddingError.__init__`; previously `_validate_embedding_dimension()` would raise TypeError on dimension mismatch.
+- **Dead code after return in `_split_by_sentence`**: Removed unreachable merge-back-to-chunk-size block that was leftover from earlier implementation; each sentence now correctly becomes its own chunk.
+- **Unicode escape handling in bare-quote fixer**: `_fix_bare_quotes_in_body_field()` now recognizes `\uXXXX` escapes (in addition to `\"`, `\\`, etc.) so documents containing unicode-escaped quotes don't corrupt the JSON walker's position tracking.
+
+### Added Tests (+18, total 103)
+
+- `test_cjk_threshold.py`: 9 tests covering `_detect_cjk_ratio()` and `effective_chunk_threshold()` edge cases (CJK-only, mixed CJK/English, empty strings).
+- `test_chunker.py`: Plain text fallback, overlap word-boundary preservation, abbreviation detection.
+- `test_sqlite_vec.py`: FTS5 sync on insert/delete, full-text search function, hybrid RRF ranking verification, empty query fallback.
+
+### Architecture Notes
+
+- **Config resolution chain**: `$MYRAG_CONFIG` → `conf/config.yaml` → `conf/config.example.yaml`. All endpoints configurable via YAML.
+- **Facade pattern** — `TextCleaner` and `Chunker` classes in `pipeline.core` are thin facades that delegate to `parsers.text_cleaner.TextCleaner` and `chunkers.Chunker` respectively. The canonical implementations live in their own modules with full feature support (YAML config, markdown-it-py chunking).
+
 ## [0.5.0] — 2026-06-19
 
 ### Fixed

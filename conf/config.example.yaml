@@ -39,3 +39,4 @@ pipeline:
 # ── Logging Settings ─────────────────────────────────────────────────
 logging:
   max_bytes: 5242880             # 5 MB rotating log file size
+  debug_log_llm_responses: false # when true, saves raw LLM responses to tmp/raw/ for debugging
