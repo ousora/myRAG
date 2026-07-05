@@ -65,13 +65,28 @@ class LocalEmbedder:
             except RuntimeError as e:
                 if "out of memory" in str(e).lower():
                     logger.warning(
-                        "OOM on batch %d–%d, falling back to single-item encoding",
-                        i, i + effective_bs,
+                        "OOM on batch %d–%d (%d items), progressively reducing to single-item encoding",
+                        i, i + effective_bs, len(batch),
                     )
-                    for item in batch:
-                        emb = self._model.encode(item).tolist()
-                        _validate_embedding_dimension(emb)
-                        all_embeddings.append(emb)
+                    # Retry with smaller batches; fall back to single-item on persistent OOM.
+                    sub_batch_size = max(1, len(batch) // 2)
+                    if sub_batch_size == 0:
+                        sub_batch_size = 1
+                    for j in range(i, i + len(batch), sub_batch_size):
+                        sub_batch = text[j:j + sub_batch_size]
+                        try:
+                            sub_emb = self._model.encode(sub_batch).tolist()
+                            all_embeddings.extend(sub_emb)
+                        except RuntimeError as e2:
+                            if "out of memory" in str(e2).lower():
+                                # Absolute fallback: encode one item at a time.
+                                logger.warning("OOM persists; encoding remaining items individually")
+                                for single_item in text[j:j + sub_batch_size]:
+                                    emb = self._model.encode(single_item).tolist()
+                                    _validate_embedding_dimension(emb)
+                                    all_embeddings.append(emb)
+                            else:
+                                raise
                     continue
                 raise
             for e in embeddings.tolist():
@@ -126,8 +141,20 @@ class LocalEmbedder:
 
     @staticmethod
     def _estimate_tokens(text: str) -> int:
-        """Rough token estimate — bge-m3 tokenizer is similar to GPT-like."""
-        return len(text) // 2
+        """Token estimate for bge-m3's SentencePiece tokenizer.
+
+        Uses a multi-language-aware heuristic: CJK characters count as ~1 token,
+        ASCII words average ~4 chars/token (with whitespace). This is more accurate
+        than the naive ``len // 2`` which underestimates Chinese text by ~50%.
+        """
+        cjk = sum(1 for ch in text if "\u4e00" <= ch <= "\u9fff")
+        ascii_chars = sum(1 for ch in text if ("\u0041" <= ch <= "\u005a") or ("a" <= ch <= "z"))
+        other_ascii = len(text) - cjk - ascii_chars
+
+        # CJK: ~1 char/token (SentencePiece byte-level).
+        # ASCII letters/digits: ~4 chars/token.
+        # Punctuation/whitespace: counted as 0.5 token each.
+        return cjk + (ascii_chars // 4) + (other_ascii // 2)
 
     def _adaptive_batch_size(self, texts: list[str]) -> int:
         """Dynamically reduce batch size if total tokens exceed limit."""

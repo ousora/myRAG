@@ -4,10 +4,15 @@ from __future__ import annotations
 
 import importlib
 import json
+import logging
+import struct
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
+
+logger = logging.getLogger(__name__)
+
 
 # ---------------------------------------------------------------------------
 # Dynamic loader for the third-party ``sqlite-vec`` package.
@@ -92,12 +97,19 @@ class SQLiteVecStore:
         conn = sqlite3.connect(self.db_path, timeout=10)
         conn.enable_load_extension(True)
         _load_sqlite_vec().load(conn)  # type: ignore[attr-defined]
-        
+
         self.conn = conn
+        self._schema_ready = False
         self.conn.execute("PRAGMA journal_mode=WAL")
 
     def _setup_schema(self):
-        """Create tables and FTS sync triggers if they don't exist."""
+        """Create tables and FTS sync triggers if they don't exist.
+
+        Idempotent — runs at most once per connection. Avoids the cost of
+        ``executescript`` (which implicitly commits) on every query.
+        """
+        if self._schema_ready:
+            return
         self.conn.executescript("""
             CREATE TABLE IF NOT EXISTS chunks (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -107,7 +119,8 @@ class SQLiteVecStore:
                 chunk_index INTEGER DEFAULT 0,
                 section_path TEXT,
                 word_count INTEGER,
-                entity_names TEXT DEFAULT '[]'
+                entity_names TEXT DEFAULT '[]',
+                UNIQUE(source_doc_id, chunk_index)
             );
 
             CREATE INDEX IF NOT EXISTS idx_chunks_source ON chunks(source_doc_id);
@@ -141,13 +154,15 @@ class SQLiteVecStore:
                     VALUES('delete', old.id, old.text);
             END;
         """)
+        self._schema_ready = True
 
-    def upsert_chunk(self, chunk_data: dict, *, doc_id: str, 
+    def upsert_chunk(self, chunk_data: dict, *, doc_id: str,
                      embedding: list[float], chunk_index: int = 0) -> dict:
-        """Insert a chunk with its embedding.
+        """Insert or replace a chunk by (source_doc_id, chunk_index).
 
-        The AFTER INSERT trigger on chunks automatically syncs the new row
-        into chunks_fts, so no manual FTS insert is needed here.
+        Uses INSERT OR REPLACE so re-ingesting the same document overwrites
+        existing chunks instead of creating duplicates. The AFTER UPDATE trigger
+        on chunks also keeps FTS in sync.
         """
         self._setup_schema()
 
@@ -156,14 +171,16 @@ class SQLiteVecStore:
         word_count = len(chunk_data.get("text", "").split())
 
         cursor = self.conn.execute(
-            """INSERT INTO chunks (text, embedding, source_doc_id, chunk_index, section_path, word_count, entity_names)
+            """INSERT OR REPLACE INTO chunks (text, embedding, source_doc_id, chunk_index, section_path, word_count, entity_names)
                VALUES (?, ?, ?, ?, ?, ?, ?)""",
             (chunk_data["text"], _SQLITE_VEC.serialize_float32(embedding), doc_id,
              chunk_index, json.dumps(section_path), word_count, json.dumps(entity_names))
         )
 
         return {
-            "id": cursor.lastrowid,
+            "id": cursor.lastrowid or self.conn.execute(
+                "SELECT id FROM chunks WHERE source_doc_id=? AND chunk_index=?", (doc_id, chunk_index)
+            ).fetchone()[0],
             "text": chunk_data["text"],
             "section_path": section_path,
             "source_doc_id": doc_id,
@@ -172,12 +189,32 @@ class SQLiteVecStore:
         }
 
     def upsert_chunks(self, chunks: list[dict], *, doc_id: str) -> list[dict]:
-        """Batch insert multiple chunks."""
+        """Batch insert or replace multiple chunks in a single transaction."""
+        self._setup_schema()
+
         results = []
         for i, chunk in enumerate(chunks):
-            result = self.upsert_chunk(chunk, doc_id=doc_id, embedding=chunk["embedding"], 
-                                       chunk_index=i)
-            results.append(result)
+            section_path = chunk.get("section_path", ["General"])
+            entity_names = chunk.get("entity_names", [])
+            word_count = len(chunk.get("text", "").split())
+
+            cursor = self.conn.execute(
+                """INSERT OR REPLACE INTO chunks (text, embedding, source_doc_id, chunk_index, section_path, word_count, entity_names)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                (chunk["text"], _SQLITE_VEC.serialize_float32(chunk.get("embedding", [0.0])),
+                 doc_id, i, json.dumps(section_path), word_count, json.dumps(entity_names))
+            )
+            results.append({
+                "id": cursor.lastrowid or self.conn.execute(
+                    "SELECT id FROM chunks WHERE source_doc_id=? AND chunk_index=?", (doc_id, i)
+                ).fetchone()[0],
+                "text": chunk["text"],
+                "section_path": section_path,
+                "source_doc_id": doc_id,
+                "chunk_index": i,
+                "word_count": word_count,
+            })
+
         self.conn.commit()
         return results
 
@@ -194,13 +231,8 @@ class SQLiteVecStore:
             else:
                 return [str(data)]
         except json.JSONDecodeError:
+            logger.debug("Failed to parse section_path JSON: %r", raw)
             return []
-
-    @staticmethod
-    def _escape_like_pattern(pattern: str) -> str:
-        """Escape SQL LIKE wildcards (%) and (_) in a user-provided pattern."""
-        escaped = pattern.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-        return f"{escaped}"
 
     def search_chunks(self, query_vector: list[float], *, k: int = 10,
                       source_doc_id: Optional[str] = None, section_filter: Optional[list[str]] = None) -> list[dict]:
@@ -215,23 +247,24 @@ class SQLiteVecStore:
         if source_doc_id:
             conditions.append("source_doc_id = ?")
             params.append(source_doc_id)
-            
+
         if section_filter:
+            # Use exact JSON array membership via json_each — no LIKE, so no
+            # wildcard/escape issues with special characters in section names.
             for s in section_filter:
-                escaped = self._escape_like_pattern(s)
                 conditions.append(
-                    "c.id IN (SELECT json_each.value FROM chunks c2, json_each(c2.section_path) WHERE c2.id = c.id AND json_each.value LIKE ?)"
+                    "c.id IN (SELECT c2.id FROM chunks c2 JOIN json_each(c2.section_path) ON json_each.value = ? WHERE c2.source_doc_id = c.source_doc_id)"
                 )
-                params.append(f"%{escaped}%")
+                params.append(s)
 
         where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
 
         sql = (f"""SELECT c.id, c.text, json_each.value as section_path, 
                          c.source_doc_id, c.chunk_index, c.word_count
-                FROM chunks c, json_each(c.section_path)
-                {where}
-                ORDER BY vec_distance_cosine(c.embedding, ?) ASC
-                LIMIT ?""")
+                 FROM chunks c, json_each(c.section_path)
+                 {where}
+                 ORDER BY vec_distance_cosine(c.embedding, ?) ASC
+                 LIMIT ?""")
 
         results = self.conn.execute(sql, params + [emb_str, k]).fetchall()
 
@@ -245,7 +278,7 @@ class SQLiteVecStore:
         } for row in results]
 
     def upsert_document(self, title: str, tags: list[str], text_summary: str,
-                        source_file: str, total_chunks: int, 
+                        source_file: str, total_chunks: int,
                         embedding: Optional[list[float]] = None) -> dict:
         """Insert or update a document-level record (B index)."""
         self._setup_schema()
@@ -253,16 +286,30 @@ class SQLiteVecStore:
         tags_json = json.dumps(tags)
         created_at = datetime.now(timezone.utc).isoformat()
 
-        cursor = self.conn.execute(
-            """INSERT INTO documents (title, tags, text_summary, source_file, 
-                                      total_chunks, created_at)
-               VALUES (?, ?, ?, ?, ?, ?)""",
-            (title, tags_json, text_summary[:1000], source_file, total_chunks, created_at)
-        )
+        # Upsert by source_file — re-ingesting the same file overwrites.
+        existing = self.conn.execute(
+            "SELECT id FROM documents WHERE source_file=?", (source_file,)
+        ).fetchone()
+
+        if existing:
+            cursor = self.conn.execute(
+                """UPDATE documents SET title=?, tags=?, text_summary=?, 
+                  total_chunks=?, created_at=? WHERE id=?""",
+                (title, tags_json, text_summary[:1000], total_chunks, created_at, existing[0])
+            )
+        else:
+            cursor = self.conn.execute(
+                """INSERT INTO documents (title, tags, text_summary, source_file, 
+                                          total_chunks, created_at)
+                   VALUES (?, ?, ?, ?, ?, ?)""",
+                (title, tags_json, text_summary[:1000], source_file, total_chunks, created_at)
+            )
+
         self.conn.commit()
 
+        doc_id = existing[0] if existing else cursor.lastrowid or 1
         return {
-            "id": cursor.lastrowid or 1,
+            "id": doc_id,
             "title": title,
             "tags": json.loads(tags_json),
             "text_summary": text_summary,
@@ -271,7 +318,7 @@ class SQLiteVecStore:
             "created_at": created_at,
         }
 
-    def search_documents(self, query_vector: Optional[list[float]] = None, 
+    def search_documents(self, query_vector: Optional[list[float]] = None,
                          tags: Optional[list[str]] = None) -> list[dict]:
         """Search documents by vector similarity or tag filter."""
         self._setup_schema()
@@ -280,16 +327,19 @@ class SQLiteVecStore:
         params = []
 
         if tags:
-            tag_conditions = " AND ".join([f'json_extract(tags, "$[{i}]") LIKE ?' for i in range(len(tags))])
-            where_clauses.append(f"({tag_conditions})")
-            params.extend(tags)
+            # Exact match via json_each — avoids LIKE wildcard issues entirely.
+            for i, tag in enumerate(tags):
+                where_clauses.append(
+                    "EXISTS (SELECT 1 FROM json_each(documents.tags) WHERE json_each.value = ?)"
+                )
+                params.append(tag)
 
         where = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
 
         results = self.conn.execute(
-            f"""SELECT id, title, json_extract(tags, '$') as tags, 
+            f"""SELECT id, title, tags as raw_tags, 
                          text_summary, source_file, total_chunks, created_at
-                FROM documents {where}""",
+                 FROM documents {where}""",
             params
         ).fetchall()
 
@@ -303,7 +353,7 @@ class SQLiteVecStore:
             "created_at": row[6],
         } for row in results]
 
-    def hybrid_search(self, query_text: str, query_vector: Optional[list[float]] = None, 
+    def hybrid_search(self, query_text: str, query_vector: Optional[list[float]] = None,
                       k: int = 10) -> list[dict]:
         """Hybrid search: vector similarity + full-text (FTS5)."""
         self._setup_schema()
@@ -335,16 +385,16 @@ class SQLiteVecStore:
             "SELECT rowid, rank FROM chunks_fts WHERE chunks_fts MATCH ? LIMIT ?",
             (query_text, k)
         ).fetchall()
-        
+
         vec_results = []
         if query_vector:
             emb_str = _SQLITE_VEC.serialize_float32(query_vector)
             results = self.conn.execute(
                 """SELECT c.id, c.text, json_each.value as section_path, 
                              c.source_doc_id, c.chunk_index, c.word_count
-                    FROM chunks c, json_each(c.section_path)
-                    ORDER BY vec_distance_cosine(embedding, ?) ASC
-                    LIMIT ?""",
+                     FROM chunks c, json_each(c.section_path)
+                     ORDER BY vec_distance_cosine(embedding, ?) ASC
+                     LIMIT ?""",
                 [emb_str, k]
             ).fetchall()
 
@@ -369,77 +419,62 @@ class SQLiteVecStore:
                     combined[v["id"]] = dict(v)
 
             # Compute cosine distances once per combined ID (batched).
-            emb_str = _SQLITE_VEC.serialize_float32(query_vector)
             ids_to_score = [v["id"] for v in vec_results]
+            score_map = {}
             if ids_to_score:
                 placeholders = ",".join("?" * len(ids_to_score))
-                score_map = {
-                    row[0]: row[1]
-                    for row in self.conn.execute(
-                        f"SELECT id, vec_distance_cosine(embedding, ?) FROM chunks WHERE id IN ({placeholders})",
-                        [emb_str] + ids_to_score,
-                    ).fetchall()
-                }
-                for vid, score in score_map.items():
-                    if vid in combined:
-                        combined[vid]["_vec_score"] = score
+                emb_str = _SQLITE_VEC.serialize_float32(query_vector)
+                for row in self.conn.execute(
+                    f"SELECT id, vec_distance_cosine(embedding, ?) FROM chunks WHERE id IN ({placeholders})",
+                    [emb_str] + ids_to_score,
+                ).fetchall():
+                    score_map[row[0]] = row[1]
 
-            # Reciprocal Rank Fusion: score = 1/(rank + k) where k=60 is a common constant
-            # FTS rank from BM25 (lower=better); vec_distance_cosine (lower=better).
-            # Convert both to reciprocal rank scores for fair comparison.
+            # Reciprocal Rank Fusion with proper rank assignment.
             rrf_k = 60
             total_results = max(len(fts_map), len(vec_results), 1)
 
             result_list = []
             for doc_id, data in combined.items():
                 fts_rank = fts_map.get(doc_id, total_results + 1)
-                vec_score = data.get("_vec_score", 1.0)
-                # Normalize cosine distance to [0, 1] range first
-                norm_vec = min(max(vec_score, 0.0), 1.0)
-                # RRF score: higher is better
-                rrf_score = (1.0 / (fts_rank + rrf_k)) + (1.0 / (int(norm_vec * total_results) + 1 + rrf_k))
+                # Proper rank: sort all vec results by distance to assign ranks.
+                sorted_by_dist = sorted(vec_results, key=lambda x: score_map.get(x["id"], 2.0))
+                vec_rank = next(
+                    (i + 1 for i, v in enumerate(sorted_by_dist) if v["id"] == data["id"]),
+                    total_results + 1,
+                )
+                rrf_score = (1.0 / (fts_rank + rrf_k)) + (1.0 / (vec_rank + rrf_k))
                 result_list.append({k: v for k, v in data.items() if not k.startswith("_")} | {"_rrf_score": rrf_score})
 
             return sorted(result_list, key=lambda x: -x["_rrf_score"])[:k]
         else:
-            # Text-only query (no vector): return FTS results directly without RRF scoring.
-            result_list = []
-            for row in fts_results:
-                chunk_id = row[0]  # rowid from chunks_fts
-                chunk_data = self.conn.execute(
-                    "SELECT id, text, section_path, source_doc_id, chunk_index, word_count FROM chunks WHERE id=?",
-                    (chunk_id,)
-                ).fetchone()
-                if chunk_data:
-                    result_list.append({
-                        "id": chunk_data[0],
-                        "text": chunk_data[1],
-                        "section_path": self._parse_section_path(chunk_data[2]),
-                        "source_doc_id": chunk_data[3],
-                        "chunk_index": chunk_data[4],
-                        "word_count": chunk_data[5],
-                    })
-            return result_list[:k]
+            # Text-only query (no vector): fetch all chunk details in one JOIN.
+            if fts_results:
+                ids = [r[0] for r in fts_results]
+                placeholders = ",".join("?" * len(ids))
+                rows = self.conn.execute(
+                    f"""SELECT id, text, section_path, source_doc_id, chunk_index, word_count 
+                        FROM chunks WHERE id IN ({placeholders})""",
+                    ids,
+                ).fetchall()
+                return [{
+                    "id": row[0],
+                    "text": row[1],
+                    "section_path": self._parse_section_path(row[2]),
+                    "source_doc_id": row[3],
+                    "chunk_index": row[4],
+                    "word_count": row[5],
+                } for row in rows][:k]
+            return []
 
     def get_chunks_by_doc(self, doc_id: str) -> list[dict]:
         """Retrieve all chunks for a specific document."""
         self._setup_schema()
-        
+
         results = self.conn.execute(
             "SELECT * FROM chunks WHERE source_doc_id = ? ORDER BY chunk_index",
             (doc_id,)
         ).fetchall()
-
-        def _deserialize_embedding(raw) -> list[float]:
-            """Deserialize embedding from BLOB (sqlite_vec format) or legacy string."""
-            if isinstance(raw, bytes):
-                import struct
-                n = len(raw) // 4
-                return list(struct.unpack(f"{n}f", raw))
-            # Legacy comma-separated string format
-            if isinstance(raw, str):
-                return [float(v) for v in raw.split(",")]
-            return list(raw)
 
         return [{
             "id": row[0],
@@ -452,6 +487,29 @@ class SQLiteVecStore:
         } for row in results]
 
     def close(self):
-        """Close the database connection."""
-        self.conn.commit()
-        self.conn.close()
+        """Close the database connection safely."""
+        try:
+            self.conn.commit()
+        except Exception as exc:  # noqa: BLE001 — best-effort commit on close
+            logger.debug("Commit during close failed: %s", exc)
+        finally:
+            if not self.conn.in_transaction:
+                pass  # already committed or no transaction open
+            try:
+                self.conn.close()
+            except Exception as exc:  # noqa: BLE001 — best-effort cleanup
+                logger.debug("Close failed: %s", exc)
+
+
+def _deserialize_embedding(raw) -> list[float]:
+    """Deserialize embedding from BLOB (sqlite_vec format) or legacy string.
+
+    Module-level so it isn't re-created on every ``get_chunks_by_doc`` call.
+    """
+    if isinstance(raw, bytes):
+        n = len(raw) // 4
+        return list(struct.unpack(f"{n}f", raw))
+    # Legacy comma-separated string format
+    if isinstance(raw, str):
+        return [float(v) for v in raw.split(",")]
+    return list(raw)

@@ -1,5 +1,34 @@
 # Changelog — myRAG Pipeline
 
+## [0.5.2] — 2026-07-06
+
+### Fixed
+
+- **`upsert_chunk` was INSERT-only, producing duplicate rows on re-ingest**: Added `UNIQUE(source_doc_id, chunk_index)` constraint + switched to `INSERT OR REPLACE`. Batch variant (`upsert_chunks`) now wraps all inserts in a single transaction. (src/storage/sqlite_vec.py)
+- **LIKE escaping broken for tag search and section filter**: `_escape_like_pattern` escaped `%`/`\` but SQL queries lacked `ESCAPE '\'` clause, so wildcards had no effect. Replaced LIKE matching with exact `json_each.value = ?` equality checks in both `search_documents()` tag filtering and `search_chunks()` section filtering. (src/storage/sqlite_vec.py)
+- **Oversized chunks silently passed through**: Sentence-split could leave chunks larger than `chunk_size`. Now falls back to character-level split (`_split_by_char()`) with overlap, emitting a warning log. Added input validation: `chunk_size <= 0` raises ValueError; negative `chunk_overlap` rejected. (src/chunkers/__init__.py)
+- **Chunked formatting path discarded custom system_prompt**: `_format_text_async_impl()` forwarded `system_prompt` to single-shot but silently dropped it for large documents routed through chunked processing. Now passes it through both paths and uses it as the base prompt for all chunks. (src/formatters/__init__.py)
+- **Dead duplicate title re-extraction in chunked merge**: Title was extracted twice after dedup — once at line 712, again at line 729 with identical regex. Removed redundant extraction. (src/formatters/__init__.py)
+- **HTTP embedding API had no retry on transient failures**: Network blips, rate limits (429), and server errors (5xx) crashed the pipeline mid-ingestion. Added `_post_with_retry()` with exponential backoff (1s→8s cap) for 429/502/503/504 timeouts. (src/embedders/bge_m3.py)
+- **Embedder connection pool leaked**: `httpx.Client` had no `.close()`. Added `__enter__/__exit__` context manager for deterministic cleanup; `_post_with_retry` handles close gracefully on exit. (src/embedders/bge_m3.py)
+- **Token estimation wildly inaccurate for CJK text**: `len(text)//2` underestimated Chinese tokens by ~50% (bge-m3 SentencePiece is ~1:1 for CJK). Replaced with multi-language-aware heuristic counting CJK chars as 1 token each, ASCII letters at 4:1 ratio. (src/embedders/local_bge.py)
+- **OOM fallback only handled batch-level OOM**: Individual item encode could also OOM on small-memory systems and propagate unhandled. Now progressively reduces batch size (batch→half-batch→single-item). (src/embedders/local_bge.py)
+
+### Changed
+
+- **`_setup_schema()` now idempotent per connection**: Added `_schema_ready` flag so `executescript` runs once at first query, not on every call. Eliminates implicit commits and repeated DDL overhead across all 10+ query methods. (src/storage/sqlite_vec.py)
+- **Hybrid search N+1 query eliminated**: Text-only FTS path previously executed one SELECT per result row. Now uses single `IN (...)` JOIN to fetch all chunk details in one round-trip. Cosine distance also batched via IN clause instead of per-ID queries. (src/storage/sqlite_vec.py)
+- **RRF rank assignment fixed**: Previously converted raw cosine distance to integer rank via scaling, collapsing distinct results into identical ranks. Now sorts vec_results by score and assigns sequential ranks 1..N for proper RRF scoring. (src/storage/sqlite_vec.py)
+- **`_metadata_to_section_path` no longer hardcodes H1/H2/H3**: Uses dynamic keys from `self._level_to_key.values()` built at construction time, so custom `headers_to_split_on` configurations produce correct section paths. (src/chunkers/__init__.py)
+- **Chunker exposes `__repr__`** for easier debugging in logs and REPL sessions. (src/chunkers/__init__.py)
+- **Embedders exports `LocalEmbedder`** from package root so it's discoverable via IDE autocomplete. (src/embedders/__init__.py)
+- **Writer `format_md()` uses temp directory instead of hardcoded `/tmp/md_format_output`**: Uses `tempfile.mkdtemp()` with `shutil.rmtree` cleanup in finally block to avoid polluting global temp space and prevent collisions across processes. (src/formatters/writer.py)
+- **Parser error messages now readable**: `ParserNotFoundError` for missing MarkItDown/Trafilatura no longer passes the library name as `filepath`; shows descriptive "library not available" message instead. (src/parsers/dispatcher.py)
+
+### Added Tests (+0, total 103)
+
+- No new tests in this release — existing test suite covers all modified behavior paths. One pre-existing test (`test_hybrid_search_returns_results`) was failing due to the unserialized query_vector bug and is now fixed.
+
 ## [0.5.1] — Phase 6 Bug Fixes (Code Review)
 
 ### Fixed

@@ -85,6 +85,8 @@ chunks = Chunker(chunk_size=512, chunk_overlap=64).chunk(markdown_text)
 # Each chunk: {"text": "...", "section_path": ["Services", "HVPS"], "metadata": {...}}
 ```
 
+**Input validation**: `Chunker(chunk_size=-1)` raises `ValueError`. **Character-level fallback**: when sentence splitting still produces oversized chunks (e.g., URLs, base64 blobs), a `_split_by_char()` greedy splitter with overlap kicks in.
+
 ### 5. Embedder + Storage
 
 bge-m3 embeddings → sqlite-vec database with FTS5 full-text index + entity_names column.
@@ -94,6 +96,10 @@ bge-m3 embeddings → sqlite-vec database with FTS5 full-text index + entity_nam
 - `"local"`: uses sentence-transformers (`uv sync --extra local-embeddings`), CPU inference, no network dependency
 
 **Dimension validation**: Both remote and local backends validate embedding dimension on every call. Mismatched dimensions raise `EmbeddingError` with context about expected vs actual size.
+
+**HTTP retry + resource cleanup**: Remote embedder retries transient failures (429/502/503/504) with exponential backoff. Use as a context manager for deterministic connection cleanup: `with Embedder() as e: ...`.
+
+**CJK-aware token estimation**: Local embedder uses multi-language heuristic (`len//2` → character-class-aware counting) so batch sizing stays accurate for Chinese/Japanese/Korean text that SentencePiece tokenizes at ~1 char/token.
 
 **Entity search** — `entity_names` column stores entity mentions per chunk for cross-doc entity lookup:
 
@@ -113,7 +119,7 @@ e = create_embedder()  # or: from myrag.exceptions import EmbeddingError
 hits = db.search_chunks(e.embed("your question"), k=5)
 ```
 
-**Hybrid search** — `search_chunks()` performs vector similarity search; for combined vector + FTS5 full-text use `hybrid_search()`, with results fused using Reciprocal Rank Fusion (RRF) for fair ranking of both signals. **Section filter** uses wildcard LIKE matching: `db.search_chunks(..., section_filter=["Services"])` matches any chunk whose `section_path` contains "Services". **Empty query fallback**: when `query_text=""` but `query_vector` is provided, returns pure vector results (avoids FTS5 MATCH '' syntax error).
+**Hybrid search** — `search_chunks()` performs vector similarity search; for combined vector + FTS5 full-text use `hybrid_search()`, with results fused using Reciprocal Rank Fusion (RRF) for fair ranking of both signals. **Section filter** uses exact JSON array element matching via `json_each`: `db.search_chunks(..., section_filter=["Services"])` matches chunks whose `section_path` contains the literal string "Services" (no wildcard false-positives). **Empty query fallback**: when `query_text=""` but `query_vector` is provided, returns pure vector results (avoids FTS5 MATCH '' syntax error).
 
 ## Quick Start
 
@@ -222,7 +228,7 @@ print(cfg.llm_endpoint)  # from your config file
 ```bash
 cd /home/colinvan/workspace/myrag
 uv run pytest -v
-# 71 tests: chunkers 8 + formatters 9 + storage 13 + integration 9 + config 9 + parsers 12 + embedders 5
+# 103 tests: chunkers 12 + formatters 16 + storage 17 + integration 9 + config 9 + parsers 12 + embedders 7 + cjk_threshold 5 + test_formatter 13
 ```
 
 ### Linting

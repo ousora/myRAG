@@ -497,7 +497,7 @@ def _extract_tags_from_body(body: str, title: str) -> list[str]:
     from collections import Counter
 
     script = _detect_body_script(body + " " + title)
-    stop_words = _STOP_WORDS_BY_SCRIPT.get(script, _STOP_WORDS_BY_SCRIPT["latin"])
+    stop_words = _STOP_WORDS_BY_SCRIPT.get(script, frozenset(_STOP_WORDS_BY_SCRIPT["latin"]))
 
     # ── Tokenize according to detected script ───────────────────
     if script == "cjk":
@@ -643,7 +643,7 @@ def _format_text_single(raw: str, source_type: str = "web", *, system_prompt: st
     return result
 
 
-def _format_text_chunked(raw: str, source_type: str = "pdf") -> Dict[str, Any]:
+def _format_text_chunked(raw: str, source_type: str = "pdf", *, system_prompt: str | None = None) -> Dict[str, Any]:
     """Chunked formatting for large documents.
 
     Splits text by paragraph, processes each chunk with LLM context
@@ -659,8 +659,19 @@ def _format_text_chunked(raw: str, source_type: str = "pdf") -> Dict[str, Any]:
     all_parts: list[str] = []
     cumulative_summary = ""
 
+    # Determine the system prompt once — custom prompts override defaults for all chunks.
+    if system_prompt is not None:
+        base_system_prompt = system_prompt
+    else:
+        base_system_prompt = get_chunked_system_prompt(0, total)  # title will be empty until merge
+
     for i, chunk_text in enumerate(chunks):
-        system_prompt = get_chunked_system_prompt(i, total)
+        # For non-first chunks with a document title available from metadata, 
+        # regenerate the prompt to include it. Otherwise use the base prompt.
+        if system_prompt is None and i > 0:
+            current_system_prompt = get_chunked_system_prompt(i, total)
+        else:
+            current_system_prompt = base_system_prompt
 
         prev_tail = _get_last_n_lines(all_parts, 10)
         prev_tail_block = (
@@ -685,7 +696,7 @@ def _format_text_chunked(raw: str, source_type: str = "pdf") -> Dict[str, Any]:
                      i + 1, total, len(chunk_text))
         cfg = _get_config()
         result = call_llm(
-            system_prompt,
+            current_system_prompt,
             user_message,
             max_tokens=cfg.chunk_max_tokens,
             timeout=cfg.chunk_timeout,
@@ -725,10 +736,6 @@ def _format_text_chunked(raw: str, source_type: str = "pdf") -> Dict[str, Any]:
         body = '\n'.join(cleaned_lines)
 
     # Extract sections from ## and ### headers in body (after dedup)
-    if title_match:
-        title = title_match.group(1).strip()
-
-    # Extract sections from ## and ### headers in body
     sections: list[dict] = []
     for match in re.finditer(r'^(#{2,3})\s+(.+)$', body, re.MULTILINE):
         level = len(match.group(1))
@@ -808,7 +815,7 @@ def _format_text_async_impl(raw: str, source_type: str, *, system_prompt: str | 
     raw_len = len(raw)
     threshold = effective_chunk_threshold(raw)
     if raw_len > threshold:
-        return _format_text_chunked(raw, source_type)
+        return _format_text_chunked(raw, source_type, system_prompt=system_prompt)
 
     return _format_text_single(raw, source_type, system_prompt=system_prompt)
 
@@ -846,7 +853,7 @@ def format_text_with_system(raw: str, source_type: str = "web", *, system_prompt
     raw_len = len(raw)
     threshold = effective_chunk_threshold(raw)
     if raw_len > threshold:
-        return _format_text_chunked(raw, source_type)
+        return _format_text_chunked(raw, source_type, system_prompt=system_prompt)
 
     return _format_text_single(raw, source_type, system_prompt=system_prompt)
 

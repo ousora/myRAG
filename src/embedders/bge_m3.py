@@ -33,6 +33,7 @@ Schema:
         - vector: float[]  # bge-m3 → 1024-d
 """
 
+import httpx
 import logging
 
 from config import get_config
@@ -93,10 +94,51 @@ class Embedder:
         base_url = base_url or cfg.embedding_base_url
         model = model or cfg.embedding_model
 
-        import httpx
-
         self.client = httpx.Client(base_url=base_url, timeout=cfg.embedding_timeout)
         self.model = model
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc_info):
+        if hasattr(self, "client") and self.client is not None:
+            try:
+                self.client.close()
+            except Exception:  # noqa: BLE001 — best-effort cleanup
+                pass
+            self.client = None
+
+    def _post_with_retry(self, url: str, payload: dict, *, max_retries: int = 3) -> httpx.Response:
+        """POST to the embedding API with exponential backoff on transient errors.
+
+        Retries on HTTP 429 (rate limit), 502/503/504 (server errors). Exponential
+        backoff starts at 1s, capped at 8s. Non-transient errors raise immediately.
+        """
+        import time as _time
+
+        last_exc = None
+        for attempt in range(max_retries + 1):
+            try:
+                resp = self.client.post(url, json=payload)
+                if not resp.is_server_error and resp.status_code != 429:
+                    return resp
+                # Transient error — retry with backoff.
+                wait = min(2 ** attempt, 8)
+                logger.warning(
+                    "Embedding API returned %d (attempt %d/%d), retrying in %ds",
+                    resp.status_code, attempt + 1, max_retries + 1, wait,
+                )
+                last_exc = RuntimeError(f"HTTP {resp.status_code}: {resp.text[:200]}")
+                _time.sleep(wait)
+            except httpx.TimeoutException as exc:
+                logger.warning(
+                    "Embedding API timed out (attempt %d/%d), retrying in %ds",
+                    attempt + 1, max_retries + 1, min(2 ** attempt, 8),
+                )
+                last_exc = exc
+                _time.sleep(min(2 ** attempt, 8))
+
+        raise RuntimeError(f"Embedding API failed after {max_retries} retries: {last_exc}") from last_exc
 
     def embed(self, text: str | list[str]) -> list[list[float]]:
         """Get embeddings for one or multiple texts."""
@@ -105,7 +147,7 @@ class Embedder:
         else:
             payload = {"model": self.model, "input": text}
 
-        resp = self.client.post("/v1/embeddings", json=payload)
+        resp = self._post_with_retry("/v1/embeddings", payload)
         resp.raise_for_status()
         data = resp.json()
 

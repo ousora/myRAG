@@ -62,7 +62,7 @@ class MarkItDownParser(TextParser):
             self._converter = MarkItDown()
         except ImportError as exc:
             raise ParserNotFoundError(
-                filepath="<markitdown>",
+                filepath="MarkItDown library not available",
                 available_parsers=[],
             ) from exc
 
@@ -89,7 +89,7 @@ class TrafilaturaParser(TextParser):
             self._extract = trafilatura.extract
         except ImportError as exc:
             raise ParserNotFoundError(
-                filepath="<trafilatura>",
+                filepath="Trafilatura library not available",
                 available_parsers=[],
             ) from exc
 

@@ -131,8 +131,11 @@ def write_to_md(result, output_dir):
 
     md_content = "\n".join(lines).rstrip() + "\n"
 
-    with open(file_path, "w", encoding="utf-8") as f:
-        f.write(md_content)
+    try:
+        with open(file_path, "w", encoding="utf-8") as f:
+            f.write(md_content)
+    except (OSError, PermissionError) as exc:  # noqa: BLE001 — log and re-raise with context
+        raise OSError(f"Failed to write markdown file to {file_path}: {exc}") from exc
 
     return file_path
 
@@ -147,11 +150,14 @@ def _safe_filename(title):
         title: Document title string
 
     Returns:
-        Safe filename without extension
+        Safe filename without extension, never empty.
     """
     # Remove only characters that cause issues across all filesystems
     safe = re.sub(r'[/\\:*?"<>|]', '_', title)
-    return safe.strip()
+    safe = safe.strip() or "untitled"
+    if len(safe) > 200:
+        safe = safe[:200]
+    return safe
 
 
 def _write_yaml_frontmatter(lines, result):
@@ -235,10 +241,17 @@ def _write_body_with_sections(lines, body: str, sections: list):
 
 def format_md(result):
     """Format result into markdown string (no file write)."""
-    os.makedirs("/tmp/md_format_output", exist_ok=True)
-    path = write_to_md(result, "/tmp/md_format_output")
-    with open(path, "r", encoding="utf-8") as f:
-        return f.read()
+    import tempfile
+
+    tmp_dir = Path(tempfile.mkdtemp(prefix="myrag_md_"))
+    path = write_to_md(result, str(tmp_dir))
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return f.read()
+    finally:
+        # Clean up the temp directory and its file.
+        import shutil
+        shutil.rmtree(tmp_dir, ignore_errors=True)
 
 
 __all__ = ["format_md", "write_to_md"]

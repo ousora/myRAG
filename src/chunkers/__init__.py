@@ -32,8 +32,13 @@ class Chunker:
         chunk_overlap: int = 64,
         headers_to_split_on: Optional[list[tuple[str, str]]] = None,
     ):
+        if chunk_size <= 0:
+            raise ValueError(f"chunk_size must be positive (got {chunk_size})")
+        if chunk_overlap < 0:
+            raise ValueError(f"chunk_overlap must be non-negative (got {chunk_overlap})")
+
         self.chunk_size = chunk_size
-        self.chunk_overlap = chunk_overlap
+        self.chunk_overlap = min(chunk_overlap, chunk_size // 4)
 
         if headers_to_split_on is None:
             headers_to_split_on = [
@@ -206,18 +211,20 @@ class Chunker:
     # Metadata helpers
     # ------------------------------------------------------------------
 
-    @staticmethod
-    def _metadata_to_section_path(metadata: dict) -> list[str]:
+    def _metadata_to_section_path(self, metadata: dict) -> list[str]:
         """Convert metadata dict to a flat section_path list.
 
-        Metadata keys: {"H1": "Title", "H2": "Section", "H3": "Sub"}
+        Metadata keys are dynamic (e.g. {"H1": "Title", "H2": "Section"})
+        built from ``headers_to_split_on`` at construction time.
         → section_path: ["Section"] or ["Section", "Sub"]
 
-        If there's no H1 (document title), the top-level header is used directly.
-        Otherwise H1 is stripped — section_path starts at H2.
+        If H1 exists, it is stripped — section_path starts at the next level.
         """
+        if not metadata:
+            return ["General"]
+
         parts = []
-        for key in ("H1", "H2", "H3"):
+        for key in self._level_to_key.values():
             val = metadata.get(key, "").strip()
             if val:
                 parts.append(val)
@@ -225,9 +232,9 @@ class Chunker:
         if not parts:
             return ["General"]
 
-        # If H1 exists, strip it (it's the doc title, not a section)
-        has_h1 = bool(metadata.get("H1", "").strip())
-        if has_h1 and len(parts) > 1:
+        # If H1 (or first-level key) exists and there are deeper levels, strip it.
+        has_first = bool(metadata.get(next(iter(self._level_to_key.values()), ""), "").strip())
+        if has_first and len(parts) > 1:
             return parts[1:]
         return parts
 
@@ -283,11 +290,22 @@ class Chunker:
         paragraphs = [p for p in text.split("\n\n") if p.strip()]
         chunks = self._merge_segments(paragraphs)
 
-        # If any chunk still oversized, split by sentence boundary
+        # If any chunk still oversized, split by sentence boundary then char-level.
+        import logging as _logging
+        _logger = _logging.getLogger(__name__)
         final_chunks: list[str] = []
         for chunk in chunks:
             if len(chunk) > self.chunk_size:
-                final_chunks.extend(self._split_by_sentence(chunk))
+                sub = self._split_by_sentence(chunk)
+                # If sentence split still produces oversized pieces, do char-level.
+                remaining_oversized = [c for c in sub if len(c) > self.chunk_size]
+                if remaining_oversized:
+                    _logger.warning(
+                        "Chunk %d (%d chars) exceeded chunk_size after sentence split; using character-level fallback",
+                        len(final_chunks), len(remaining_oversized[0]),
+                    )
+                    sub = self._split_by_char(sub)
+                final_chunks.extend(sub)
             else:
                 final_chunks.append(chunk)
 
@@ -389,12 +407,49 @@ class Chunker:
 
         return sentences
 
+    def _split_by_char(self, segments: list[str]) -> list[str]:
+        """Hard fallback: split oversized text at character boundaries.
+
+        Used when sentence-level splitting still produces chunks larger than
+        chunk_size (e.g., URLs without spaces, base64 blobs). Splits greedily
+        into fixed-size pieces with overlap to preserve continuity.
+        """
+        result: list[str] = []
+        if not segments:
+            return result
+
+        # Merge all oversized segments into one string for contiguous splitting.
+        merged = "\n\n".join(s for s in segments if len(s) > self.chunk_size)
+        if not merged.strip():
+            return [s for s in segments if len(s) <= self.chunk_size]
+
+        start = 0
+        while start < len(merged):
+            end = min(start + self.chunk_size, len(merged))
+            # Try to break at whitespace near the chunk boundary.
+            if end < len(merged):
+                break_at = merged.rfind(" ", max(start, end - 128), end)
+                if break_at > start:
+                    end = break_at + 1
+            result.append(merged[start:end].strip())
+            # Overlap: reuse the last portion of this chunk as prefix for next.
+            overlap_text = ""
+            if self.chunk_overlap > 0 and len(result[-1]) > self.chunk_overlap:
+                tail = result[-1][-self.chunk_overlap:]
+                ws_pos = tail.rfind(" ")
+                if ws_pos >= 0:
+                    overlap_text = " " + tail[ws_pos + 1:]
+            start = end - (len(overlap_text))
+
+        return [c for c in result if c.strip()]
+
     def _apply_overlap(self, chunks: list[str]) -> list[str]:
         """Apply chunk_overlap by prepending tail of previous chunk.
 
         Extends the overlap window back to the nearest whitespace boundary so
         that words are never split in the middle — continuity across chunks is
         preserved at natural word edges instead of arbitrary character cuts.
+        Does NOT exceed chunk_size on the combined length.
         """
         if self.chunk_overlap <= 0 or len(chunks) <= 1:
             return chunks
@@ -413,8 +468,15 @@ class Chunker:
                     break
 
             prev_chunk_overlap = raw_tail[overlap_start:]
-            result.append(prev_chunk_overlap + chunks[i])
+            combined = prev_chunk_overlap + chunks[i]
+            # If combined exceeds chunk_size, trim from the front.
+            if len(combined) > self.chunk_size:
+                combined = combined[-self.chunk_size:]
+            result.append(combined.strip())
         return result
+
+    def __repr__(self) -> str:
+        return (f"Chunker(chunk_size={self.chunk_size}, chunk_overlap={self.chunk_overlap})")
 
 
 def chunk_text(text: str, **kwargs) -> list[dict]:
