@@ -1,5 +1,23 @@
 # Changelog — myRAG Pipeline
 
+## [0.5.1] — Phase 6 Bug Fixes (Code Review)
+
+### Fixed
+
+- **Unhandled `TimeoutError` in pipeline**: `process_file_hybrid()` and `process_file_with_md()` now catch `concurrent.futures.TimeoutError` from `future.result()`. Previously a slow LLM would crash the entire pipeline with an unhandled exception.
+- **CJK ratio detection misclassified non-CJK text**: `_detect_cjk_ratio()` was treating all non-ASCII characters (Cyrillic, Arabic, Devanagari) as CJK. Now only counts actual CJK ranges (`\u4E00-\u9FFF`, Hiragana `\u3040-\u309F`, Katakana `\u30A0-\u30FF`). Non-CJK multilingual documents no longer get incorrectly aggressive chunking thresholds.
+- **`format_text_with_system()` used wrong threshold**: Was calling `_get_chunk_threshold()` (English-only default) instead of `effective_chunk_threshold(raw)` like the other two public formatters. CJK text routed through this function would exceed LLM token limits.
+- **Duplicate headings in markdown output**: `_render_markdown_with_sections()` was appending body content that already contained `##`/`###` headers on top of metadata-section-rendered headers, producing duplicate headings. Body heading lines are now stripped before appending.
+- **Section filter LIKE false-positive matches**: `search_chunks()` used `LIKE '%General%'` against the raw JSON array string (`["General","ReGeneral"]`) which matched substring `"ReGeneral"`. Now uses `json_each()` unnest + IN subquery for precise per-element matching.
+- **Tag filter semantics changed from OR to AND**: `search_documents()` was using `OR` between tag conditions (any-match), but the parameter name and expected behavior imply all-specified-tags-must-match. Changed to `AND`.
+- **Redundant SQL in hybrid_search RRF loop**: Each combined ID triggered a separate `serialize_float32()` + single-row SQL query for cosine distance. Now serializes once and uses `IN (...)` batch query, eliminating N redundant round-trips.
+- **Path traversal on `output_dir`**: `write_to_md()` now resolves paths via `Path.resolve()` before creating directories or writing files, preventing relative path escape attacks from crafted CLI input.
+
+### Test Fixes
+
+- **Missing assertion in `_fix_bare_quotes_in_body_field` test**: Added `assert result is None` to `test_quote_before_body_key_not_matched` — previously the test silently passed even if the function returned a non-None fix (masking a false-positive bug).
+- Updated `test_only_digits_and_punctuation` to expect 0.0 ratio for digits/punctuation only text (matches corrected CJK detection logic).
+
 ## [0.6.0] — 2026-07-03
 
 ### Added
