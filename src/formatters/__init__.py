@@ -60,14 +60,25 @@ _ENGLISH_CHARS_PER_TOKEN = 4.0
 
 
 def _detect_cjk_ratio(text: str) -> float:
-    """Estimate the proportion of CJK-like characters in text (0.0–1.0).
+    """Estimate the proportion of CJK characters in text (0.0–1.0).
 
-    Only counts ASCII letters and digits as English-like; everything else
-    (CJK, Cyrillic, Arabic, Devanagari, etc.) is treated as ≥1 char/token.
-    Whitespace is excluded from the count to avoid skewing pure-English text.
+    Counts only actual CJK ranges (CJK Unified Ideographs, Hiragana, Katakana)
+    as CJK; ASCII letters/digits as English-like; everything else (Cyrillic,
+    Arabic, Devanagari, emoji, punctuation) is excluded from the ratio to avoid
+    skewing documents that contain non-CJK multilingual content.
+    Whitespace is also excluded.
     """
     if not text:
         return 0.0
+
+    def _is_cjk(ch: str) -> bool:
+        cp = ord(ch)
+        return (
+            (0x4E00 <= cp <= 0x9FFF) or   # CJK Unified Ideographs
+            (0x3040 <= cp <= 0x309F) or   # Hiragana
+            (0x30A0 <= cp <= 0x30FF)      # Katakana
+        )
+
     cjk = 0
     latin = 0
     for ch in text:
@@ -75,7 +86,7 @@ def _detect_cjk_ratio(text: str) -> float:
             continue
         if ("A" <= ch <= "Z") or ("a" <= ch <= "z") or ("0" <= ch <= "9"):
             latin += 1
-        else:
+        elif _is_cjk(ch):
             cjk += 1
     total = cjk + latin
     return cjk / total if total > 0 else 0.0
@@ -833,7 +844,7 @@ def format_text_with_system(raw: str, source_type: str = "web", *, system_prompt
         raise ValueError("Input text is empty")
 
     raw_len = len(raw)
-    threshold = _get_chunk_threshold()
+    threshold = effective_chunk_threshold(raw)
     if raw_len > threshold:
         return _format_text_chunked(raw, source_type)
 

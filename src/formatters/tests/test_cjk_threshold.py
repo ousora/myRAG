@@ -36,10 +36,10 @@ class TestDetectCjkRatio:
         assert 0.3 <= ratio <= 0.7, f"Mixed text ratio out of range: {ratio}"
 
     def test_only_digits_and_punctuation(self):
-        # Digits and punctuation count as CJK-like (non-Latin).
+        # Digits and punctuation are neither CJK nor Latin — excluded from the ratio.
         text = "12345 !@#$%^&*()"
         ratio = _detect_cjk_ratio(text)
-        assert ratio > 0.5, f"Only digits/punct should be mostly CJK: {ratio}"
+        assert ratio == 0.0, f"Digits/punct should produce 0.0 ratio: {ratio}"
 
 
 class TestEffectiveChunkThreshold:

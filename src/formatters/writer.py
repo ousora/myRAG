@@ -2,6 +2,7 @@
 
 import os
 import re
+from pathlib import Path
 
 
 def _insert_wikilinks(body: str, entities: list[dict]) -> str:
@@ -87,15 +88,15 @@ def write_to_md(result, output_dir):
     Returns:
         Absolute path of the written file.
     """
-    os.makedirs(output_dir, exist_ok=True)
+    output_path = Path(output_dir).resolve()
+    os.makedirs(output_path, exist_ok=True)
 
-    # Validate required fields before writing
     if not result.get("title"):
         raise ValueError("Missing 'title' in formatter output")
 
     title = result["title"]
     safe_name = _safe_filename(title)
-    file_path = os.path.join(output_dir, f"{safe_name}.md")
+    file_path = str(output_path / f"{safe_name}.md")
 
     metadata = result.get("metadata", {})
 

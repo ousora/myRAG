@@ -220,7 +220,7 @@ class SQLiteVecStore:
             for s in section_filter:
                 escaped = self._escape_like_pattern(s)
                 conditions.append(
-                    "json_extract(section_path, '$') LIKE ?"
+                    "c.id IN (SELECT json_each.value FROM chunks c2, json_each(c2.section_path) WHERE c2.id = c.id AND json_each.value LIKE ?)"
                 )
                 params.append(f"%{escaped}%")
 
@@ -280,7 +280,7 @@ class SQLiteVecStore:
         params = []
 
         if tags:
-            tag_conditions = " OR ".join([f'json_extract(tags, "$[{i}]") LIKE ?' for i in range(len(tags))])
+            tag_conditions = " AND ".join([f'json_extract(tags, "$[{i}]") LIKE ?' for i in range(len(tags))])
             where_clauses.append(f"({tag_conditions})")
             params.extend(tags)
 
@@ -367,13 +367,22 @@ class SQLiteVecStore:
             for v in vec_results:
                 if v["id"] not in combined:
                     combined[v["id"]] = dict(v)
-                # Compute cosine distance if not already computed
-                if "_vec_score" not in combined[v["id"]]:
-                    emb_str = _SQLITE_VEC.serialize_float32(query_vector)
-                    combined[v["id"]]["_vec_score"] = self.conn.execute(
-                        "SELECT vec_distance_cosine(embedding, ?) FROM chunks WHERE id=?",
-                        [emb_str, v["id"]]
-                    ).fetchone()[0]
+
+            # Compute cosine distances once per combined ID (batched).
+            emb_str = _SQLITE_VEC.serialize_float32(query_vector)
+            ids_to_score = [v["id"] for v in vec_results]
+            if ids_to_score:
+                placeholders = ",".join("?" * len(ids_to_score))
+                score_map = {
+                    row[0]: row[1]
+                    for row in self.conn.execute(
+                        f"SELECT id, vec_distance_cosine(embedding, ?) FROM chunks WHERE id IN ({placeholders})",
+                        [emb_str] + ids_to_score,
+                    ).fetchall()
+                }
+                for vid, score in score_map.items():
+                    if vid in combined:
+                        combined[vid]["_vec_score"] = score
 
             # Reciprocal Rank Fusion: score = 1/(rank + k) where k=60 is a common constant
             # FTS rank from BM25 (lower=better); vec_distance_cosine (lower=better).

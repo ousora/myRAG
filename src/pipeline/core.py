@@ -43,6 +43,7 @@ Usage (LLM-formatted + Markdown output):
 """
 
 
+import concurrent.futures
 import httpx
 import logging
 import re
@@ -64,6 +65,7 @@ def _render_markdown_with_sections(result: dict) -> str:
     The LLM formatter's body field may or may not contain markdown headers
     (it's non-deterministic). This function guarantees headers by rendering
     them from metadata.sections, which is the reliable structured source.
+    Existing headings in the body are stripped to avoid duplicates.
     """
     lines = [f"# {result.get('title', 'Untitled')}"]
 
@@ -72,8 +74,16 @@ def _render_markdown_with_sections(result: dict) -> str:
         prefix = "#" * level
         lines.append(f"{prefix} {section['title']}")
 
+    body = result.get("body", "") or ""
+    # Strip existing heading lines from the body to avoid duplicates with
+    # headers rendered above from metadata.sections.
+    body_lines = body.split("\n")
+    stripped_body = "\n".join(
+        line for line in body_lines if not re.match(r'^#{1,6}\s+', line)
+    ).strip()
+
     lines.append("")
-    lines.append(result.get("body", ""))
+    lines.append(stripped_body)
     return "\n\n".join(lines) + "\n"
 
 
@@ -200,7 +210,11 @@ def process_file_hybrid(filepath: str, *, doc_id="doc_0", remove_page_breaks=Tru
     # 2. LLM Format (async)
     cfg = _get_config()
     future = format_text_async(cleaned, source_type="pdf")
-    result = future.result(timeout=cfg.format_timeout)
+    try:
+        result = future.result(timeout=cfg.format_timeout)
+    except concurrent.futures.TimeoutError:
+        logger.warning("LLM formatting timed out after %ds for %s", cfg.format_timeout, filepath)
+        return {"chunks": [], "document": {}}
 
     # Write structured markdown if output_dir provided (same path as process_file_with_md)
     md_path = None
@@ -306,7 +320,11 @@ def process_file_with_md(filepath: str, *, output_dir="./output/", **kwargs):
 
     # LLM Format
     future = format_text_async(cleaned, source_type="pdf")
-    result = future.result(timeout=cfg.format_timeout)
+    try:
+        result = future.result(timeout=cfg.format_timeout)
+    except concurrent.futures.TimeoutError:
+        logger.warning("LLM formatting timed out after %ds for %s", cfg.format_timeout, filepath)
+        return None
     
     # Write markdown to output_dir
     md_path = write_to_md(result, output_dir)

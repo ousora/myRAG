@@ -199,3 +199,4 @@ class TestFixBareQuotes:
         """Malformed body key (quotes inside the key name) — regex won't match."""
         content = '{"bo"dy": "Test"}'
         result = _fix_bare_quotes_in_body_field(content)
+        assert result is None, f"Malformed body key should not trigger fix: got {result!r}"
