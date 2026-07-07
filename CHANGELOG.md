@@ -24,6 +24,7 @@
 - **Embedders exports `LocalEmbedder`** from package root so it's discoverable via IDE autocomplete. (src/embedders/__init__.py)
 - **Writer `format_md()` uses temp directory instead of hardcoded `/tmp/md_format_output`**: Uses `tempfile.mkdtemp()` with `shutil.rmtree` cleanup in finally block to avoid polluting global temp space and prevent collisions across processes. (src/formatters/writer.py)
 - **Parser error messages now readable**: `ParserNotFoundError` for missing MarkItDown/Trafilatura no longer passes the library name as `filepath`; shows descriptive "library not available" message instead. (src/parsers/dispatcher.py)
+- **Removed unused `_debug_import_snapshot()` from test conftest**: The function was prefixed with underscore so pytest never collected it, but its presence was misleading. (src/storage/tests/conftest.py)
 
 ### Added Tests (+0, total 103)
 
