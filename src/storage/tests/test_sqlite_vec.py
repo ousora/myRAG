@@ -17,14 +17,14 @@ def store():
     """Create a temp-file SQLiteVecStore for each test."""
     fd, path = tempfile.mkstemp(suffix=".db")
     os.close(fd)
+    from storage.sqlite_vec import SQLiteVecStore
+    db = SQLiteVecStore(path)
+    yield db
     try:
-        from storage.sqlite_vec import SQLiteVecStore
-        db = SQLiteVecStore(path)
-        yield db
-        # Don't call db.close() — the test_close_closes_connection test already
-        # closes the connection, and calling close() twice raises an error.
-    finally:
-        Path(path).unlink(missing_ok=True)
+        db.close()
+    except Exception:
+        pass
+    Path(path).unlink(missing_ok=True)
 
 
 # ---------------------------------------------------------------------------

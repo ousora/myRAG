@@ -30,9 +30,9 @@ def test_write_to_md_from_doc():
     
     # Assertions
     assert os.path.exists(path)
-    assert "项目审核报告" in open(path).read()
-    assert "审核结论" in open(path).read()
-    assert "修复清单" in open(path).read()
+    assert "项目审核报告" in open(path, encoding="utf-8").read()
+    assert "审核结论" in open(path, encoding="utf-8").read()
+    assert "修复清单" in open(path, encoding="utf-8").read()
 
 if __name__ == "__main__":
     test_write_to_md_from_doc()

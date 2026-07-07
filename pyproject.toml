@@ -28,5 +28,8 @@ where = ["src"]
 include = ["*"]
 exclude = ["myrag_pipeline.egg-info", "tests*"]
 
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+
 [tool.setuptools]
 py-modules = ["pipeline", "config"]
