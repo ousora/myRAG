@@ -228,7 +228,7 @@ print(cfg.llm_endpoint)  # from your config file
 ```bash
 cd /home/colinvan/workspace/myrag
 uv run pytest -v
-# 103 tests: chunkers 12 + formatters 16 + storage 17 + integration 9 + config 9 + parsers 12 + embedders 7 + cjk_threshold 5 + test_formatter 13
+# 94 tests: chunkers 12 + formatters 16 + storage 17 + integration 9 + config 9 + parsers 12 + embedders 7 + test_formatter 13
 ```
 
 ### Linting
