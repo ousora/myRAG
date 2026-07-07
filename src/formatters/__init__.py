@@ -4,20 +4,42 @@ Handles both single-shot and chunked (large document) modes.
 Auto-detects which path to use based on input size.
 """
 
+import atexit
 import hashlib
 import json
 import logging
+import os
 import re
 from concurrent.futures import ThreadPoolExecutor, Future
-from pathlib import Path
 from typing import Any, Dict
 
 import httpx
 
-from .prompts import get_system_prompt, get_chunked_system_prompt
+from .prompts import (
+    get_system_prompt,
+    get_chunked_system_prompt,
+    validate_format_output,
+    try_fix_common_issues,
+)
 from .constants import FORMATTER_SCHEMA, CHUNKED_SCHEMA
 
 logger = logging.getLogger(__name__)
+
+
+def _shutdown_executor():
+    """Cleanup the shared thread pool executor on process exit."""
+    global _executor
+    if _executor is not None:
+        logger.info("Shutting down formatter thread pool executor")
+        try:
+            _executor.shutdown(wait=True)
+        except Exception as exc:  # noqa: BLE001 — best-effort cleanup at exit
+            logger.debug("Executor shutdown raised: %s", exc)
+        finally:
+            _executor = None
+
+
+atexit.register(_shutdown_executor)
 
 # ── Internal helpers ────────────────────────────────────────────────────
 
@@ -30,8 +52,76 @@ def _get_config():
 
 # ── Chunking threshold ──────────────────────────────────────────────────
 # Texts above this many characters trigger chunked processing.
-# ~28K chars ≈ 7000 tokens — safe for most local LLMs.
-_CHUNK_THRESHOLD_CHARS = _get_config().chunk_threshold_chars
+# ~28K chars ≈ 7000 tokens — safe for most local LLMs (English, 4 chars/token).
+
+# Default chars-per-token ratios by language family used to adjust the threshold.
+_CJK_CHARS_PER_TOKEN = 1.0
+_ENGLISH_CHARS_PER_TOKEN = 4.0
+
+
+def _detect_cjk_ratio(text: str) -> float:
+    """Estimate the proportion of CJK characters in text (0.0–1.0).
+
+    Counts only actual CJK ranges (CJK Unified Ideographs, Hiragana, Katakana)
+    as CJK; ASCII letters/digits as English-like; everything else (Cyrillic,
+    Arabic, Devanagari, emoji, punctuation) is excluded from the ratio to avoid
+    skewing documents that contain non-CJK multilingual content.
+    Whitespace is also excluded.
+    """
+    if not text:
+        return 0.0
+
+    def _is_cjk(ch: str) -> bool:
+        cp = ord(ch)
+        return (
+            (0x4E00 <= cp <= 0x9FFF) or   # CJK Unified Ideographs
+            (0x3040 <= cp <= 0x309F) or   # Hiragana
+            (0x30A0 <= cp <= 0x30FF)      # Katakana
+        )
+
+    cjk = 0
+    latin = 0
+    for ch in text:
+        if ch.isspace():
+            continue
+        if ("A" <= ch <= "Z") or ("a" <= ch <= "z") or ("0" <= ch <= "9"):
+            latin += 1
+        elif _is_cjk(ch):
+            cjk += 1
+    total = cjk + latin
+    return cjk / total if total > 0 else 0.0
+
+
+def _get_chunk_threshold() -> int:
+    """Lazy-evaluate the chunk threshold from config on each call."""
+    return _get_config().chunk_threshold_chars
+
+
+def effective_chunk_threshold(text: str) -> int:
+    """Return a CJK-aware chunk threshold adjusted for the input text's language mix.
+
+    The base ``chunk_threshold_chars`` (default 28000) is calibrated for English
+    at ~4 chars/token.  For predominantly CJK text (~1 char/token), we lower the
+    threshold proportionally so that token budgets stay roughly constant across
+    languages.
+    """
+    cfg = _get_config()
+    base = cfg.chunk_threshold_chars  # ≈7000 tokens for English
+
+    ratio = _detect_cjk_ratio(text)
+    if ratio >= 0.5:
+        # Mostly CJK — scale down so we don't exceed ~7000 tokens.
+        return int(base * (_CJK_CHARS_PER_TOKEN / _ENGLISH_CHARS_PER_TOKEN))
+    elif ratio > 0.1:
+        # Mixed — linear interpolation between the two extremes.
+        mix = (ratio - 0.1) / 0.4  # 0 at 10% CJK, 1 at 50% CJK
+        chars_per_token = _ENGLISH_CHARS_PER_TOKEN - mix * (
+            _ENGLISH_CHARS_PER_TOKEN - _CJK_CHARS_PER_TOKEN
+        )
+        return int(base * (_CJK_CHARS_PER_TOKEN / chars_per_token))
+    else:
+        # Mostly English — use base threshold unchanged.
+        return base
 
 _executor = None
 
@@ -79,9 +169,29 @@ def call_llm(system_prompt: str, user_message: str, *,
         response = httpx.post(cfg.llm_endpoint, json=payload, timeout=timeout or cfg.llm_timeout)
         response.raise_for_status()
     except httpx.HTTPError as e:
-        logger.error("LLM call failed after %.1fs: %s",
-                      (timeout or cfg.llm_timeout), e)
-        raise RuntimeError(f"LLM API request failed: {e}") from e
+        # Some llama.cpp backends fail on JSON Schema enforcement
+        # (peg-grammar incompatibility). Retry without schema if this happens.
+        resp_for_retry = getattr(e, "response", None)
+        schema_fallback_codes = {500, 503, 429}
+        if schema is not None and resp_for_retry is not None and resp_for_retry.status_code in schema_fallback_codes:
+            err_body = resp_for_retry.text
+            if "peg" in err_body.lower() or "format" in err_body.lower():
+                logger.warning("Schema-based response_format rejected by server (HTTP %d), retrying without schema", resp_for_retry.status_code)
+                payload.pop("response_format", None)
+                try:
+                    response = httpx.post(cfg.llm_endpoint, json=payload, timeout=timeout or cfg.llm_timeout)
+                    response.raise_for_status()
+                except httpx.HTTPError as e2:
+                    logger.error("LLM call failed (no schema fallback): %s", e2)
+                    raise RuntimeError(f"LLM API request failed: {e2}") from e2
+            else:
+                logger.error("LLM call failed after %.1fs: %s",
+                             (timeout or cfg.llm_timeout), e)
+                raise RuntimeError(f"LLM API request failed: {e}") from e
+        else:
+            logger.error("LLM call failed after %.1fs: %s",
+                          (timeout or cfg.llm_timeout), e)
+            raise RuntimeError(f"LLM API request failed: {e}") from e
 
     try:
         raw_content = response.json()["choices"][0]["message"]["content"]
@@ -96,15 +206,16 @@ def call_llm(system_prompt: str, user_message: str, *,
                 max_tokens or cfg.llm_max_tokens,
                 timeout or cfg.llm_timeout)
 
-    # Save raw response for debugging
-    import datetime
-    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    input_hash = hashlib.md5(user_message.encode()).hexdigest()[:8]
-    output_path = Path(f"test/llmoutput/resp_{timestamp}_{input_hash}.txt")
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(output_path, "w", encoding="utf-8") as f:
-        f.write(raw_content)
-    logger.info("Saved raw response to %s", output_path)
+    # Save raw response for debugging — only when explicitly enabled.
+    if getattr(cfg, "debug_log_llm_responses", False):
+        import datetime
+        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        input_hash = hashlib.md5(user_message.encode()).hexdigest()[:8]
+        output_path = f"tmp/raw/resp_{timestamp}_{input_hash}.txt"
+        os.makedirs(os.path.dirname(output_path), exist_ok=True)
+        with open(output_path, "w", encoding="utf-8") as f:
+            f.write(raw_content)
+        logger.info("Saved raw response to %s", output_path)
 
     # ── Parse JSON (with fallback + retries) ────────────────────────
     max_retries = 3
@@ -138,7 +249,7 @@ def call_llm(system_prompt: str, user_message: str, *,
 
 
 def _preprocess_json(raw_content: str) -> str | None:
-    """Strip markdown code blocks, extract first JSON object.
+    """Strip markdown code blocks, extract first JSON object with balanced braces.
 
     Returns None if no JSON-like content can be found (e.g., plain English text).
     This lets the caller distinguish "no JSON at all" from "JSON but broken."
@@ -147,11 +258,39 @@ def _preprocess_json(raw_content: str) -> str | None:
         return None
     # Strip markdown code blocks
     stripped = re.sub(r'^```(?:json)?\s*\n', '', raw_content.strip())
-    # Extract first JSON object
-    json_match = re.search(r'\{.*\}', stripped, re.DOTALL)
-    if not json_match:
+
+    brace_start = stripped.find("{")
+    if brace_start == -1:
         return None  # No JSON-like content — let json.loads raise a clear error
-    return json_match.group(0)
+
+    depth, end = 0, -1
+    in_string = False
+    escape_next = False
+    for i in range(brace_start, len(stripped)):
+        ch = stripped[i]
+        if escape_next:
+            escape_next = False
+            continue
+        if ch == "\\":
+            escape_next = True
+            continue
+        if ch == '"':
+            in_string = not in_string
+            continue
+        if in_string:
+            continue
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                end = i
+                break
+
+    if end == -1 or end <= brace_start:
+        return None  # Unbalanced braces — not a valid JSON object start
+
+    return stripped[brace_start : end + 1]
 
 
 def _fix_bare_quotes_in_body_field(content: str) -> str | None:
@@ -160,6 +299,9 @@ def _fix_bare_quotes_in_body_field(content: str) -> str | None:
     Walks through the JSON string character-by-character, recognizing escaped
     sequences (\\", \\\\, \\n, etc.) so real closing-quotes are not confused
     with bare quotes in the content.
+
+    Returns the modified JSON string if any bare quotes were found and escaped,
+    or None if no modification is needed (valid JSON).
     """
     m = re.search(r'"body"\s*:\s*', content)
     if not m:
@@ -169,13 +311,16 @@ def _fix_bare_quotes_in_body_field(content: str) -> str | None:
     if after_key >= len(content) or content[after_key] != '"':
         return None
 
-    # Walk forward, skipping escaped sequences, find the real closing quote
+    # Walk forward, skipping escaped sequences, find the real closing quote.
+    # Track whether any bare quotes were encountered (i.e., actual changes needed).
+    has_bare_quotes = False
     j = after_key + 1
     while j < len(content):
         c = content[j]
 
-        if c == '\\' and j + 1 < len(content) and content[j+1] in ('"', '\\', '/', 'n', 't', 'r'):
-            j += 2
+        if c == '\\' and j + 1 < len(content) and content[j+1] in ('"', '\\', '/', 'n', 't', 'r', 'u'):
+            skip = 2 if content[j+1] != 'u' else 6
+            j += skip
             continue
 
         if c == '"':
@@ -186,20 +331,25 @@ def _fix_bare_quotes_in_body_field(content: str) -> str | None:
                 k = 0
                 while k < len(raw_body):
                     ch = raw_body[k]
-                    if ch == '\\' and k + 1 < len(raw_body) and raw_body[k+1] in ('"', '\\', '/', 'n', 't', 'r'):
+                    if ch == '\\' and k + 1 < len(raw_body) and raw_body[k+1] in ('"', '\\', '/', 'n', 't', 'r', 'u'):
                         fixed_parts.append(ch)
                         fixed_parts.append(raw_body[k+1])
                         k += 2
                     elif ch == '"':
+                        has_bare_quotes = True
                         fixed_parts.append('\\"')
                         k += 1
                     else:
                         fixed_parts.append(ch)
                         k += 1
 
-                before = content[: after_key + 1]
-                after = content[j:]
-                return before + ''.join(fixed_parts) + '"' + after
+                if not has_bare_quotes:
+                    # No bare quotes found — the original JSON is already valid.
+                    return None
+
+                before = content[:after_key]
+                after = content[j + 1:]  # skip past the closing quote itself
+                return before + '"' + ''.join(fixed_parts) + '"' + after
         j += 1
 
     return None
@@ -222,7 +372,7 @@ def _get_last_n_lines(md_parts: list[str], n: int = 10) -> str:
     return "\n".join(lines[-n:])
 
 
-def _split_by_paragraph(text: str, max_chars: int = _CHUNK_THRESHOLD_CHARS) -> list[str]:
+def _split_by_paragraph(text: str, max_chars: int | None = None) -> list[str]:
     """Split text at paragraph boundaries, chunk oversized paragraphs at sentences.
 
     Normal paragraphs are grouped up to max_chars. If a single paragraph exceeds
@@ -231,9 +381,10 @@ def _split_by_paragraph(text: str, max_chars: int = _CHUNK_THRESHOLD_CHARS) -> l
     Chunks do NOT physically overlap — continuity across chunks is provided
     via the prompt context (last 10 lines of previous output + summary).
 
+
     Args:
         text: The cleaned text to split.
-        max_chars: Maximum characters per chunk (≈ tokens × 4).
+        max_chars: Maximum characters per chunk (≈ tokens × 4). Defaults to config value.
 
     Returns:
         List of paragraph-boundary-aligned text chunks, each ≤ max_chars.
@@ -243,6 +394,10 @@ def _split_by_paragraph(text: str, max_chars: int = _CHUNK_THRESHOLD_CHARS) -> l
 
     if not paragraphs:
         return []
+
+    # Resolve default threshold from config (lazy, per-call)
+    if max_chars is None:
+        max_chars = _get_chunk_threshold()
 
     chunks: list[str] = []
     current: list[str] = []
@@ -289,126 +444,193 @@ def _split_by_paragraph(text: str, max_chars: int = _CHUNK_THRESHOLD_CHARS) -> l
     return chunks
 
 
-def _extract_tags_from_body(body: str, title: str) -> list[str]:
-    """Generate tags from body content for chunked processing mode.
-
-    Uses keyword frequency analysis on the merged body text to extract
-    meaningful domain-specific terms as tags. Falls back to simple
-    noun-phrase extraction if no strong keywords are found.
-
-    Key improvements over naive word-frequency:
-      - Extracts proper nouns (capitalized entities) from title + body
-      - Filters out single generic English words not in a whitelist
-      - Combines adjacent frequent terms into multi-word phrases when useful
-      - Prefers domain-specific terms (brands, organizations, systems)
-    """
-    import re
-    from collections import Counter
-
-    # Common English stop words to filter out
-    STOP_WORDS = {
+# Multi-language stopword sets keyed by detected script family.
+_STOP_WORDS_BY_SCRIPT: dict[str, frozenset[str]] = {
+    "latin": frozenset({
         'the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to',
         'for', 'of', 'with', 'by', 'from', 'is', 'are', 'was', 'were',
         'be', 'been', 'being', 'have', 'has', 'had', 'do', 'does', 'did',
         'will', 'would', 'could', 'should', 'may', 'might', 'can', 'shall',
         'it', 'its', 'this', 'that', 'these', 'those', 'i', 'you', 'he',
         'she', 'we', 'they', 'me', 'him', 'her', 'us', 'them',
-    }
+    }),
+    "cjk": frozenset({
+        # Common Chinese function words / particles that carry little semantic weight.
+        '的', '了', '在', '是', '我', '有', '和', '就', '不', '人', '都', '一',
+        '一个', '上', '也', '很', '到', '说', '要', '去', '你', '会', '着',
+        '没有', '看', '好', '自己', '这', '他', '她', '它', '们', '那', '些',
+        '什么', '怎么', '如何', '为什么', '因为', '所以', '但是', '虽然',
+    }),
+}
 
-    # Generic single words that are almost never useful as tags
-    GENERIC_WORDS = {
-        'the', 'and', 'from', 'into', 'over', 'under', 'between', 'through',
-        'during', 'before', 'after', 'above', 'below', 'within', 'across',
-        'about', 'against', 'along', 'among', 'around', 'behind', 'beyond',
-        'since', 'until', 'upon', 'toward', 'towards',
-        'system', 'payment', 'china', 'country', 'bank', 'data',
-        'information', 'process', 'service', 'user', 'network',
-        'document', 'file', 'text', 'content', 'example',
-        'channel', 'series', 'program', 'programs', 'programming',
-        'original', 'retrieved', 'archived', 'published', 'based',
-    }
+# Generic single words (English) that are almost never useful as tags.
+_GENERIC_WORDS = frozenset({
+    'the', 'and', 'from', 'into', 'over', 'under', 'between', 'through',
+    'during', 'before', 'after', 'above', 'below', 'within', 'across',
+    'about', 'against', 'along', 'among', 'around', 'behind', 'beyond',
+    'since', 'until', 'upon', 'toward', 'towards',
+    'system', 'payment', 'china', 'country', 'bank', 'data',
+    'information', 'process', 'service', 'user', 'network',
+    'document', 'file', 'text', 'content', 'example',
+    'channel', 'series', 'program', 'programs', 'programming',
+    'original', 'retrieved', 'archived', 'published', 'based',
+})
 
-    # Words that ARE useful as tags (domain-specific)
-    USEFUL_SINGLE = {
-        'china', 'france', 'london', 'tokyo', 'beijing', 'america', 'germany',
-        'russia', 'japan', 'united states', 'european union',
-        'international', 'government', 'regulation', 'compliance',
-        'security', 'encryption', 'blockchain', 'cryptocurrency',
-    }
 
-    # Extract words from body (lowercase, >= 3 chars)
-    body_words = re.findall(r'[a-zA-Z]{3,}', body.lower())
-    word_freq = Counter(w for w in body_words if w not in STOP_WORDS and len(w) > 2)
+def _extract_tags_from_body(body: str, title: str) -> list[str]:
+    """Generate tags from body content for chunked processing mode.
 
-    # Also extract title keywords with higher weight
-    title_words = re.findall(r'[a-zA-Z]{3,}', title.lower())
-    title_freq = Counter(title_words)
+    Uses keyword frequency analysis on the merged body text to extract
+    meaningful domain-specific terms as tags. Supports both Latin-script and
+    CJK (Chinese/Japanese/Korean) documents via script-aware tokenization.
 
-    # Combine: title words get higher weight
+    Key improvements over naive word-frequency:
+      - Script detection → appropriate tokenizer & stopword list per language family
+      - Extracts proper nouns (capitalized entities) from title + body
+      - Filters out single generic words not in a whitelist
+      - Combines adjacent frequent terms into multi-word phrases when useful
+      - Prefers domain-specific terms (brands, organizations, systems)
+
+    Returns:
+        Up to 5 tag strings.
+    """
+    from collections import Counter
+
+    script = _detect_body_script(body + " " + title)
+    stop_words = _STOP_WORDS_BY_SCRIPT.get(script, frozenset(_STOP_WORDS_BY_SCRIPT["latin"]))
+
+    # ── Tokenize according to detected script ───────────────────
+    if script == "cjk":
+        body_tokens, title_tokens = _tokenize_cjk(body, title)
+    else:
+        body_tokens, title_tokens = _tokenize_latin(body, title)
+
+    word_freq = Counter(t for t in body_tokens if t not in stop_words and len(t) > 1)
+    title_freq = Counter(title_tokens)
+
+    # Combine: title words get higher weight.
     combined = Counter(word_freq)
     for w, c in title_freq.items():
         combined[w] += c * 2
 
-    # ── Extract proper nouns from title and body ────────────────
-    # Title is usually the most important entity.
-    # Also extract capitalized phrases from the first few paragraphs (likely entities).
+    # ── Extract proper nouns / entities from title and body ─────
     def _extract_proper_nouns(text: str) -> list[str]:
-        """Extract capitalized words/phrases that look like proper nouns."""
-        # Title itself
-        title_parts = re.findall(r'[A-Z][a-zA-Z0-9\-]+(?:\s+[A-Z][a-zA-Z0-9\-]+)*', text[:200])
-        # Capitalized entities in body (first 5K chars)
-        entity_phrases = re.findall(
-            r'(?<![a-z])([A-Z][a-zA-Z0-9\-]+(?:\s+[A-Z][a-zA-Z0-9\-]+){1,3})(?![a-z])',
-            text[:min(len(text), 5000)]
-        )
-        return title_parts + entity_phrases
+        if script == "cjk":
+            return _extract_cjk_entities(text)
+        return _extract_latin_proper_nouns(text)
 
     proper_nouns = _extract_proper_nouns(title) + _extract_proper_nouns(body)
-    noun_freq = Counter(p for p in proper_nouns if len(p.split()) <= 3 and len(p) > 2)
+    noun_freq = Counter(p for p in proper_nouns if len(p.split()) <= 3 and len(p) > 1)
 
-    # ── Build tag candidates ────────────────────────────────────
+    # ── Build tag candidates (up to 5) ──────────────────────────
     tags: list[str] = []
     seen: set[str] = set()
 
-    # Phase 1: Proper nouns (highest priority - they're entity-specific)
-    for noun, count in noun_freq.most_common(3):
+    # Phase 1: Proper nouns / entities (highest priority).
+    for noun, _ in noun_freq.most_common(3):
         if len(tags) >= 5:
             break
         tag_lower = noun.lower().strip()
-        if tag_lower not in seen and tag_lower not in GENERIC_WORDS and len(tag_lower) > 2:
+        if tag_lower not in seen and tag_lower not in _GENERIC_WORDS and len(tag_lower) > 1:
             tags.append(tag_lower)
             seen.add(tag_lower)
 
-    # Phase 2: High-frequency domain words (only those with >= 3 occurrences)
+    # Phase 2: High-frequency domain words (>=3 occurrences).
     for word, count in combined.most_common(40):
         if len(tags) >= 5:
             break
-        if word in seen or word in STOP_WORDS:
-            continue
-        # Only include single-word tags that are either generic-useful OR appear frequently
-        if count < 3 and word not in USEFUL_SINGLE:
+        if word in seen or word in stop_words:
             continue
         tags.append(word)
         seen.add(word)
 
-    # Phase 3: Title-based fallback (title words we haven't used yet)
+    # Phase 3: Title-based fallback.
     for w, _ in title_freq.most_common(10):
         if len(tags) >= 5:
             break
-        if w not in seen and w.lower() not in GENERIC_WORDS and w.lower() not in STOP_WORDS:
-            tags.append(w.lower())
-            seen.add(w.lower())
+        wl = w.lower()
+        if wl not in seen and wl not in _GENERIC_WORDS and wl not in stop_words:
+            tags.append(wl)
+            seen.add(wl)
 
-    # Final filter: remove any remaining single generic words
-    final_tags = [t for t in tags if t not in GENERIC_WORDS or len(t.split()) > 1]
-
+    # Final filter: remove single generic words (unless multi-word).
+    final_tags = [t for t in tags if t not in _GENERIC_WORDS or len(t.split()) > 1]
     return final_tags[:5] if len(final_tags) >= 3 else final_tags
+
+
+def _detect_body_script(text: str) -> str:
+    """Detect the dominant writing script of *text* ('latin' | 'cjk')."""
+    cjk_chars = sum(1 for ch in text if "\u4e00" <= ch <= "\u9fff")
+    latin_chars = sum(1 for ch in text if ("A" <= ch <= "Z") or ("a" <= ch <= "z"))
+    total = cjk_chars + latin_chars
+    if total == 0:
+        return "latin"
+    return "cjk" if cjk_chars / total > 0.15 else "latin"
+
+
+def _tokenize_latin(body: str, title: str) -> tuple[list[str], list[str]]:
+    """Tokenize Latin-script text into lowercase word tokens."""
+    body_tokens = re.findall(r'[a-zA-Z]{3,}', body.lower())
+    title_tokens = re.findall(r'[a-zA-Z]{3,}', title.lower())
+    return body_tokens, title_tokens
+
+
+def _tokenize_cjk(body: str, title: str) -> tuple[list[str], list[str]]:
+    """Tokenize CJK text using character bigrams + word-boundary splitting.
+
+    Since CJK scripts lack intrinsic word boundaries, we combine:
+      1. Two-character sequences (bigrams) from the body for frequency analysis.
+      2. Whitespace-separated tokens as additional candidates.
+    This produces a reasonable set of domain-specific terms without requiring
+    an external NLP library like jieba.
+    """
+    def _cjk_tokens(text: str) -> list[str]:
+        # Extract whitespace-delimited words (handles mixed CJK/Latin).
+        ws_tokens = [t.lower() for t in text.split() if len(t) > 1]
+
+        # Character bigrams from pure-CJK runs capture compound terms.
+        cjk_runs = re.findall(r'[\u4e00-\u9fff]{2,}', text)
+        bg: list[str] = []
+        for run in cjk_runs:
+            bg.extend(run[i:i + 2].lower() for i in range(len(run) - 1))
+
+        return ws_tokens + bg
+
+    body_tokens = _cjk_tokens(body)
+    title_tokens = _cjk_tokens(title)
+    return body_tokens, title_tokens
+
+
+def _extract_latin_proper_nouns(text: str) -> list[str]:
+    """Extract capitalized words/phrases that look like proper nouns."""
+    title_parts = re.findall(r'[A-Z][a-zA-Z0-9\-]+(?:\s+[A-Z][a-zA-Z0-9\-]+)*', text[:200])
+    entity_phrases = re.findall(
+        r'(?<![a-z])([A-Z][a-zA-Z0-9\-]+(?:\s+[A-Z][a-zA-Z0-9\-]+){1,3})(?![a-z])',
+        text[:min(len(text), 5000)],
+    )
+    return title_parts + entity_phrases
+
+
+def _extract_cjk_entities(text: str) -> list[str]:
+    """Extract CJK named-entity-like phrases from the first portion of text.
+
+    Looks for runs of ≥2 Chinese characters preceded/followed by non-CJK or
+    line boundaries, which tend to be proper nouns in context.
+    """
+    candidates = re.findall(r'(?<![\u4e00-\u9fff])([\u4e00-\u9fff]{2,16})(?![\u4e00-\u9fff])', text[:min(len(text), 5000)])
+    return [c for c in candidates if len(c) >= 2]
 
 
 def _format_text_single(raw: str, source_type: str = "web", *, system_prompt: str | None = None) -> Dict[str, Any]:
     """Single-shot formatting — original behavior for small documents."""
     prompt = system_prompt if system_prompt is not None else get_system_prompt(source_type)
     result = call_llm(prompt, raw.strip(), schema=FORMATTER_SCHEMA)
+
+    # Validate output against expected schema and fix common issues.
+    errors = validate_format_output(result)
+    if errors:
+        logger.warning("format_text returned %d validation error(s): %s", len(errors), "; ".join(errors))
+        result = try_fix_common_issues(result)
 
     # Fix placeholder metadata that the LLM copies from the prompt template.
     body = result.get("body", "")
@@ -421,7 +643,7 @@ def _format_text_single(raw: str, source_type: str = "web", *, system_prompt: st
     return result
 
 
-def _format_text_chunked(raw: str, source_type: str = "pdf") -> Dict[str, Any]:
+def _format_text_chunked(raw: str, source_type: str = "pdf", *, system_prompt: str | None = None) -> Dict[str, Any]:
     """Chunked formatting for large documents.
 
     Splits text by paragraph, processes each chunk with LLM context
@@ -437,8 +659,19 @@ def _format_text_chunked(raw: str, source_type: str = "pdf") -> Dict[str, Any]:
     all_parts: list[str] = []
     cumulative_summary = ""
 
+    # Determine the system prompt once — custom prompts override defaults for all chunks.
+    if system_prompt is not None:
+        base_system_prompt = system_prompt
+    else:
+        base_system_prompt = get_chunked_system_prompt(0, total)  # title will be empty until merge
+
     for i, chunk_text in enumerate(chunks):
-        system_prompt = get_chunked_system_prompt(i, total)
+        # For non-first chunks with a document title available from metadata, 
+        # regenerate the prompt to include it. Otherwise use the base prompt.
+        if system_prompt is None and i > 0:
+            current_system_prompt = get_chunked_system_prompt(i, total)
+        else:
+            current_system_prompt = base_system_prompt
 
         prev_tail = _get_last_n_lines(all_parts, 10)
         prev_tail_block = (
@@ -463,7 +696,7 @@ def _format_text_chunked(raw: str, source_type: str = "pdf") -> Dict[str, Any]:
                      i + 1, total, len(chunk_text))
         cfg = _get_config()
         result = call_llm(
-            system_prompt,
+            current_system_prompt,
             user_message,
             max_tokens=cfg.chunk_max_tokens,
             timeout=cfg.chunk_timeout,
@@ -503,10 +736,6 @@ def _format_text_chunked(raw: str, source_type: str = "pdf") -> Dict[str, Any]:
         body = '\n'.join(cleaned_lines)
 
     # Extract sections from ## and ### headers in body (after dedup)
-    if title_match:
-        title = title_match.group(1).strip()
-
-    # Extract sections from ## and ### headers in body
     sections: list[dict] = []
     for match in re.finditer(r'^(#{2,3})\s+(.+)$', body, re.MULTILINE):
         level = len(match.group(1))
@@ -518,8 +747,7 @@ def _format_text_chunked(raw: str, source_type: str = "pdf") -> Dict[str, Any]:
 
     # Generate tags from body content (chunked mode doesn't get LLM-generated tags)
     tags = _extract_tags_from_body(body, title)
-
-    return {
+    result = {
         "title": title,
         "tags": tags,
         "metadata": {
@@ -530,6 +758,14 @@ def _format_text_chunked(raw: str, source_type: str = "pdf") -> Dict[str, Any]:
         },
         "body": body,
     }
+
+    # Validate and fix common issues in the merged output.
+    errors = validate_format_output(result)
+    if errors:
+        logger.warning("chunked format returned %d validation error(s): %s", len(errors), "; ".join(errors))
+        result = try_fix_common_issues(result)
+
+    return result
 
 
 # ── Public API ──────────────────────────────────────────────────────────
@@ -557,10 +793,14 @@ def format_text(raw: str, source_type: str = "web") -> Dict[str, Any]:
     if not raw.strip():
         raise ValueError("Input text is empty")
 
-    # Auto-dispatch based on text length
+    # Auto-dispatch based on CJK-aware text length.
     raw_len = len(raw)
-    if raw_len > _CHUNK_THRESHOLD_CHARS:
-        logger.info("Large text: %d chars — calling chunked processor", raw_len)
+    threshold = effective_chunk_threshold(raw)
+    if raw_len > threshold:
+        logger.info(
+            "Large text (%d chars, CJK ratio=%.2f): calling chunked processor",
+            raw_len, _detect_cjk_ratio(raw),
+        )
         return _format_text_chunked(raw, source_type)
 
     logger.info("Small text: %d chars — single-shot", raw_len)
@@ -573,8 +813,9 @@ def _format_text_async_impl(raw: str, source_type: str, *, system_prompt: str | 
         raise ValueError("Input text is empty")
 
     raw_len = len(raw)
-    if raw_len > _CHUNK_THRESHOLD_CHARS:
-        return _format_text_chunked(raw, source_type)
+    threshold = effective_chunk_threshold(raw)
+    if raw_len > threshold:
+        return _format_text_chunked(raw, source_type, system_prompt=system_prompt)
 
     return _format_text_single(raw, source_type, system_prompt=system_prompt)
 
@@ -610,8 +851,9 @@ def format_text_with_system(raw: str, source_type: str = "web", *, system_prompt
         raise ValueError("Input text is empty")
 
     raw_len = len(raw)
-    if raw_len > _CHUNK_THRESHOLD_CHARS:
-        return _format_text_chunked(raw, source_type)
+    threshold = effective_chunk_threshold(raw)
+    if raw_len > threshold:
+        return _format_text_chunked(raw, source_type, system_prompt=system_prompt)
 
     return _format_text_single(raw, source_type, system_prompt=system_prompt)
 
