@@ -108,7 +108,7 @@ class TrafilaturaParser(TextParser):
             html_content,
             include_comments=False,
             include_tables=True,
-            prefer_full_output=True,
+            favor_recall=True,
         ) or ""
         return content.strip()
 

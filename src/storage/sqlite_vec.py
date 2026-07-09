@@ -403,10 +403,10 @@ class SQLiteVecStore:
                 emb_str = _SQLITE_VEC.serialize_float32(query_vector)
                 results = self.conn.execute(
                     """SELECT c.id, c.text, c.section_path,
-                                 c.source_doc_id, c.chunk_index, c.word_count
-                          FROM chunks c
-                          ORDER BY vec_distance_cosine(embedding, ?) ASC
-                          LIMIT ?""",
+                                  c.source_doc_id, c.chunk_index, c.word_count
+                           FROM chunks c
+                           ORDER BY vec_distance_cosine(embedding, ?) ASC
+                           LIMIT ?""",
                     [emb_str, k]
                 ).fetchall()
 
@@ -420,10 +420,13 @@ class SQLiteVecStore:
                 } for row in results]
             return []
 
-        fts_results = self.conn.execute(
-            "SELECT rowid, rank FROM chunks_fts WHERE chunks_fts MATCH ? LIMIT ?",
-            (query_text, k)
-        ).fetchall()
+        fts_query = _build_fts_query(query_text)
+        fts_results: list = []
+        if fts_query is not None:
+            fts_results = self.conn.execute(
+                "SELECT rowid, rank FROM chunks_fts WHERE chunks_fts MATCH ? LIMIT ?",
+                (fts_query, k)
+            ).fetchall()
 
         vec_results = []
         if query_vector:
@@ -548,6 +551,27 @@ def _count_words(text: str) -> int:
     cjk = sum(1 for ch in text if "\u4e00" <= ch <= "\u9fff")
     non_cjk = len(re.findall(r"\S+", text))
     return cjk + non_cjk
+
+
+# Characters with special meaning in FTS5 MATCH query syntax. Left in the
+# query string they are parsed as operators (e.g. "-" → AND NOT) and can raise
+# "no such column" errors. We strip them before querying.
+_FTS_SPECIAL = re.compile(r'["*^:()\\]')
+
+
+def _build_fts_query(text: str) -> "str | None":
+    """Turn free-text into an FTS5-safe MATCH query.
+
+    Strips FTS5 operator characters, then OR-joins the surviving tokens so any
+    query term can contribute to the fused score (recall-friendly). Returns
+    None when no usable token remains, so callers can fall back to vector-only.
+    """
+    cleaned = _FTS_SPECIAL.sub(" ", text)
+    tokens = re.findall(r"[A-Za-z0-9]+|[\u4e00-\u9fff]", cleaned)
+    tokens = [t for t in tokens if len(t) > 1 or ("\u4e00" <= t <= "\u9fff")]
+    if not tokens:
+        return None
+    return " OR ".join(tokens)
 
 
 def _deserialize_embedding(raw) -> list[float]:

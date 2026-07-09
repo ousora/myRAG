@@ -280,6 +280,39 @@ def call_llm(system_prompt: str, user_message: str, *,
     raise ValueError("JSON parsing failed after all fallback strategies.")
 
 
+def call_llm_raw(system_prompt: str, user_message: str, *,
+                 max_tokens: int | None = None,
+                 timeout: int | None = None) -> str:
+    """Call the LLM and return the raw response text (no JSON parsing).
+
+    Use this for free-text generation (e.g. RAG answer synthesis) where the
+    model is expected to reply in natural language rather than a JSON object.
+    Mirrors ``call_llm``'s request/error handling but skips JSON extraction.
+    """
+    cfg = _get_config()
+    payload: dict[str, Any] = {
+        "model": cfg.llm_model,
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_message},
+        ],
+        "temperature": cfg.llm_temperature,
+        "max_tokens": max_tokens or cfg.llm_max_tokens,
+    }
+    try:
+        response = httpx.post(cfg.llm_endpoint, json=payload, timeout=timeout or cfg.llm_timeout)
+        response.raise_for_status()
+    except httpx.HTTPError as e:
+        logger.error("LLM call failed after %.1fs: %s", (timeout or cfg.llm_timeout), e)
+        raise RuntimeError(f"LLM API request failed: {e}") from e
+
+    try:
+        return response.json()["choices"][0]["message"]["content"]
+    except (KeyError, IndexError) as e:
+        logger.error("LLM returned unexpected response structure: %s", e)
+        raise ValueError(f"LLM returned invalid format: {e}") from e
+
+
 def _preprocess_json(raw_content: str) -> str | None:
     """Strip markdown code blocks, extract first JSON object with balanced braces.
 
@@ -912,7 +945,7 @@ def format_text_with_system(raw: str, source_type: str = "web", *, system_prompt
     return _format_text_single(raw, source_type, system_prompt=system_prompt)
 
 
-__all__ = ["call_llm", "format_text", "format_text_async", "format_text_with_system"]
+__all__ = ["call_llm", "call_llm_raw", "format_text", "format_text_async", "format_text_with_system"]
 
 # Re-export writer functions for convenience
 from .writer import format_md, write_to_md  # noqa: F401, E402

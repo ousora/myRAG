@@ -474,20 +474,13 @@ def rag_query(question: str, db_path: str, *, k: int = 5) -> dict:
         f"Context:\n{assembled_context}"
     )
 
-    # 5. Call LLM to generate answer
-    from formatters import call_llm
+    # 5. Call LLM to generate answer (free-text, not JSON)
+    from formatters import call_llm_raw
 
-    llm_result = call_llm(system_prompt, user_prompt)
-
-    # Extract the LLM's response (it returns structured JSON with a body field)
-    answer = ""
-    if isinstance(llm_result, dict):
-        answer = llm_result.get("body", "") or llm_result.get("answer", str(llm_result))
-    else:
-        answer = str(llm_result)
+    answer = call_llm_raw(system_prompt, user_prompt).strip()
 
     return {
         "question": question,
-        "answer": answer.strip(),
+        "answer": answer,
         "context": results,
     }

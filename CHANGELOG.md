@@ -18,6 +18,9 @@
 ### Fixed
 - **CJK entity matching was broken**: `_match_entities_to_chunks()` used `\b` word boundaries which never match Chinese names. Now uses substring match for CJK entity names and word-boundary match for Latin ones. (src/pipeline/core.py)
 - **Wasted document embedding when not persisting**: `process_file_hybrid()` no longer calls `store_document()` (and its embedding) when `store_path` is None; it returns a lightweight metadata dict instead. (src/pipeline/core.py)
+- **`TrafilaturaParser` broken on trafilatura 2.x**: removed the removed `prefer_full_output` kwarg (now `favor_recall`) so HTML parsing no longer crashes. (src/parsers/dispatcher.py)
+- **`hybrid_search()` crashed on hyphenated queries**: user questions like "retrieval-augmented generation" were passed verbatim to FTS5 MATCH, where the hyphen is parsed as an operator (`no such column: augmented`). Added `_build_fts_query()` to strip FTS5 special characters and OR-join tokens. (src/storage/sqlite_vec.py)
+- **`rag_query()` reused the JSON-only `call_llm` to synthesize answers**: the LLM replies in free text, not JSON, so it raised "no JSON-like content". Added `call_llm_raw()` and switched `rag_query` to it. (src/formatters/__init__.py, src/pipeline/core.py)
 
 ## [0.5.3] — 2026-07-09
 
