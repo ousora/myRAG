@@ -140,8 +140,14 @@ class Embedder:
 
         raise RuntimeError(f"Embedding API failed after {max_retries} retries: {last_exc}") from last_exc
 
-    def embed(self, text: str | list[str]) -> list[list[float]]:
-        """Get embeddings for one or multiple texts."""
+    def embed(self, text: str | list[str]) -> list[float] | list[list[float]]:
+        """Get embeddings for one or multiple texts.
+
+        Returns a single ``list[float]`` when *text* is a ``str``, and a
+        ``list[list[float]]`` when *text* is a ``list[str]``. Callers that pass
+        a string (e.g. a query or document summary) must use the vector
+        directly rather than indexing ``[0]``.
+        """
         if isinstance(text, str):
             payload = {"model": self.model, "input": [text]}
         else:

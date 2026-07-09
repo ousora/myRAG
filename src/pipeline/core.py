@@ -67,23 +67,37 @@ def _render_markdown_with_sections(result: dict) -> str:
     them from metadata.sections, which is the reliable structured source.
     Existing headings in the body are stripped to avoid duplicates.
     """
-    lines = [f"# {result.get('title', 'Untitled')}"]
+    title = result.get("title", "Untitled")
+    body = result.get("body", "") or ""
 
+    # The LLM body is non-deterministic: it may already contain its own
+    # section headings (the common case, especially for chunked output where
+    # metadata.sections is derived from the body). If so, keep the body's
+    # structure intact and only drop a duplicate top-level title H1 if the
+    # model echoed it. Hoisting all metadata.sections headers above the body
+    # would shift every section's content under the wrong header.
+    if re.search(r'^#{1,6}\s+', body):
+        body_lines = body.split("\n")
+        kept = []
+        title_seen = False
+        for line in body_lines:
+            stripped = line.strip()
+            if not title_seen and re.match(rf'^#\s+{re.escape(title)}$', stripped):
+                title_seen = True
+                continue  # drop duplicate title H1; we render our own below
+            kept.append(line)
+        body_block = "\n".join(kept).strip()
+        return f"# {title}\n\n{body_block}\n"
+
+    # Body has no headings — render section headers from metadata.sections.
+    lines = [f"# {title}"]
     for section in result.get("metadata", {}).get("sections", []):
         level = section.get("level", 2)
         prefix = "#" * level
         lines.append(f"{prefix} {section['title']}")
 
-    body = result.get("body", "") or ""
-    # Strip existing heading lines from the body to avoid duplicates with
-    # headers rendered above from metadata.sections.
-    body_lines = body.split("\n")
-    stripped_body = "\n".join(
-        line for line in body_lines if not re.match(r'^#{1,6}\s+', line)
-    ).strip()
-
     lines.append("")
-    lines.append(stripped_body)
+    lines.append(body.strip())
     return "\n\n".join(lines) + "\n"
 
 
@@ -119,6 +133,20 @@ def _match_entities_to_chunks(chunks: list[dict], entities: list[dict]) -> list[
 def _resolve_parser(filepath: str):
     from parsers.dispatcher import resolve_parser as rp
     return rp(filepath)
+
+
+def _source_type_for(filepath: str) -> str:
+    """Map a file extension to the formatter's source_type hint."""
+    ext = Path(filepath).suffix.lstrip(".").lower()
+    return {
+        "pdf": "pdf",
+        "docx": "pdf",
+        "html": "web",
+        "htm": "web",
+        "md": "markdown",
+        "mkd": "markdown",
+        "txt": "web",
+    }.get(ext, "web")
 
 
 class TextCleaner:
@@ -209,7 +237,7 @@ def process_file_hybrid(filepath: str, *, doc_id="doc_0", remove_page_breaks=Tru
 
     # 2. LLM Format (async)
     cfg = _get_config()
-    future = format_text_async(cleaned, source_type="pdf")
+    future = format_text_async(cleaned, source_type=_source_type_for(filepath))
     try:
         result = future.result(timeout=cfg.format_timeout)
     except concurrent.futures.TimeoutError:
@@ -319,7 +347,7 @@ def process_file_with_md(filepath: str, *, output_dir="./output/", **kwargs):
     cleaned = TextCleaner(**kwargs).clean(raw_text)
 
     # LLM Format
-    future = format_text_async(cleaned, source_type="pdf")
+    future = format_text_async(cleaned, source_type=_source_type_for(filepath))
     try:
         result = future.result(timeout=cfg.format_timeout)
     except concurrent.futures.TimeoutError:
@@ -369,10 +397,15 @@ def rag_query(question: str, db_path: str, *, k: int = 5) -> dict:
     from storage.sqlite_vec import SQLiteVecStore
     from embedders import Embedder
 
-    # 1. Embed the query (embed() returns list[list[float]]; extract first element for single text)
-    e = Embedder()
-    query_vectors = e.embed(question)
-    query_vector = query_vectors[0]
+    # 1. Embed the query. Embedder.embed(str) returns a single embedding
+    #    vector (list[float]); normalize so both str and list inputs work.
+    with Embedder() as e:
+        query_result = e.embed(question)
+    query_vector = (
+        query_result[0]
+        if query_result and isinstance(query_result[0], list)
+        else query_result
+    )
 
     # 2. Retrieve relevant chunks
     db = SQLiteVecStore(db_path)

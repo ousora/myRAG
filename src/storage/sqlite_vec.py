@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib
 import json
 import logging
+import re
 import struct
 import sys
 from datetime import datetime, timezone
@@ -168,7 +169,7 @@ class SQLiteVecStore:
 
         section_path = chunk_data.get("section_path", ["General"])
         entity_names = chunk_data.get("entity_names", [])
-        word_count = len(chunk_data.get("text", "").split())
+        word_count = _count_words(chunk_data.get("text", ""))
 
         cursor = self.conn.execute(
             """INSERT OR REPLACE INTO chunks (text, embedding, source_doc_id, chunk_index, section_path, word_count, entity_names)
@@ -196,7 +197,7 @@ class SQLiteVecStore:
         for i, chunk in enumerate(chunks):
             section_path = chunk.get("section_path", ["General"])
             entity_names = chunk.get("entity_names", [])
-            word_count = len(chunk.get("text", "").split())
+            word_count = _count_words(chunk.get("text", ""))
 
             cursor = self.conn.execute(
                 """INSERT OR REPLACE INTO chunks (text, embedding, source_doc_id, chunk_index, section_path, word_count, entity_names)
@@ -249,22 +250,23 @@ class SQLiteVecStore:
             params.append(source_doc_id)
 
         if section_filter:
-            # Use exact JSON array membership via json_each — no LIKE, so no
-            # wildcard/escape issues with special characters in section names.
+            # Exact JSON array membership via json_each (EXISTS, no JOIN) — no
+            # row multiplication, and no LIKE wildcard/escape issues with
+            # special characters in section names.
             for s in section_filter:
                 conditions.append(
-                    "c.id IN (SELECT c2.id FROM chunks c2 JOIN json_each(c2.section_path) ON json_each.value = ? WHERE c2.source_doc_id = c.source_doc_id)"
+                    "EXISTS (SELECT 1 FROM json_each(c.section_path) WHERE json_each.value = ?)"
                 )
                 params.append(s)
 
         where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
 
-        sql = (f"""SELECT c.id, c.text, json_each.value as section_path, 
-                         c.source_doc_id, c.chunk_index, c.word_count
-                 FROM chunks c, json_each(c.section_path)
-                 {where}
-                 ORDER BY vec_distance_cosine(c.embedding, ?) ASC
-                 LIMIT ?""")
+        sql = (f"""SELECT c.id, c.text, c.section_path,
+                          c.source_doc_id, c.chunk_index, c.word_count
+                  FROM chunks c
+                  {where}
+                  ORDER BY vec_distance_cosine(c.embedding, ?) ASC
+                  LIMIT ?""")
 
         results = self.conn.execute(sql, params + [emb_str, k]).fetchall()
 
@@ -363,11 +365,11 @@ class SQLiteVecStore:
             if query_vector:
                 emb_str = _SQLITE_VEC.serialize_float32(query_vector)
                 results = self.conn.execute(
-                    """SELECT c.id, c.text, json_each.value as section_path, 
+                    """SELECT c.id, c.text, c.section_path,
                                  c.source_doc_id, c.chunk_index, c.word_count
-                         FROM chunks c, json_each(c.section_path)
-                         ORDER BY vec_distance_cosine(embedding, ?) ASC
-                         LIMIT ?""",
+                          FROM chunks c
+                          ORDER BY vec_distance_cosine(embedding, ?) ASC
+                          LIMIT ?""",
                     [emb_str, k]
                 ).fetchall()
 
@@ -390,11 +392,11 @@ class SQLiteVecStore:
         if query_vector:
             emb_str = _SQLITE_VEC.serialize_float32(query_vector)
             results = self.conn.execute(
-                """SELECT c.id, c.text, json_each.value as section_path, 
-                             c.source_doc_id, c.chunk_index, c.word_count
-                     FROM chunks c, json_each(c.section_path)
-                     ORDER BY vec_distance_cosine(embedding, ?) ASC
-                     LIMIT ?""",
+                """SELECT c.id, c.text, c.section_path,
+                                 c.source_doc_id, c.chunk_index, c.word_count
+                          FROM chunks c
+                          ORDER BY vec_distance_cosine(embedding, ?) ASC
+                          LIMIT ?""",
                 [emb_str, k]
             ).fetchall()
 
@@ -410,8 +412,8 @@ class SQLiteVecStore:
 
         combined = {}
 
-        # Build lookup maps for FTS results by rowid
-        fts_map = {r[0]: r[1] for r in fts_results}
+        # Build FTS rank map by 1-based result order (bm25 score is NOT a rank).
+        fts_rank_map = {rowid: i + 1 for i, (rowid, _rank) in enumerate(fts_results)}
 
         if vec_results:
             for v in vec_results:
@@ -430,19 +432,18 @@ class SQLiteVecStore:
                 ).fetchall():
                     score_map[row[0]] = row[1]
 
-            # Reciprocal Rank Fusion with proper rank assignment.
+            # Reciprocal Rank Fusion with proper integer rank assignment.
+            # Sort all vector results by distance ONCE (rank = 1 for nearest).
+            sorted_by_dist = sorted(vec_results, key=lambda x: score_map.get(x["id"], 2.0))
+            vec_rank_map = {v["id"]: i + 1 for i, v in enumerate(sorted_by_dist)}
+
             rrf_k = 60
-            total_results = max(len(fts_map), len(vec_results), 1)
+            total_results = max(len(fts_rank_map), len(vec_results), 1)
 
             result_list = []
             for doc_id, data in combined.items():
-                fts_rank = fts_map.get(doc_id, total_results + 1)
-                # Proper rank: sort all vec results by distance to assign ranks.
-                sorted_by_dist = sorted(vec_results, key=lambda x: score_map.get(x["id"], 2.0))
-                vec_rank = next(
-                    (i + 1 for i, v in enumerate(sorted_by_dist) if v["id"] == data["id"]),
-                    total_results + 1,
-                )
+                fts_rank = fts_rank_map.get(doc_id, total_results + 1)
+                vec_rank = vec_rank_map.get(doc_id, total_results + 1)
                 rrf_score = (1.0 / (fts_rank + rrf_k)) + (1.0 / (vec_rank + rrf_k))
                 result_list.append({k: v for k, v in data.items() if not k.startswith("_")} | {"_rrf_score": rrf_score})
 
@@ -493,12 +494,23 @@ class SQLiteVecStore:
         except Exception as exc:  # noqa: BLE001 — best-effort commit on close
             logger.debug("Commit during close failed: %s", exc)
         finally:
-            if not self.conn.in_transaction:
-                pass  # already committed or no transaction open
             try:
                 self.conn.close()
             except Exception as exc:  # noqa: BLE001 — best-effort cleanup
                 logger.debug("Close failed: %s", exc)
+
+
+def _count_words(text: str) -> int:
+    """Count words, treating CJK characters as individual tokens.
+
+    ``str.split()`` only splits on whitespace, so an unspaced CJK paragraph
+    (common in Chinese documents) would otherwise count as a single "word".
+    """
+    if not text:
+        return 0
+    cjk = sum(1 for ch in text if "\u4e00" <= ch <= "\u9fff")
+    non_cjk = len(re.findall(r"\S+", text))
+    return cjk + non_cjk
 
 
 def _deserialize_embedding(raw) -> list[float]:

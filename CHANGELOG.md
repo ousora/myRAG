@@ -1,5 +1,26 @@
 # Changelog — myRAG Pipeline
 
+## [0.5.3] — 2026-07-09
+
+### Fixed
+
+- **`rag_query()` crashed on every query**: `Embedder.embed(str)` returns a single embedding vector (`list[float]`), but the code indexed `query_vectors[0]`, turning the vector into a bare float and crashing `serialize_float32()`. Now uses the vector directly, with a guard handling both `str` and `list` return shapes. `Embedder` is also closed via a context manager (fixes connection leak). (src/pipeline/core.py)
+- **Vector search returned duplicate chunks with truncated `section_path`**: `search_chunks()` and `hybrid_search()` used `FROM chunks c, json_each(c.section_path)` — a cross join that multiplied each chunk once per section-path element (wasting the `LIMIT` budget) and returned a single `json_each.value` element instead of the full path. Replaced with `FROM chunks c` + `EXISTS (... json_each ...)` filtering so results are deduplicated and `section_path` is the complete array. (src/storage/sqlite_vec.py)
+- **Hybrid search RRF fusion used bm25 score as rank**: `fts_rank` was taken from the raw bm25 `rank` value (a negative float), making the `+rrf_k` (60) offset meaningless and corrupting fused ordering. FTS rank now uses 1-based result order; vector ranks are also precomputed once. (src/storage/sqlite_vec.py)
+- **`_render_markdown_with_sections()` reordered document content**: it hoisted all `metadata.sections` headers above the body, shifting every section's content under the wrong header when the LLM body already contained headings (the common case). Now keeps the body's own heading structure intact, falling back to `metadata.sections` only when the body has no headings. (src/pipeline/core.py)
+- **`process_file_hybrid` / `process_file_with_md` hardcoded `source_type="pdf"`** regardless of the actual file type. Now derives the formatter hint from the file extension (pdf/docx→pdf, html/htm→web, md/mkd→markdown, txt→web). (src/pipeline/core.py)
+- **CJK `word_count` was always 1 for unspaced text**: `len(text.split())` counts only whitespace-delimited tokens, so Chinese paragraphs counted as a single word. Added a `_count_words()` helper that counts CJK characters plus whitespace-split tokens. (src/storage/sqlite_vec.py)
+- **Dead code in `SQLiteVecStore.close()`**: removed an empty `if not self.conn.in_transaction: pass` branch. (src/storage/sqlite_vec.py)
+- **`Embedder.embed()` docstring** claimed `list[list[float]]` for all inputs; corrected to document the actual contract (`str → list[float]`, `list[str] → list[list[float]]`). (src/embedders/bge_m3.py)
+
+### Changed
+
+- **`hybrid_search()` fusion loop** no longer re-sorts `vec_results` on every iteration (O(n²) → O(n)); the sorted rank map is computed once. (src/storage/sqlite_vec.py)
+
+### Added Tests (total 103)
+
+- No new tests added; existing suite (103 passing) covers the modified behavior, and an end-to-end run (`python -m pipeline.cli process`) confirms parse → clean → LLM format → embed → sqlite-vec persistence and correct deduplicated retrieval.
+
 ## [0.5.2] — 2026-07-06
 
 ### Fixed
