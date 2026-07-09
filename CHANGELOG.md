@@ -21,6 +21,7 @@
 - **`TrafilaturaParser` broken on trafilatura 2.x**: removed the removed `prefer_full_output` kwarg (now `favor_recall`) so HTML parsing no longer crashes. (src/parsers/dispatcher.py)
 - **`hybrid_search()` crashed on hyphenated queries**: user questions like "retrieval-augmented generation" were passed verbatim to FTS5 MATCH, where the hyphen is parsed as an operator (`no such column: augmented`). Added `_build_fts_query()` to strip FTS5 special characters and OR-join tokens. (src/storage/sqlite_vec.py)
 - **`rag_query()` reused the JSON-only `call_llm` to synthesize answers**: the LLM replies in free text, not JSON, so it raised "no JSON-like content". Added `call_llm_raw()` and switched `rag_query` to it. (src/formatters/__init__.py, src/pipeline/core.py)
+- **Reference/bibliography sections polluted retrieval**: reference lists (References, 参考文献, 參考, Bibliography, Further reading, …) are high in keyword overlap but carry no answer-worthy content, so they dominated top-k. `process_file_hybrid()` now strips such sections from the markdown *before chunking/embedding* (the human `.md` output is untouched). Added `_strip_reference_sections()` + `_is_reference_title()` with English (word-boundary) and CJK (substring) title matching. (src/pipeline/core.py)
 
 ## [0.5.3] — 2026-07-09
 
