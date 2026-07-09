@@ -119,15 +119,26 @@ def _match_entities_to_chunks(chunks: list[dict], entities: list[dict]) -> list[
     if not entities:
         return chunks
 
+    # Pre-classify entities: CJK names have no word boundaries, so \b never
+    # matches them. For those we use a plain substring test; for Latin names we
+    # keep the case-insensitive word-boundary match to avoid partial matches.
+    cjk_entities = [e["name"] for e in entities if _contains_cjk(e["name"])]
+    latin_entities = [e["name"] for e in entities if not _contains_cjk(e["name"])]
+    latin_patterns = [
+        (name, re.compile(r'\b' + re.escape(name.lower()) + r'\b')) for name in latin_entities
+    ]
+
     for chunk in chunks:
         chunk_text_lower = chunk["text"].lower()
-        matched = [
-            e["name"]
-            for e in entities
-            if re.search(r'\b' + re.escape(e["name"].lower()) + r'\b', chunk_text_lower)
-        ]
+        matched = [name for name in cjk_entities if name.lower() in chunk_text_lower]
+        matched += [name for name, pat in latin_patterns if pat.search(chunk_text_lower)]
         chunk["entity_names"] = matched
     return chunks
+
+
+def _contains_cjk(text: str) -> bool:
+    """Return True if *text* contains any CJK Unified Ideograph."""
+    return any("\u4e00" <= ch <= "\u9fff" for ch in text)
 
 
 def _resolve_parser(filepath: str):
@@ -180,7 +191,7 @@ class Chunker:
         return cls._RealChunker(**kwargs)
 
 
-def process_file(filepath: str, *, remove_page_breaks=True, collapse_whitespace=True, rules_config="conf/clean_rules.yaml", chunk_size=512) -> list[dict]:
+def process_file(filepath: str, *, remove_page_breaks=True, collapse_whitespace=True, rules_config="conf/clean_rules.yaml", chunk_size=1024) -> list[dict]:
     """Parse a single file and return structured chunks (traditional RAG).
 
     Pipeline: parser → cleaner → chunker → output dict list.
@@ -207,7 +218,7 @@ def process_file(filepath: str, *, remove_page_breaks=True, collapse_whitespace=
 
 
 def process_file_hybrid(filepath: str, *, doc_id="doc_0", remove_page_breaks=True, 
-                        collapse_whitespace=True, rules_config="conf/clean_rules.yaml", chunk_size=512, store_path=None, md_output_dir=None):
+                        collapse_whitespace=True, rules_config="conf/clean_rules.yaml", chunk_size=1024, store_path=None, md_output_dir=None):
     """Parse file with LLM formatter → chunker → embedder → sqlite-vec (Hybrid A+B).
 
     Args:
@@ -262,7 +273,10 @@ def process_file_hybrid(filepath: str, *, doc_id="doc_0", remove_page_breaks=Tru
     # Build summary text before the try block so it's always available in the except handler.
     title = result.get("title", "Untitled")
     tags = result.get("tags", [])
-    summary_text = f"Title: {title}\nTags: {' '.join(tags)}\n{cleaned[:500]}"
+    # Embed the LLM-formatted body (not the raw cleaned text) so the coarse-grained
+    # B index captures the document's structured semantics.
+    body_for_summary = result.get("body", "") or cleaned
+    summary_text = f"Title: {title}\nTags: {' '.join(tags)}\n{body_for_summary[:500]}"
 
     # 4. Embed + optionally persist to sqlite-vec
     db_path = None
@@ -360,7 +374,7 @@ def process_file_with_md(filepath: str, *, output_dir="./output/", **kwargs):
     return md_path
 
 
-def process_directory(dirpath: str, *, extensions=None, chunk_size=512, **kwargs) -> list[dict]:
+def process_directory(dirpath: str, *, extensions=None, chunk_size=1024, **kwargs) -> list[dict]:
     """Walk a directory and process all supported files (traditional RAG)."""
     path = Path(dirpath)
 
@@ -397,24 +411,29 @@ def rag_query(question: str, db_path: str, *, k: int = 5) -> dict:
     from storage.sqlite_vec import SQLiteVecStore
     from embedders import Embedder
 
-    # 1. Embed the query. Embedder.embed(str) returns a single embedding
-    #    vector (list[float]); normalize so both str and list inputs work.
+    # 1. Embed the query with the retrieval instruction prefix (bge-m3 needs it).
+    #    embed_query returns a single vector for str input; normalize for the
+    #    local backend which returns list[list[float]].
     with Embedder() as e:
-        query_result = e.embed(question)
+        query_result = e.embed_query(question)
     query_vector = (
         query_result[0]
         if query_result and isinstance(query_result[0], list)
         else query_result
     )
 
-    # 2. Retrieve relevant chunks
+    # 2. Retrieve relevant chunks (hybrid: vector + FTS5 RRF fusion)
     db = SQLiteVecStore(db_path)
     try:
-        results = db.search_chunks(query_vector, k=k)
+        # A: fine-grained chunk retrieval (vector + full-text).
+        results = db.hybrid_search(question, query_vector=query_vector, k=k)
+
+        # B: coarse-grained document-level fallback for broad context.
+        doc_results = db.search_documents(query_vector=query_vector, k=1)
     finally:
         db.close()
 
-    if not results:
+    if not results and not doc_results:
         return {
             "question": question,
             "answer": "No matching documents found in the index.",
@@ -426,7 +445,16 @@ def rag_query(question: str, db_path: str, *, k: int = 5) -> dict:
     for i, chunk in enumerate(results):
         section_path = "/".join(chunk.get("section_path", ["General"]))
         context_parts.append(f"[Chunk {i+1} (source: {chunk['source_doc_id']}, "
-                             f"section: {section_path}, words: {chunk['word_count']}])\n{chunk['text']}")
+                             f"section: {section_path}, words: {chunk['word_count']})]\n{chunk['text']}")
+
+    # If chunk retrieval is sparse, append the top document summary as a
+    # coarse-grained fallback so the LLM still has document-level context.
+    if len(results) < k and doc_results:
+        doc = doc_results[0]
+        context_parts.append(
+            f"[Document Overview (source: {doc['source_file']}, "
+            f"title: {doc['title']})]\n{doc['text_summary']}"
+        )
 
     assembled_context = "\n\n---\n\n".join(context_parts)
 

@@ -97,6 +97,28 @@ class Embedder:
         self.client = httpx.Client(base_url=base_url, timeout=cfg.embedding_timeout)
         self.model = model
 
+    def _maybe_prepend_instruction(self, text: str | list[str]) -> str | list[str]:
+        """Prepend the retrieval query instruction for query texts only.
+
+        bge-m3 (and other retrieval-trained models) expect a task instruction
+        on the *query* side but NOT on documents. Returns text unchanged when
+        no instruction is configured.
+        """
+        instruction = getattr(get_config(), "embedding_query_instruction", "") or ""
+        if not instruction:
+            return text
+        if isinstance(text, str):
+            return f"{instruction}{text}"
+        return [f"{instruction}{t}" for t in text]
+
+    def embed_query(self, text: str | list[str]) -> list[float] | list[list[float]]:
+        """Embed a user *query* with the model's retrieval instruction prefix.
+
+        Use this (not ``embed``) for queries so the query is mapped into the
+        same vector space as document embeddings produced by ``embed``/``store_*``.
+        """
+        return self.embed(self._maybe_prepend_instruction(text))
+
     def __enter__(self):
         return self
 

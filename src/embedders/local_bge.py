@@ -95,6 +95,29 @@ class LocalEmbedder:
 
         return all_embeddings
 
+    def _maybe_prepend_instruction(self, text: str | list[str]) -> str | list[str]:
+        """Prepend the retrieval query instruction for query texts only.
+
+        Mirrors ``Embedder._maybe_prepend_instruction`` on the remote backend:
+        documents are embedded without the prefix, queries with it.
+        """
+        from config import get_config
+
+        instruction = getattr(get_config(), "embedding_query_instruction", "") or ""
+        if not instruction:
+            return text
+        if isinstance(text, str):
+            return f"{instruction}{text}"
+        return [f"{instruction}{t}" for t in text]
+
+    def embed_query(self, text: str | list[str]) -> list[list[float]]:
+        """Embed a user *query* with the retrieval instruction prefix.
+
+        Returns ``list[list[float]]`` (one inner list per input) to stay
+        consistent with LocalEmbedder.embed's return shape.
+        """
+        return self.embed(self._maybe_prepend_instruction(text))
+
     def store_chunks(self, chunks: list[dict], *, doc_id: str = "doc_0") -> list[dict]:
         """Embed multiple chunks and return metadata for storage.
 

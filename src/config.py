@@ -73,6 +73,11 @@ class Config:
         self.embedding_timeout: int    = emb.get("timeout", 60)
         self.embedding_mode: str       = emb.get("mode", "remote")
         self.embedding_local_model: str | None = emb.get("local_model")
+        # Instruction prepended to *queries* (not documents) for retrieval-trained
+        # models like bge-m3. Empty string disables the prefix.
+        self.embedding_query_instruction: str = emb.get(
+            "query_instruction", "Represent this sentence for searching relevant passages: "
+        )
 
         # ── Formatter ──
         fmt = raw.get("formatter", {})

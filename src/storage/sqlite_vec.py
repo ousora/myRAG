@@ -136,6 +136,7 @@ class SQLiteVecStore:
                 text_summary TEXT NOT NULL,
                 source_file TEXT NOT NULL,
                 total_chunks INTEGER DEFAULT 0,
+                embedding BLOB,
                 created_at TEXT
             );
 
@@ -155,6 +156,11 @@ class SQLiteVecStore:
                     VALUES('delete', old.id, old.text);
             END;
         """)
+        # Backward-compat migration: existing DBs created before the document-level
+        # embedding column existed won't have it. Add it without dropping data.
+        cols = {row[1] for row in self.conn.execute("PRAGMA table_info(documents)")}
+        if "embedding" not in cols:
+            self.conn.execute("ALTER TABLE documents ADD COLUMN embedding BLOB")
         self._schema_ready = True
 
     def upsert_chunk(self, chunk_data: dict, *, doc_id: str,
@@ -282,11 +288,16 @@ class SQLiteVecStore:
     def upsert_document(self, title: str, tags: list[str], text_summary: str,
                         source_file: str, total_chunks: int,
                         embedding: Optional[list[float]] = None) -> dict:
-        """Insert or update a document-level record (B index)."""
+        """Insert or update a document-level record (B index).
+
+        Persists the document-level embedding so the coarse-grained B index
+        can be searched by vector similarity, not just by tags.
+        """
         self._setup_schema()
 
         tags_json = json.dumps(tags)
         created_at = datetime.now(timezone.utc).isoformat()
+        emb_blob = _SQLITE_VEC.serialize_float32(embedding) if embedding else None
 
         # Upsert by source_file — re-ingesting the same file overwrites.
         existing = self.conn.execute(
@@ -296,15 +307,15 @@ class SQLiteVecStore:
         if existing:
             cursor = self.conn.execute(
                 """UPDATE documents SET title=?, tags=?, text_summary=?, 
-                  total_chunks=?, created_at=? WHERE id=?""",
-                (title, tags_json, text_summary[:1000], total_chunks, created_at, existing[0])
+                   total_chunks=?, embedding=?, created_at=? WHERE id=?""",
+                (title, tags_json, text_summary[:1000], total_chunks, emb_blob, created_at, existing[0])
             )
         else:
             cursor = self.conn.execute(
                 """INSERT INTO documents (title, tags, text_summary, source_file, 
-                                          total_chunks, created_at)
-                   VALUES (?, ?, ?, ?, ?, ?)""",
-                (title, tags_json, text_summary[:1000], source_file, total_chunks, created_at)
+                                          total_chunks, embedding, created_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                (title, tags_json, text_summary[:1000], source_file, total_chunks, emb_blob, created_at)
             )
 
         self.conn.commit()
@@ -317,12 +328,18 @@ class SQLiteVecStore:
             "text_summary": text_summary,
             "source_file": source_file,
             "total_chunks": total_chunks,
+            "embedding": embedding,
             "created_at": created_at,
         }
 
     def search_documents(self, query_vector: Optional[list[float]] = None,
-                         tags: Optional[list[str]] = None) -> list[dict]:
-        """Search documents by vector similarity or tag filter."""
+                          tags: Optional[list[str]] = None, k: int = 5) -> list[dict]:
+        """Search documents by vector similarity or tag filter.
+
+        When *query_vector* is provided, ranks documents by cosine distance
+        (coarse-grained B index). *tags* filters by exact tag membership.
+        Both can be combined (vector ranking within the tag-filtered set).
+        """
         self._setup_schema()
 
         where_clauses = []
@@ -330,30 +347,50 @@ class SQLiteVecStore:
 
         if tags:
             # Exact match via json_each — avoids LIKE wildcard issues entirely.
-            for i, tag in enumerate(tags):
+            for tag in tags:
                 where_clauses.append(
                     "EXISTS (SELECT 1 FROM json_each(documents.tags) WHERE json_each.value = ?)"
                 )
                 params.append(tag)
 
+        # Vector search requires a non-null embedding column.
+        if query_vector is not None:
+            where_clauses.append("embedding IS NOT NULL")
+
         where = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
 
-        results = self.conn.execute(
-            f"""SELECT id, title, tags as raw_tags, 
-                         text_summary, source_file, total_chunks, created_at
-                 FROM documents {where}""",
-            params
-        ).fetchall()
+        if query_vector is not None:
+            emb_str = _SQLITE_VEC.serialize_float32(query_vector)
+            sql = (
+                f"""SELECT id, title, tags as raw_tags, text_summary,
+                              source_file, total_chunks, created_at,
+                              vec_distance_cosine(embedding, ?) AS distance
+                       FROM documents {where}
+                       ORDER BY distance ASC
+                       LIMIT ?"""
+            )
+            rows = self.conn.execute(sql, [emb_str, *params, k]).fetchall()
+        else:
+            sql = (
+                f"""SELECT id, title, tags as raw_tags, text_summary,
+                              source_file, total_chunks, created_at
+                       FROM documents {where}"""
+            )
+            rows = self.conn.execute(sql, params).fetchall()
 
-        return [{
-            "id": row[0],
-            "title": row[1],
-            "tags": json.loads(row[2]) if isinstance(row[2], str) else [],
-            "text_summary": row[3],
-            "source_file": row[4],
-            "total_chunks": row[5],
-            "created_at": row[6],
-        } for row in results]
+        results = []
+        for row in rows:
+            results.append({
+                "id": row[0],
+                "title": row[1],
+                "tags": json.loads(row[2]) if isinstance(row[2], str) else [],
+                "text_summary": row[3],
+                "source_file": row[4],
+                "total_chunks": row[5],
+                "created_at": row[6],
+                **({"distance": row[7]} if query_vector is not None else {}),
+            })
+        return results
 
     def hybrid_search(self, query_text: str, query_vector: Optional[list[float]] = None,
                       k: int = 10) -> list[dict]:
