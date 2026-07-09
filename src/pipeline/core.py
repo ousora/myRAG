@@ -60,22 +60,18 @@ logger = logging.getLogger(__name__)
 # Internal helper — not exported. Renders LLM output sections into markdown.
 # If you need this, import directly from pipeline.core (not via __init__).
 def _render_markdown_with_sections(result: dict) -> str:
-    """Build markdown text with proper ##/### headers from metadata.sections.
+    """Render a clean markdown document from the LLM formatter output.
 
-    The LLM formatter's body field may or may not contain markdown headers
-    (it's non-deterministic). This function guarantees headers by rendering
-    them from metadata.sections, which is the reliable structured source.
-    Existing headings in the body are stripped to avoid duplicates.
+    The formatter's ``body`` is non-deterministic: it usually already contains
+    its own ``##``/``###`` headings. When it does, we keep that structure and
+    only drop a duplicate top-level title H1 (which we render ourselves). When
+    it does not, we prepend the title and leave the body as-is — the chunker
+    then falls back to plain-text splitting, which is preferable to fabricating
+    header scaffolding that mis-nests the content.
     """
     title = result.get("title", "Untitled")
     body = result.get("body", "") or ""
 
-    # The LLM body is non-deterministic: it may already contain its own
-    # section headings (the common case, especially for chunked output where
-    # metadata.sections is derived from the body). If so, keep the body's
-    # structure intact and only drop a duplicate top-level title H1 if the
-    # model echoed it. Hoisting all metadata.sections headers above the body
-    # would shift every section's content under the wrong header.
     if re.search(r'^#{1,6}\s+', body):
         body_lines = body.split("\n")
         kept = []
@@ -89,16 +85,8 @@ def _render_markdown_with_sections(result: dict) -> str:
         body_block = "\n".join(kept).strip()
         return f"# {title}\n\n{body_block}\n"
 
-    # Body has no headings — render section headers from metadata.sections.
-    lines = [f"# {title}"]
-    for section in result.get("metadata", {}).get("sections", []):
-        level = section.get("level", 2)
-        prefix = "#" * level
-        lines.append(f"{prefix} {section['title']}")
-
-    lines.append("")
-    lines.append(body.strip())
-    return "\n\n".join(lines) + "\n"
+    # No headings in body — prepend title only; let the chunker handle structure.
+    return f"# {title}\n\n{body.strip()}\n"
 
 
 def _match_entities_to_chunks(chunks: list[dict], entities: list[dict]) -> list[dict]:
@@ -286,26 +274,26 @@ def process_file_hybrid(filepath: str, *, doc_id="doc_0", remove_page_breaks=Tru
     
         e = Embedder()
         stored_chunks = e.store_chunks(all_chunks, doc_id=doc_id)
-        
-        # Document-level index (B)
-        stored_doc = e.store_document(
-            title=title,
-            tags=tags,
-            text_summary=summary_text,
-            source_file=filepath,
-            total_chunks=len(stored_chunks),
-        )
 
         # Persist to sqlite-vec if requested
         if store_path:
+            # Document-level index (B) — only embed when we actually persist it.
+            stored_doc = e.store_document(
+                title=title,
+                tags=tags,
+                text_summary=summary_text,
+                source_file=filepath,
+                total_chunks=len(stored_chunks),
+            )
+            doc_embedding = stored_doc.get("embedding")
+
             from storage.sqlite_vec import SQLiteVecStore
             db = SQLiteVecStore(store_path)
-            
+
             # Store chunks with embeddings
             db.upsert_chunks(stored_chunks, doc_id=doc_id)
-            
+
             # Store document-level record
-            doc_embedding = stored_doc.get("embedding")
             db.upsert_document(
                 title=title,
                 tags=tags,
@@ -314,10 +302,20 @@ def process_file_hybrid(filepath: str, *, doc_id="doc_0", remove_page_breaks=Tru
                 total_chunks=len(stored_chunks),
                 embedding=doc_embedding,
             )
-            
+
             db_path = store_path
             logger.info("  → Persisted %d chunks + 1 doc to %s", len(stored_chunks), store_path)
-        
+        else:
+            # No persistence requested — skip the document embedding entirely
+            # (it would be wasted work) and return a lightweight metadata dict.
+            stored_doc = {
+                "title": title,
+                "tags": tags,
+                "text_summary": summary_text,
+                "source_file": filepath,
+                "total_chunks": len(stored_chunks),
+            }
+
     except (httpx.HTTPError, RuntimeError) as exc:
         logger.warning("Embedding/storage failed (%s): %s", type(exc).__name__, exc)
         stored_chunks = [{"text": c["text"], "section_path": c.get("section_path", ["General"]), 
@@ -416,31 +414,37 @@ def rag_query(question: str, db_path: str, *, k: int = 5) -> dict:
     #    local backend which returns list[list[float]].
     with Embedder() as e:
         query_result = e.embed_query(question)
-    query_vector = (
-        query_result[0]
-        if query_result and isinstance(query_result[0], list)
-        else query_result
-    )
+        query_vector = (
+            query_result[0]
+            if query_result and isinstance(query_result[0], list)
+            else query_result
+        )
 
-    # 2. Retrieve relevant chunks (hybrid: vector + FTS5 RRF fusion)
-    db = SQLiteVecStore(db_path)
-    try:
-        # A: fine-grained chunk retrieval (vector + full-text).
-        results = db.hybrid_search(question, query_vector=query_vector, k=k)
+        # 2. Retrieve relevant chunks (hybrid: vector + FTS5 RRF fusion)
+        db = SQLiteVecStore(db_path)
+        try:
+            # A: fine-grained chunk retrieval (vector + full-text).
+            results = db.hybrid_search(question, query_vector=query_vector, k=k)
 
-        # B: coarse-grained document-level fallback for broad context.
-        doc_results = db.search_documents(query_vector=query_vector, k=1)
-    finally:
-        db.close()
+            # B: coarse-grained document-level fallback for broad context.
+            doc_results = db.search_documents(query_vector=query_vector, k=1)
+        finally:
+            db.close()
 
-    if not results and not doc_results:
-        return {
-            "question": question,
-            "answer": "No matching documents found in the index.",
-            "context": [],
-        }
+        if not results and not doc_results:
+            return {
+                "question": question,
+                "answer": "No matching documents found in the index.",
+                "context": [],
+            }
 
-    # 3. Assemble context from retrieved chunks
+        # 3. Re-rank chunks (MMR) for diversity, then assemble context.
+        if len(results) > 1:
+            from rerank import mmr_rerank
+
+            chunk_vectors = e.embed([c["text"] for c in results])
+            results = mmr_rerank(question, query_vector, chunk_vectors, results, k=k)
+
     context_parts = []
     for i, chunk in enumerate(results):
         section_path = "/".join(chunk.get("section_path", ["General"]))

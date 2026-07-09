@@ -10,6 +10,8 @@ import json
 import logging
 import os
 import re
+import threading
+from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor, Future
 from typing import Any, Dict
 
@@ -24,6 +26,36 @@ from .prompts import (
 from .constants import FORMATTER_SCHEMA, CHUNKED_SCHEMA
 
 logger = logging.getLogger(__name__)
+
+# ── Process-wide formatting cache ───────────────────────────────────────
+# Identical (raw, source_type, system_prompt) inputs are formatted only once
+# per process — avoids re-running the (expensive) LLM call on re-ingest.
+# Bounded LRU keyed by a content hash.
+
+_FORMAT_CACHE: "OrderedDict[str, dict]" = OrderedDict()
+_FORMAT_CACHE_LOCK = threading.Lock()
+_FORMAT_CACHE_MAX = 256
+
+
+def _format_cache_key(raw: str, source_type: str, system_prompt) -> str:
+    sp = system_prompt or ""
+    return hashlib.md5(
+        f"{source_type}|{sp}|{raw}".encode("utf-8")
+    ).hexdigest()
+
+
+def _format_cached(raw: str, source_type: str, system_prompt, compute) -> dict:
+    key = _format_cache_key(raw, source_type, system_prompt)
+    with _FORMAT_CACHE_LOCK:
+        if key in _FORMAT_CACHE:
+            _FORMAT_CACHE.move_to_end(key)
+            return _FORMAT_CACHE[key]
+    result = compute()
+    with _FORMAT_CACHE_LOCK:
+        _FORMAT_CACHE[key] = result
+        if len(_FORMAT_CACHE) > _FORMAT_CACHE_MAX:
+            _FORMAT_CACHE.popitem(last=False)
+    return result
 
 
 def _shutdown_executor():
@@ -623,28 +655,31 @@ def _extract_cjk_entities(text: str) -> list[str]:
 
 def _format_text_single(raw: str, source_type: str = "web", *, system_prompt: str | None = None) -> Dict[str, Any]:
     """Single-shot formatting — original behavior for small documents."""
-    prompt = system_prompt if system_prompt is not None else get_system_prompt(source_type)
-    result = call_llm(prompt, raw.strip(), schema=FORMATTER_SCHEMA)
+    def _compute() -> Dict[str, Any]:
+        prompt = system_prompt if system_prompt is not None else get_system_prompt(source_type)
+        result = call_llm(prompt, raw.strip(), schema=FORMATTER_SCHEMA)
 
-    # Validate output against expected schema and fix common issues.
-    errors = validate_format_output(result)
-    if errors:
-        logger.warning("format_text returned %d validation error(s): %s", len(errors), "; ".join(errors))
-        result = try_fix_common_issues(result)
+        # Validate output against expected schema and fix common issues.
+        errors = validate_format_output(result)
+        if errors:
+            logger.warning("format_text returned %d validation error(s): %s", len(errors), "; ".join(errors))
+            result = try_fix_common_issues(result)
 
-    # Fix placeholder metadata that the LLM copies from the prompt template.
-    body = result.get("body", "")
-    if isinstance(body, str):
-        result.setdefault("metadata", {})["total_words"] = len(body.split())
-    if "created_at" in result.get("metadata", {}):
-        import datetime
-        result["metadata"]["created_at"] = datetime.datetime.now().isoformat()
+        # Fix placeholder metadata that the LLM copies from the prompt template.
+        body = result.get("body", "")
+        if isinstance(body, str):
+            result.setdefault("metadata", {})["total_words"] = len(body.split())
+        if "created_at" in result.get("metadata", {}):
+            import datetime
+            result["metadata"]["created_at"] = datetime.datetime.now().isoformat()
 
-    return result
+        return result
+
+    return _format_cached(raw, source_type, system_prompt, _compute)
 
 
-def _format_text_chunked(raw: str, source_type: str = "pdf", *, system_prompt: str | None = None) -> Dict[str, Any]:
-    """Chunked formatting for large documents.
+def _format_text_chunked_uncached(raw: str, source_type: str = "pdf", *, system_prompt: str | None = None) -> Dict[str, Any]:
+    """Chunked formatting for large documents (uncached worker).
 
     Splits text by paragraph, processes each chunk with LLM context
     (last 10 lines of previous output + cumulative summary), then
@@ -765,6 +800,25 @@ def _format_text_chunked(raw: str, source_type: str = "pdf", *, system_prompt: s
         logger.warning("chunked format returned %d validation error(s): %s", len(errors), "; ".join(errors))
         result = try_fix_common_issues(result)
 
+    return result
+
+
+def _format_text_chunked(raw: str, source_type: str = "pdf", *, system_prompt: str | None = None) -> Dict[str, Any]:
+    """Chunked formatting for large documents, with process-wide caching.
+
+    Delegates to ``_format_text_chunked_uncached`` and caches the merged result
+    so re-ingesting identical text skips the (expensive) multi-call LLM pass.
+    """
+    key = _format_cache_key(raw, source_type, system_prompt)
+    with _FORMAT_CACHE_LOCK:
+        if key in _FORMAT_CACHE:
+            _FORMAT_CACHE.move_to_end(key)
+            return _FORMAT_CACHE[key]
+    result = _format_text_chunked_uncached(raw, source_type, system_prompt=system_prompt)
+    with _FORMAT_CACHE_LOCK:
+        _FORMAT_CACHE[key] = result
+        if len(_FORMAT_CACHE) > _FORMAT_CACHE_MAX:
+            _FORMAT_CACHE.popitem(last=False)
     return result
 
 

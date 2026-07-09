@@ -1,5 +1,24 @@
 # Changelog — myRAG Pipeline
 
+## [0.5.4] — 2026-07-09
+
+### Added
+- **bge-m3 query instruction prefix**: new `embed_query()` on both remote and local embedders prepends the retrieval instruction (`Represent this sentence for searching relevant passages: `) to queries only — documents are embedded without it. Configurable via `embedding.query_instruction` (default set in `conf/config.example.yaml`). (src/embedders/bge_m3.py, src/embedders/local_bge.py, src/config.py)
+- **Document-level (B) vector index now functional**: `documents` table gains an `embedding BLOB` column; `upsert_document()` persists the doc embedding; `search_documents()` supports vector ranking by cosine distance (with `k` limit). Existing DBs are migrated via `ALTER TABLE` on open. (src/storage/sqlite_vec.py)
+- **MMR re-ranking of retrieved chunks**: new `src/rerank.py` re-orders hybrid-search results by Maximal Marginal Relevance (lexical relevance + embedding diversity) so context blocks are not near-duplicates. Wired into `rag_query()`.
+- **Process-wide caches**: bounded LRU caches for embedding results (`src/embedders/bge_m3.py`, `local_bge.py`) and formatting results (`src/formatters/__init__.py`) — identical inputs are processed once per process.
+
+### Changed
+- **`rag_query()` now uses true hybrid retrieval**: switched from pure-vector `search_chunks()` to `hybrid_search()` (vector + FTS5 RRF fusion) with `embed_query()`, then MMR re-ranks. When chunk recall is sparse it appends the top document summary as a coarse-grained B fallback. (src/pipeline/core.py)
+- **Document (B) summary embeds the LLM-formatted body** instead of raw cleaned text, so the coarse index captures structured semantics. (src/pipeline/core.py)
+- **Default `chunk_size` raised 512 → 1024** for bge-m3's large context window (process_file / process_file_hybrid / process_directory). (src/pipeline/core.py)
+- **`_render_markdown_with_sections()` simplified**: dropped the mis-nesting no-headings branch (it listed headers then dumped the whole body); now just prepends the title and lets the chunker fall back to plain-text splitting. (src/pipeline/core.py)
+- **`Embedder.__new__` cleaned up**: local mode now constructs `LocalEmbedder` directly instead of the `object.__new__` + manual `__init__` hack; `LocalEmbedder` gained `__enter__/__exit__` so `with Embedder() as e:` works in local mode too. (src/embedders/bge_m3.py, src/embedders/local_bge.py)
+
+### Fixed
+- **CJK entity matching was broken**: `_match_entities_to_chunks()` used `\b` word boundaries which never match Chinese names. Now uses substring match for CJK entity names and word-boundary match for Latin ones. (src/pipeline/core.py)
+- **Wasted document embedding when not persisting**: `process_file_hybrid()` no longer calls `store_document()` (and its embedding) when `store_path` is None; it returns a lightweight metadata dict instead. (src/pipeline/core.py)
+
 ## [0.5.3] — 2026-07-09
 
 ### Fixed

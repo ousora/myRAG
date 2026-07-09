@@ -35,6 +35,8 @@ Schema:
 
 import httpx
 import logging
+import threading
+from collections import OrderedDict
 
 from config import get_config
 
@@ -45,6 +47,28 @@ logger = logging.getLogger(__name__)
 # Expected embedding dimension for bge-m3 models. Other models may differ,
 # but this serves as a sanity check to catch misconfigured endpoints early.
 EXPECTED_EMBEDDING_DIMENSION = 1024
+
+# ── Process-wide embedding cache ────────────────────────────────────────
+# Identical texts (queries, document summaries, repeated chunks) are embedded
+# only once per process. Bounded LRU; keyed by the exact input string.
+_EMBED_CACHE: "OrderedDict[str, list[float]]" = OrderedDict()
+_EMBED_CACHE_LOCK = threading.Lock()
+_EMBED_CACHE_MAX = 4096
+
+
+def _embed_cache_get(text: str) -> "list[float] | None":
+    with _EMBED_CACHE_LOCK:
+        if text in _EMBED_CACHE:
+            _EMBED_CACHE.move_to_end(text)
+            return _EMBED_CACHE[text]
+    return None
+
+
+def _embed_cache_put(text: str, embedding: list[float]) -> None:
+    with _EMBED_CACHE_LOCK:
+        _EMBED_CACHE[text] = embedding
+        if len(_EMBED_CACHE) > _EMBED_CACHE_MAX:
+            _EMBED_CACHE.popitem(last=False)
 
 
 def _validate_embedding_dimension(embedding: list[float]) -> None:
@@ -77,10 +101,8 @@ class Embedder:
         if mode == "local":
             from .local_bge import LocalEmbedder
 
-            instance = object.__new__(LocalEmbedder)
             local_model = getattr(cfg, "embedding_local_model", None) or "BAAI/bge-m3"
-            instance.__init__(model_name=local_model)
-            return instance  # type: ignore[return-value]
+            return LocalEmbedder(model_name=local_model)  # type: ignore[return-value]
 
         return super().__new__(cls)
 
@@ -171,6 +193,9 @@ class Embedder:
         directly rather than indexing ``[0]``.
         """
         if isinstance(text, str):
+            cached = _embed_cache_get(text)
+            if cached is not None:
+                return cached
             payload = {"model": self.model, "input": [text]}
         else:
             payload = {"model": self.model, "input": text}
@@ -182,6 +207,7 @@ class Embedder:
         if isinstance(text, str):
             emb = data["data"][0]["embedding"]
             _validate_embedding_dimension(emb)
+            _embed_cache_put(text, emb)
             return emb
         else:
             embeddings = [d["embedding"] for d in data["data"]]
