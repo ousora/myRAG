@@ -32,7 +32,7 @@ embedding:
 
 # ── Formatter Settings ───────────────────────────────────────────────
 formatter:
-  chunk_threshold_chars: 28000   # texts above this trigger chunked processing (~7000 tokens)
+  chunk_threshold_chars: 20000   # texts above this trigger chunked processing (~5000 tokens)
   chunk_max_tokens: 16384        # max output tokens per chunk LLM call
   chunk_timeout: 300             # seconds for each chunk LLM call
 

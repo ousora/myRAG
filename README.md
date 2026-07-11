@@ -5,7 +5,7 @@
                                     └→ chunk → match entities → embed → sqlite-vec
 ```
 
-> Large texts (>28K chars) are auto-split at paragraph boundaries and processed chunk-by-chunk. Each chunk receives the last 10 lines of previous markdown output + cumulative summary as context for continuity.
+> Large texts (>20K chars) are auto-split at paragraph boundaries and processed chunk-by-chunk. Each chunk receives the last 10 lines of previous markdown output + cumulative summary as context for continuity.
 
 ## Architecture
 
@@ -54,7 +54,7 @@ cleaned = TextCleaner().clean(raw_text)
 
 ### 3. Formatter (`src/formatters/`)
 
-LLM-powered: extracts title, tags, section hierarchy. **Auto-chunks large texts** (>28K chars) at paragraph boundaries — each chunk gets the last 10 lines of previous markdown output + cumulative summary as context for continuity.
+LLM-powered: extracts title, tags, section hierarchy. **Auto-chunks large texts** (>20K chars) at paragraph boundaries — each chunk gets the last 10 lines of previous markdown output + cumulative summary as context for continuity.
 
 **JSON Schema enforcement**: `call_llm()` accepts a `schema=` parameter to send JSON Schema via `response_format`, letting llama.cpp / OpenAI servers enforce output structure natively (schemas in [constants.py](src/formatters/constants.py)).
 

@@ -81,7 +81,7 @@ class Config:
 
         # ── Formatter ──
         fmt = raw.get("formatter", {})
-        self.chunk_threshold_chars: int = fmt.get("chunk_threshold_chars", 28000)
+        self.chunk_threshold_chars: int = fmt.get("chunk_threshold_chars", 20000)
         self.chunk_max_tokens: int      = fmt.get("chunk_max_tokens", 16384)
         self.chunk_timeout: int         = fmt.get("chunk_timeout", 300)
 

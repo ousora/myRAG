@@ -132,13 +132,13 @@ def _get_chunk_threshold() -> int:
 def effective_chunk_threshold(text: str) -> int:
     """Return a CJK-aware chunk threshold adjusted for the input text's language mix.
 
-    The base ``chunk_threshold_chars`` (default 28000) is calibrated for English
+    The base ``chunk_threshold_chars`` (default 20000) is calibrated for English
     at ~4 chars/token.  For predominantly CJK text (~1 char/token), we lower the
     threshold proportionally so that token budgets stay roughly constant across
     languages.
     """
     cfg = _get_config()
-    base = cfg.chunk_threshold_chars  # ≈7000 tokens for English
+    base = cfg.chunk_threshold_chars  # ≈5000 tokens for English
 
     ratio = _detect_cjk_ratio(text)
     if ratio >= 0.5:

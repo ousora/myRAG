@@ -1,6 +1,30 @@
 """Tests for pipeline.core reference-section stripping."""
 
-from pipeline.core import _is_reference_title, _strip_reference_sections
+from pipeline.core import (
+    _build_doc_summary,
+    _is_reference_title,
+    _strip_reference_sections,
+)
+
+
+def test_build_doc_summary_short_body():
+    s = _build_doc_summary("Title", ["t1"], "short body")
+    assert "Title: Title" in s
+    assert "Tags: t1" in s
+    assert "short body" in s
+
+
+def test_build_doc_summary_head_tail():
+    body = "A" * 900 + "\nEND\n" + "B" * 500
+    s = _build_doc_summary("Doc", [], body)
+    # Head preserved, tail appended (separated by a marker) for long bodies.
+    assert "A" * 50 in s
+    assert "B" * 50 in s
+    assert "..." in s
+
+
+def test_build_doc_summary_empty():
+    assert _build_doc_summary("", [], "").startswith("Title:")
 
 
 def test_is_reference_title_english():

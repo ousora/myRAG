@@ -1,5 +1,20 @@
 # Changelog — myRAG Pipeline
 
+## [0.5.5] — 2026-07-11
+
+### Added
+- **`process_directory_hybrid()`**: batch-process every supported file in a directory through the LLM-formatted Hybrid A+B pipeline. The parse/format/chunk/embed phase runs concurrently (`max_workers`, default 4); `doc_id` is derived deterministically from each file's path relative to the directory so re-runs overwrite the same records instead of duplicating them. (src/pipeline/core.py)
+- **`md_path` reuse in `process_file_hybrid()`**: pass an existing `.md` file and the (expensive) LLM formatter is skipped entirely — the markdown is reused for chunking/embedding. Enables the two-phase workflow (generate `.md` once, ingest/experiment many times) without re-paying for formatting. (src/pipeline/core.py)
+- **`SQLiteVecStore.get_embeddings_by_ids()`**: fetch chunk embeddings already stored in the index, keyed by row id and aligned to the requested order. Unknown ids yield an empty list in position. (src/storage/sqlite_vec.py)
+- **`rag_query()` accepts optional pre-opened `db` / `embedder`** so a session can reuse one connection/embedder across queries instead of re-opening on every call. (src/pipeline/core.py)
+
+### Changed
+- **Skip ALL embedding when not persisting**: `process_file_hybrid()` no longer constructs the embedder or embeds chunks when `store_path` is None (previously only the document-level embedding was skipped). The most expensive remote step is now avoided entirely for `.md`-only / in-memory callers. (src/pipeline/core.py)
+- **MMR re-ranking reuses stored chunk vectors**: `rag_query()` fetches the retrieved chunks' embeddings from the index via `get_embeddings_by_ids()` instead of re-embedding every chunk (a per-query batch of remote embedding calls). Missing vectors fall back to on-demand embedding only for the gaps. (src/pipeline/core.py, src/storage/sqlite_vec.py)
+- **`upsert_chunks()` now writes in a single transaction** via `executemany` (was a per-chunk INSERT loop), then maps generated row ids back by `(source_doc_id, chunk_index)`. Faster for large documents. (src/storage/sqlite_vec.py)
+- **Document-level (B) summary uses head+tail of the body** instead of only the first 500 characters, so long documents also contribute their closing context to the coarse-grained embedding. Shared helper `_build_doc_summary()` used by both `process_file_hybrid()` and `_ingest_markdown()`. (src/pipeline/core.py, src/pipeline/ingest.py)
+- **Lowered large-doc auto-chunk threshold 28000 → 20000 chars** (`chunk_threshold_chars` default in `src/config.py`, `conf/config.yaml`, `conf/config.example.yaml`). Texts above this are split for chunked LLM processing (~5000 tokens for English). (src/config.py, src/formatters/__init__.py, AGENTS.md, README.md)
+
 ## [0.5.4] — 2026-07-09
 
 ### Added
@@ -104,7 +119,7 @@
 
 ### Changed
 
-- **CJK-aware chunk threshold** (`_detect_cjk_ratio()`): Chunk size scales down from 28000 chars to ~7000 when text is ≥50% CJK (Chinese/Japanese/Korean), based on character-to-token ratio of 1:1 for CJK vs 4:1 for English. Linear interpolation at 10–50% CJK density.
+ - **CJK-aware chunk threshold** (`_detect_cjk_ratio()`): Chunk size scales down from the configured base (default 20000 chars, ~5000 tokens) to ~5000 chars when text is ≥50% CJK (Chinese/Japanese/Korean), based on character-to-token ratio of 1:1 for CJK vs 4:1 for English. Linear interpolation at 10–50% CJK density.
 - **Multi-language tag extraction**: `_detect_body_script()` detects text script; `_tokenize_cjk()` uses bigram + whitespace tokenization for CJK; `_tokenize_latin()` uses `[a-zA-Z]{3,}` regex; multi-language stopword sets (English, Chinese, Japanese); `_extract_cjk_entities()` extracts named-entity-like phrases from CJK text.
 - **Sentence-split abbreviation handling**: `_SENTENCE_ABBREVIATIONS` set with 50+ common abbreviations ("Mr.", "Dr.", "U.S.A.", etc.) prevents false sentence boundary detection in title/initials/acronyms contexts.
 - **O(n) heading lookup** (`_split_by_headings()`): Pre-build `heading_by_line` dict for constant-time per-line lookups instead of O(n*m) nested loop scanning.

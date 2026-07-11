@@ -43,6 +43,8 @@ Usage (LLM-formatted + Markdown output):
 """
 
 
+from __future__ import annotations
+
 import concurrent.futures
 import httpx
 import logging
@@ -50,6 +52,8 @@ import re
 from pathlib import Path
 
 from config import get_config_lazy as _get_config
+from embedders import Embedder  # noqa: F401 — used in rag_query type hints
+from storage.sqlite_vec import SQLiteVecStore  # noqa: F401 — used in rag_query type hints
 
 # Trigger parser registration at module load time
 import parsers  # noqa: F401 — loads dispatcher (MarkItDown + Trafilatura)
@@ -185,6 +189,25 @@ def _contains_cjk(text: str) -> bool:
     return any("\u4e00" <= ch <= "\u9fff" for ch in text)
 
 
+def _build_doc_summary(title: str, tags: list[str], body: str, *, head: int = 800, tail: int = 400) -> str:
+    """Build a document-level (B index) summary from head + tail of the body.
+
+    The first ``head`` chars capture the document's lead/abstract; for longer
+    documents the last ``tail`` chars are appended so the closing section also
+    informs the coarse-grained embedding (otherwise the B index only ever sees
+    the opening, which harms retrieval for documents whose answer is near the end).
+    """
+    body = body or ""
+    if len(body) <= head:
+        snippet = body
+    else:
+        snippet = body[:head]
+        if tail and len(body) > head + tail:
+            snippet += "\n...\n" + body[-tail:]
+    tag_str = " ".join(tags) if tags else ""
+    return f"Title: {title}\nTags: {tag_str}\n{snippet}".strip()
+
+
 def _resolve_parser(filepath: str):
     from parsers.dispatcher import resolve_parser as rp
     return rp(filepath)
@@ -262,7 +285,7 @@ def process_file(filepath: str, *, remove_page_breaks=True, collapse_whitespace=
 
 
 def process_file_hybrid(filepath: str, *, doc_id="doc_0", remove_page_breaks=True, 
-                        collapse_whitespace=True, rules_config="conf/clean_rules.yaml", chunk_size=1024, store_path=None, md_output_dir=None):
+                        collapse_whitespace=True, rules_config="conf/clean_rules.yaml", chunk_size=1024, store_path=None, md_output_dir=None, md_path=None):
     """Parse file with LLM formatter → chunker → embedder → sqlite-vec (Hybrid A+B).
 
     Args:
@@ -272,38 +295,53 @@ def process_file_hybrid(filepath: str, *, doc_id="doc_0", remove_page_breaks=Tru
         store_path: Optional path to sqlite-vec database. If provided, chunk
                     vectors are persisted for later retrieval.
         md_output_dir: Optional directory to write structured markdown (via write_to_md).
+        md_path: Optional path to an EXISTING .md file. When given and the file
+                 exists, the LLM formatter is skipped entirely and the .md is
+                 reused (two-phase: generate once, ingest many times).
 
     Returns dict with:
         chunks  — list of dicts with embedding data (A - fine-grained)
         document — single dict with summary + embedding (B - coarse-grained)
         db_path  — path to sqlite-vec DB if store_path was provided, else None
-        md_path  — path to generated .md file if md_output_dir was provided, else None
+        md_path  — path to generated/reused .md file, else None
     """
     from formatters import format_text_async, write_to_md
-    
-    # 1. Parse & Clean
-    parser = _resolve_parser(filepath)
-    if parser is None:
-        logger.warning("Skipped %s — no parser found", filepath)
-        return {"chunks": [], "document": {}}
+    import re as _re
 
-    raw_text = parser.parse(filepath)
-    cleaned = TextCleaner(remove_page_breaks=remove_page_breaks, collapse_whitespace=collapse_whitespace, rules_config=rules_config).clean(raw_text)
-
-    # 2. LLM Format (async)
     cfg = _get_config()
-    future = format_text_async(cleaned, source_type=_source_type_for(filepath))
-    try:
-        result = future.result(timeout=cfg.format_timeout)
-    except concurrent.futures.TimeoutError:
-        logger.warning("LLM formatting timed out after %ds for %s", cfg.format_timeout, filepath)
-        return {"chunks": [], "document": {}}
 
-    # Write structured markdown if output_dir provided (same path as process_file_with_md)
-    md_path = None
-    if md_output_dir:
-        md_path = write_to_md(result, md_output_dir)
-        logger.info("  → Markdown written to %s", md_path)
+    md_out_path = None
+    cleaned = ""
+    if md_path and Path(md_path).is_file():
+        # Reuse an existing .md — skip the (expensive) LLM formatter entirely.
+        logger.info("Reusing existing markdown: %s", md_path)
+        content = Path(md_path).read_text(encoding="utf-8")
+        title_match = _re.search(r'^#\s+(.+)$', content, _re.MULTILINE)
+        title = title_match.group(1).strip() if title_match else "Untitled"
+        result = {"title": title, "body": content, "tags": [], "metadata": {"entities": []}}
+        md_out_path = md_path
+    else:
+        # 1. Parse & Clean
+        parser = _resolve_parser(filepath)
+        if parser is None:
+            logger.warning("Skipped %s — no parser found", filepath)
+            return {"chunks": [], "document": {}}
+
+        raw_text = parser.parse(filepath)
+        cleaned = TextCleaner(remove_page_breaks=remove_page_breaks, collapse_whitespace=collapse_whitespace, rules_config=rules_config).clean(raw_text)
+
+        # 2. LLM Format (async)
+        future = format_text_async(cleaned, source_type=_source_type_for(filepath))
+        try:
+            result = future.result(timeout=cfg.format_timeout)
+        except concurrent.futures.TimeoutError:
+            logger.warning("LLM formatting timed out after %ds for %s", cfg.format_timeout, filepath)
+            return {"chunks": [], "document": {}}
+
+        # Write structured markdown if output_dir provided (same path as process_file_with_md)
+        if md_output_dir:
+            md_out_path = write_to_md(result, md_output_dir)
+            logger.info("  → Markdown written to %s", md_out_path)
 
     # 3. Render markdown with headers from metadata.sections, then chunk
     formatted_md = _render_markdown_with_sections(result)
@@ -320,22 +358,26 @@ def process_file_hybrid(filepath: str, *, doc_id="doc_0", remove_page_breaks=Tru
     title = result.get("title", "Untitled")
     tags = result.get("tags", [])
     # Embed the LLM-formatted body (not the raw cleaned text) so the coarse-grained
-    # B index captures the document's structured semantics.
+    # B index captures the document's structured semantics. Use a head+tail slice
+    # so long documents still contribute their closing context to the B summary.
     body_for_summary = result.get("body", "") or cleaned
-    summary_text = f"Title: {title}\nTags: {' '.join(tags)}\n{body_for_summary[:500]}"
+    summary_text = _build_doc_summary(title, tags, body_for_summary)
 
     # 4. Embed + optionally persist to sqlite-vec
     db_path = None
-    
-    try:
-        from embedders import Embedder
-    
-        e = Embedder()
-        stored_chunks = e.store_chunks(all_chunks, doc_id=doc_id)
 
-        # Persist to sqlite-vec if requested
-        if store_path:
-            # Document-level index (B) — only embed when we actually persist it.
+    if store_path:
+        # Only construct the embedder and pay for the (remote, expensive)
+        # embedding calls when we actually persist. Otherwise we return
+        # lightweight metadata and skip all embedding work.
+        try:
+            from embedders import Embedder
+            from storage.sqlite_vec import SQLiteVecStore
+
+            e = Embedder()
+            stored_chunks = e.store_chunks(all_chunks, doc_id=doc_id)
+
+            # Document-level index (B) — only embed when we persist it.
             stored_doc = e.store_document(
                 title=title,
                 tags=tags,
@@ -345,7 +387,6 @@ def process_file_hybrid(filepath: str, *, doc_id="doc_0", remove_page_breaks=Tru
             )
             doc_embedding = stored_doc.get("embedding")
 
-            from storage.sqlite_vec import SQLiteVecStore
             db = SQLiteVecStore(store_path)
 
             # Store chunks with embeddings
@@ -360,28 +401,30 @@ def process_file_hybrid(filepath: str, *, doc_id="doc_0", remove_page_breaks=Tru
                 total_chunks=len(stored_chunks),
                 embedding=doc_embedding,
             )
+            db.close()
 
             db_path = store_path
             logger.info("  → Persisted %d chunks + 1 doc to %s", len(stored_chunks), store_path)
-        else:
-            # No persistence requested — skip the document embedding entirely
-            # (it would be wasted work) and return a lightweight metadata dict.
+        except (httpx.HTTPError, RuntimeError) as exc:
+            logger.warning("Embedding/storage failed (%s): %s", type(exc).__name__, exc)
+            stored_chunks = [{"text": c["text"], "section_path": c.get("section_path", ["General"]),
+                              "source_doc_id": doc_id, "chunk_index": i} for i, c in enumerate(all_chunks)]
             stored_doc = {
                 "title": title,
                 "tags": tags,
-                "text_summary": summary_text,
+                "text_summary": summary_text[:500],
                 "source_file": filepath,
                 "total_chunks": len(stored_chunks),
             }
-
-    except (httpx.HTTPError, RuntimeError) as exc:
-        logger.warning("Embedding/storage failed (%s): %s", type(exc).__name__, exc)
-        stored_chunks = [{"text": c["text"], "section_path": c.get("section_path", ["General"]), 
+    else:
+        # No persistence requested — skip all embedding (the most expensive
+        # remote step) and return lightweight metadata only.
+        stored_chunks = [{"text": c["text"], "section_path": c.get("section_path", ["General"]),
                           "source_doc_id": doc_id, "chunk_index": i} for i, c in enumerate(all_chunks)]
         stored_doc = {
             "title": title,
             "tags": tags,
-            "text_summary": summary_text[:500],
+            "text_summary": summary_text,
             "source_file": filepath,
             "total_chunks": len(stored_chunks),
         }
@@ -390,7 +433,7 @@ def process_file_hybrid(filepath: str, *, doc_id="doc_0", remove_page_breaks=Tru
         "chunks": stored_chunks,       # A - fine-grained index
         "document": stored_doc,         # B - coarse-grained index
         "format_result": result,        # Original LLM output (for metadata)
-        "md_path": md_path,            # Path to structured .md file (write_to_md output)
+        "md_path": md_out_path,        # Path to structured/reused .md file
         "db_path": db_path,             # sqlite-vec DB path (None if not persisted)
     }
 
@@ -451,13 +494,84 @@ def process_directory(dirpath: str, *, extensions=None, chunk_size=1024, **kwarg
     return results
 
 
-def rag_query(question: str, db_path: str, *, k: int = 5) -> dict:
+def process_directory_hybrid(dirpath: str, *, store_path=None, md_output_dir=None,
+                             extensions=None, chunk_size=1024, max_workers=4, **kwargs) -> dict:
+    """Process every supported file in *dirpath* with the LLM-formatted Hybrid A+B pipeline.
+
+    Files are parsed/formatted/chunked/embedded concurrently (the expensive
+    remote LLM + embedding steps dominate), then each result is persisted to a
+    single sqlite-vec store. ``doc_id`` is derived deterministically from the
+    file's path relative to *dirpath* so re-running overwrites the same records
+    instead of duplicating them.
+
+    Args:
+        dirpath: Directory to walk (recursively).
+        store_path: Optional sqlite-vec DB; when given, every file's chunks +
+                    document record are persisted.
+        md_output_dir: Optional dir to write each file's structured .md.
+        extensions: Optional set of extensions to include (defaults to all registered parsers).
+        chunk_size: Max characters per chunk.
+        max_workers: Concurrency for the parse/format/embed phase.
+
+    Returns:
+        dict mapping each file path → the per-file result dict from process_file_hybrid.
+    """
+    from parsers.dispatcher import PARSERS
+
+    path = Path(dirpath)
+    if extensions is None:
+        extensions = set(PARSERS.keys())
+    ext_set = {e.lower() for e in extensions}
+
+    files = [
+        str(f) for f in sorted(path.rglob("*"))
+        if f.is_file() and f.suffix.lstrip(".").lower() in ext_set
+    ]
+    if not files:
+        logger.info("No supported files found in %s", dirpath)
+        return {}
+
+    def _doc_id_for(fp: str) -> str:
+        rel = Path(fp).relative_to(path)
+        return str(rel).replace("/", "_").replace("\\", "_")
+
+    def _one(fp: str):
+        try:
+            res = process_file_hybrid(
+                fp,
+                doc_id=_doc_id_for(fp),
+                chunk_size=chunk_size,
+                store_path=store_path,
+                md_output_dir=md_output_dir,
+                **kwargs,
+            )
+            return fp, res
+        except Exception as exc:  # noqa: BLE001 — one bad file shouldn't abort the batch
+            logger.warning("Failed to process %s: %s", fp, exc)
+            return fp, {"chunks": [], "document": {}}
+
+    summary: dict = {}
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as ex:
+        for fp, res in ex.map(_one, files):
+            summary[fp] = res
+            logger.info("Processed %s → %d chunks", Path(fp).name, len(res.get("chunks", [])))
+
+    logger.info("Processed %d files from %s", len(files), dirpath)
+    return summary
+
+
+def rag_query(question: str, db_path: str, *, k: int = 5,
+              db: "SQLiteVecStore | None" = None,
+              embedder: "Embedder | None" = None) -> dict:
     """Retrieve relevant chunks from sqlite-vec and generate an LLM answer.
 
     Args:
         question: The user's natural-language query.
         db_path: Path to the sqlite-vec database (created by process_file_hybrid).
         k: Number of top chunks to retrieve for context assembly.
+        db: Optional pre-opened :class:`SQLiteVecStore` (reused across calls in a
+            session to avoid re-opening the connection per query).
+        embedder: Optional pre-constructed :class:`Embedder` (likewise reused).
 
     Returns dict with:
         "answer": str — LLM-generated answer text.
@@ -470,7 +584,10 @@ def rag_query(question: str, db_path: str, *, k: int = 5) -> dict:
     # 1. Embed the query with the retrieval instruction prefix (bge-m3 needs it).
     #    embed_query returns a single vector for str input; normalize for the
     #    local backend which returns list[list[float]].
-    with Embedder() as e:
+    owned_e = embedder is None
+    owned_db = db is None
+    e = embedder if embedder is not None else Embedder()
+    try:
         query_result = e.embed_query(question)
         query_vector = (
             query_result[0]
@@ -479,15 +596,22 @@ def rag_query(question: str, db_path: str, *, k: int = 5) -> dict:
         )
 
         # 2. Retrieve relevant chunks (hybrid: vector + FTS5 RRF fusion)
-        db = SQLiteVecStore(db_path)
+        store = db if db is not None else SQLiteVecStore(db_path)
         try:
             # A: fine-grained chunk retrieval (vector + full-text).
-            results = db.hybrid_search(question, query_vector=query_vector, k=k)
+            results = store.hybrid_search(question, query_vector=query_vector, k=k)
 
             # B: coarse-grained document-level fallback for broad context.
-            doc_results = db.search_documents(query_vector=query_vector, k=1)
+            doc_results = store.search_documents(query_vector=query_vector, k=1)
+
+            # Pre-fetch stored chunk embeddings for MMR — reuse what's already
+            # in the index instead of re-embedding every retrieved chunk.
+            chunk_vectors = (
+                store.get_embeddings_by_ids([c["id"] for c in results]) if results else []
+            )
         finally:
-            db.close()
+            if owned_db:
+                store.close()
 
         if not results and not doc_results:
             return {
@@ -500,8 +624,22 @@ def rag_query(question: str, db_path: str, *, k: int = 5) -> dict:
         if len(results) > 1:
             from rerank import mmr_rerank
 
-            chunk_vectors = e.embed([c["text"] for c in results])
+            # Fall back to embedding only the chunks whose vectors are missing
+            # from the store (e.g. legacy rows written before the embedding col).
+            if any(not v for v in chunk_vectors):
+                missing_texts = [
+                    c["text"] for c, v in zip(results, chunk_vectors) if not v
+                ]
+                for emb in e.embed(missing_texts):
+                    # Fill the first empty slot in order.
+                    for i, v in enumerate(chunk_vectors):
+                        if not v:
+                            chunk_vectors[i] = emb
+                            break
             results = mmr_rerank(question, query_vector, chunk_vectors, results, k=k)
+    finally:
+        if owned_e:
+            e.__exit__(None, None, None)
 
     context_parts = []
     for i, chunk in enumerate(results):

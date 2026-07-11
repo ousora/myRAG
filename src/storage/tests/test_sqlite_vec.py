@@ -91,6 +91,41 @@ class TestUpsertChunk:
         for r in results:
             assert r["source_doc_id"] == "doc_batch"
 
+    def test_upsert_chunks_returns_aligned_ids(self, store):
+        """Batch upsert must return one result per chunk with correct ids/order."""
+        chunks = [
+            {"text": f"C{i}", "section_path": ["S"]} for i in range(3)
+        ]
+        embs = [_make_embedding() for _ in range(3)]
+        for i, c in enumerate(chunks):
+            c["embedding"] = embs[i]
+
+        results = store.upsert_chunks(chunks, doc_id="doc_ids")
+        assert [r["chunk_index"] for r in results] == [0, 1, 2]
+        assert all(r["id"] is not None for r in results)
+        # Ids must be distinct per chunk_index within the same doc.
+        assert len({r["id"] for r in results}) == 3
+
+    def test_get_embeddings_by_ids_round_trip(self, store):
+        """Stored chunk embeddings are returned aligned to the requested ids."""
+        embs = [_make_embedding() for _ in range(2)]
+        r0 = store.upsert_chunk({"text": "a", "section_path": ["S"]}, doc_id="doc_ge", embedding=embs[0], chunk_index=0)
+        r1 = store.upsert_chunk({"text": "b", "section_path": ["S"]}, doc_id="doc_ge", embedding=embs[1], chunk_index=1)
+
+        out = store.get_embeddings_by_ids([r0["id"], r1["id"]])
+        assert len(out) == 2
+        for orig, got in zip(embs, out):
+            assert len(got) == 1024
+            assert all(abs(o - g) < 0.001 for o, g in zip(orig, got))
+
+    def test_get_embeddings_by_ids_unknown_is_empty(self, store):
+        """Unknown ids yield an empty list kept in the requested position."""
+        out = store.get_embeddings_by_ids([999, 12345])
+        assert out == [[], []]
+
+    def test_get_embeddings_by_ids_empty_input(self, store):
+        assert store.get_embeddings_by_ids([]) == []
+
 
 # ---------------------------------------------------------------------------
 # search_chunks

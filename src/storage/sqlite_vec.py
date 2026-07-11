@@ -196,34 +196,54 @@ class SQLiteVecStore:
         }
 
     def upsert_chunks(self, chunks: list[dict], *, doc_id: str) -> list[dict]:
-        """Batch insert or replace multiple chunks in a single transaction."""
+        """Batch insert or replace multiple chunks in a single transaction.
+
+        Uses ``executemany`` so a whole document's chunks are written in one
+        round-trip, then the generated row ids are fetched back by
+        (source_doc_id, chunk_index) to build the result list.
+        """
         self._setup_schema()
 
-        results = []
-        for i, chunk in enumerate(chunks):
-            section_path = chunk.get("section_path", ["General"])
-            entity_names = chunk.get("entity_names", [])
-            word_count = _count_words(chunk.get("text", ""))
+        if not chunks:
+            return []
 
-            cursor = self.conn.execute(
-                """INSERT OR REPLACE INTO chunks (text, embedding, source_doc_id, chunk_index, section_path, word_count, entity_names)
-                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
-                (chunk["text"], _SQLITE_VEC.serialize_float32(chunk.get("embedding", [0.0])),
-                 doc_id, i, json.dumps(section_path), word_count, json.dumps(entity_names))
+        params = [
+            (
+                chunk["text"],
+                _SQLITE_VEC.serialize_float32(chunk.get("embedding", [0.0])),
+                doc_id,
+                i,
+                json.dumps(chunk.get("section_path", ["General"])),
+                _count_words(chunk.get("text", "")),
+                json.dumps(chunk.get("entity_names", [])),
             )
-            results.append({
-                "id": cursor.lastrowid or self.conn.execute(
-                    "SELECT id FROM chunks WHERE source_doc_id=? AND chunk_index=?", (doc_id, i)
-                ).fetchone()[0],
+            for i, chunk in enumerate(chunks)
+        ]
+
+        self.conn.executemany(
+            """INSERT OR REPLACE INTO chunks (text, embedding, source_doc_id, chunk_index, section_path, word_count, entity_names)
+                VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            params,
+        )
+        self.conn.commit()
+
+        id_by_index = {
+            idx: cid for cid, idx in self.conn.execute(
+                "SELECT id, chunk_index FROM chunks WHERE source_doc_id=?", (doc_id,)
+            ).fetchall()
+        }
+
+        return [
+            {
+                "id": id_by_index.get(i),
                 "text": chunk["text"],
-                "section_path": section_path,
+                "section_path": chunk.get("section_path", ["General"]),
                 "source_doc_id": doc_id,
                 "chunk_index": i,
-                "word_count": word_count,
-            })
-
-        self.conn.commit()
-        return results
+                "word_count": _count_words(chunk.get("text", "")),
+            }
+            for i, chunk in enumerate(chunks)
+        ]
 
     def _parse_section_path(self, raw: str) -> list[str]:
         """Parse section path from JSON or empty string."""
@@ -507,6 +527,23 @@ class SQLiteVecStore:
                     "word_count": row[5],
                 } for row in rows][:k]
             return []
+
+    def get_embeddings_by_ids(self, ids: list[int]) -> list[list[float]]:
+        """Return chunk embeddings aligned to *ids* (document-side vectors).
+
+        Used for MMR re-ranking so we don't re-embed chunks that are already
+        stored in the index. Unknown ids yield an empty list (kept in order);
+        callers may fall back to embedding those texts on demand.
+        """
+        self._setup_schema()
+        if not ids:
+            return []
+        placeholders = ",".join("?" * len(ids))
+        rows = self.conn.execute(
+            f"SELECT id, embedding FROM chunks WHERE id IN ({placeholders})", ids
+        ).fetchall()
+        by_id = {row[0]: _deserialize_embedding(row[1]) for row in rows}
+        return [by_id.get(i, []) for i in ids]
 
     def get_chunks_by_doc(self, doc_id: str) -> list[dict]:
         """Retrieve all chunks for a specific document."""
