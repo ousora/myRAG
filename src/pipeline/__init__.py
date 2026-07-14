@@ -6,8 +6,6 @@ All imports should work as before: `from pipeline import process_file, ...`
 
 # Re-export core functions for backward compat
 from pipeline.core import (
-    Chunker,
-    TextCleaner,
     _resolve_parser,
     process_directory,
     process_file,
@@ -16,12 +14,14 @@ from pipeline.core import (
     rag_query,
 )
 
+# Re-export cleaner/chunker directly (was facade before P1)
+from parsers.text_cleaner import TextCleaner  # noqa: F401 — backward compat re-export
+from chunkers import Chunker                  # noqa: F401 — backward compat re-export
+
 # Re-export ingest for backward compat (used by docs and skills)
 from pipeline.ingest import _ingest_markdown
 
 __all__ = [
-    "Chunker",
-    "TextCleaner",
     "_resolve_parser",
     "process_directory",
     "process_file",
@@ -29,4 +29,6 @@ __all__ = [
     "process_file_with_md",
     "rag_query",
     "_ingest_markdown",
+    "TextCleaner",
+    "Chunker",
 ]

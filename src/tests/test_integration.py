@@ -77,8 +77,9 @@ def test_process_file_hybrid_no_llm_fallback(monkeypatch) -> None:
     The pipeline should handle missing embedding services gracefully and still
     return chunks with metadata (no silent failures).
     """
-    monkeypatch.setattr("formatters.format_text_async", _mock_format_future)
     from pipeline import process_file_hybrid
+    # Mock the async formatter so we don't hit real LLM endpoint (3600s timeout)
+    monkeypatch.setattr("formatters.format_text_async", _mock_format_future)
 
     # Create a small text file — no external parser needed
     fd, path = tempfile.mkstemp(suffix=".txt")
@@ -105,6 +106,7 @@ def test_process_file_with_md(tmp_path: Path, monkeypatch) -> None:
     """process_file_with_md generates a markdown file."""
     monkeypatch.setattr("formatters.format_text_async", _mock_format_future)
     from pipeline import process_file_with_md
+    # Mock the async formatter so we don't hit real LLM endpoint (3600s timeout)
 
     txt = tmp_path / "sample.txt"
     txt.write_text("# Title\n\nSome content.\n")
