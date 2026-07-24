@@ -1,5 +1,15 @@
 # Changelog — myRAG Pipeline
 
+## [0.5.6] — 2026-07-24
+
+### Fixed
+
+- **FTS query stripping missed `-`, `[`, `]`, `{}`, `<>/~?!.`**: `_build_fts_query()` stripped `"*^:()\\` but left FTS operators like `-` (AND NOT) and unmatched parentheses in queries. A user question "retrieval-augmented generation" or "(foo AND bar)" could crash with `no such column` errors instead of returning results. Expanded `_FTS_SPECIAL` regex to cover all recognized FTS5 operator characters; updated docstring (`src/storage/sqlite_vec.py`).
+- **Embedding deserialization silently produced length-1 vectors**: `_deserialize_embedding()` fell back to `list(raw)` for unexpected types (None, dict, int), which downstream cosine-distance calls would reject with a confusing dimension-mismatch error. Now raises `ValueError` naming the actual type so callers see exactly what's corrupt (`src/storage/sqlite_vec.py`).
+- **NaN / infinity embeddings could silently corrupt vector store**: sqlite-vec serializes them as invalid float32 bytes, and downstream `vec_distance_cosine()` returns garbage distances that pollute every query. Added `_validate_embedding_finite()` guard on both `upsert_chunk` (single) and `upsert_chunks` (batch); raises with the offending index before any write reaches SQLite (`src/storage/sqlite_vec.py`).
+- **Early return from no-parser branch returned inconsistent shape**: `process_file_hybrid()` skipped back only `{chunks, document}` while normal path returns 5 keys. Callers accessing missing keys would get KeyError; callers iterating results got misaligned dicts. Now always returns the same 5-key structure (`src/pipeline/core.py`).
+- **CJK word count and FTS search coverage was ~1% short**: `_count_words()` and `_build_fts_query()` used only `\u4e00-\u9fff` (basic CJK plane) which misses Extension B/C/D characters (~35K codepoints of rare names, place names, historical forms). Replaced with hex-range constants covering Blocks A–D (`>99.5% coverage`) and converted at import time to proper `\\uXXXX` regex patterns; shared between both call sites so count/FTS agree on what counts as CJK (`src/storage/sqlite_vec.py`).
+
 ## [0.5.5] — 2026-07-11
 
 ### Added

@@ -325,7 +325,13 @@ def process_file_hybrid(filepath: str, *, doc_id="doc_0", remove_page_breaks=Tru
         parser = _resolve_parser(filepath)
         if parser is None:
             logger.warning("Skipped %s — no parser found", filepath)
-            return {"chunks": [], "document": {}}
+            return {
+                "chunks": [],
+                "document": {},
+                "format_result": {"title": "", "tags": [], "body": ""},
+                "md_path": None,
+                "db_path": None,
+            }
 
         raw_text = parser.parse(filepath)
         cleaned = TextCleaner(remove_page_breaks=remove_page_breaks, collapse_whitespace=collapse_whitespace, rules_config=rules_config).clean(raw_text)

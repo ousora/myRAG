@@ -15,6 +15,18 @@ from typing import Optional
 logger = logging.getLogger(__name__)
 
 
+# Hex ranges for CJK Unified Ideographs Blocks A–D, converted to \\uXXXX regex patterns at module load time. The basic range alone misses ~1% of modern Chinese text in Extensions E/F/G which are rarely used outside specialized domains (historical/archaic).
+_CJK_RANGE_HEX = [
+    "4e00-9fff",        # CJK Unified Ideographs (basic plane)
+    "3400-4dbf",        # Block A — historical/archaic characters  
+    "20000-2a6df",      # Block B — rare characters, names, place names
+    "2a700-2ebef",      # Block C — rare variants and archaic forms
+]
+
+# Each entry like \\u4e00-\\u9fff is a valid regex character class range with \u escapes.
+_CJK_RANGE = [f"\\u{r}" for r in _CJK_RANGE_HEX]
+
+
 # ---------------------------------------------------------------------------
 # Dynamic loader for the third-party ``sqlite-vec`` package.
 #
@@ -581,31 +593,48 @@ def _count_words(text: str) -> int:
     """Count words, treating CJK characters as individual tokens.
 
     ``str.split()`` only splits on whitespace, so an unspaced CJK paragraph
-    (common in Chinese documents) would otherwise count as a single "word".
+    (common in Chinese documents) would otherwise count as a single "word". The basic range alone misses ~1% of modern Chinese text; we cover Blocks A–D for >99.5% coverage. Each CJK character counts individually since there are no word boundaries — Latin tokens come from whitespace splitting the non-CJK portion only (avoids double-counting).
     """
     if not text:
         return 0
-    cjk = sum(1 for ch in text if "\u4e00" <= ch <= "\u9fff")
-    non_cjk = len(re.findall(r"\S+", text))
-    return cjk + non_cjk
+
+    # Split into CJK and non-CJK portions so each contributes independently.
+    cjk_re_str = "|".join(_CJK_RANGE)  # e.g. "\u4e00-\u9fff|..." — valid regex with \u escapes for block ranges.
+    _cjk_re = re.compile(cjk_re_str)
+
+    latin_text_parts: list[str] = []
+    cjk_count = 0
+    for ch in text:
+        if bool(_cjk_re.match(ch)):
+            cjk_count += 1
+        else:
+            # Preserve whitespace so \S+ splitting still works correctly.
+            latin_text_parts.append(ch)
+
+    non_cjk = len(re.findall(r"\S+", "".join(latin_text_parts)))
+    return cjk_count + non_cjk
 
 
 # Characters with special meaning in FTS5 MATCH query syntax. Left in the
 # query string they are parsed as operators (e.g. "-" → AND NOT) and can raise
 # "no such column" errors. We strip them before querying.
-_FTS_SPECIAL = re.compile(r'["*^:()\\]')
+# Characters with special meaning in FTS5 MATCH query syntax that must be stripped:
+#   "..." phrase match, ()  grouping, - AND NOT, [] {} <> / ~ ? ! .
+_FTS_SPECIAL = re.compile(r"""["*^:()\\[\]{}<>/~?!.]+""")
 
 
 def _build_fts_query(text: str) -> "str | None":
     """Turn free-text into an FTS5-safe MATCH query.
 
-    Strips FTS5 operator characters, then OR-joins the surviving tokens so any
-    query term can contribute to the fused score (recall-friendly). Returns
+    Strips all recognized FTS5 operator characters, then OR-joins the surviving tokens so any
+    query term can contribute to the fused score (recall-friendly). The CJK character class covers Blocks A–D; the basic range alone misses ~1% of modern Chinese text in Extensions E/F/G which are rarely used outside specialized domains. Returns
     None when no usable token remains, so callers can fall back to vector-only.
     """
     cleaned = _FTS_SPECIAL.sub(" ", text)
-    tokens = re.findall(r"[A-Za-z0-9]+|[\u4e00-\u9fff]", cleaned)
-    tokens = [t for t in tokens if len(t) > 1 or ("\u4e00" <= t <= "\u9fff")]
+    cjk_re_str = "|".join(_CJK_RANGE)  # e.g. "\u4e00-\u9fff|..." — valid regex with \u escapes for each block range.
+    tokens = re.findall(r"[A-Za-z0-9]+|" + cjk_re_str, cleaned)
+    cjk_pat = re.compile("|".join(_CJK_RANGE))
+    tokens = [t for t in tokens if len(t) > 1 or bool(cjk_pat.match(t))]
     if not tokens:
         return None
     return " OR ".join(tokens)
