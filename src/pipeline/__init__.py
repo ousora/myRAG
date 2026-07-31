@@ -8,7 +8,6 @@ All imports should work as before: `from pipeline import process_file, ...`
 from pipeline.core import (
     Chunker,
     TextCleaner,
-    _resolve_parser,
     process_directory,
     process_file,
     process_file_hybrid,
@@ -16,13 +15,17 @@ from pipeline.core import (
     rag_query,
 )
 
+# Re-export utilities that were previously in core
+from pipeline.utils import resolve_parser, source_type_for
+
 # Re-export ingest for backward compat (used by docs and skills)
 from pipeline.ingest import _ingest_markdown
 
 __all__ = [
     "Chunker",
     "TextCleaner",
-    "_resolve_parser",
+    "resolve_parser",
+    "source_type_for",
     "process_directory",
     "process_file",
     "process_file_hybrid",

@@ -48,7 +48,6 @@ from __future__ import annotations
 import concurrent.futures
 import httpx
 import logging
-import re
 from pathlib import Path
 
 from config import get_config_lazy as _get_config
@@ -58,173 +57,17 @@ from storage.sqlite_vec import SQLiteVecStore  # noqa: F401 — used in rag_quer
 # Trigger parser registration at module load time
 import parsers  # noqa: F401 — loads dispatcher (MarkItDown + Trafilatura)
 
+from . import markdown_utils, utils
+
 logger = logging.getLogger(__name__)
-
-
-# Internal helper — not exported. Renders LLM output sections into markdown.
-# If you need this, import directly from pipeline.core (not via __init__).
-def _render_markdown_with_sections(result: dict) -> str:
-    """Render a clean markdown document from the LLM formatter output.
-
-    The formatter's ``body`` is non-deterministic: it usually already contains
-    its own ``##``/``###`` headings. When it does, we keep that structure and
-    only drop a duplicate top-level title H1 (which we render ourselves). When
-    it does not, we prepend the title and leave the body as-is — the chunker
-    then falls back to plain-text splitting, which is preferable to fabricating
-    header scaffolding that mis-nests the content.
-    """
-    title = result.get("title", "Untitled")
-    body = result.get("body", "") or ""
-
-    if re.search(r'^#{1,6}\s+', body):
-        body_lines = body.split("\n")
-        kept = []
-        title_seen = False
-        for line in body_lines:
-            stripped = line.strip()
-            if not title_seen and re.match(rf'^#\s+{re.escape(title)}$', stripped):
-                title_seen = True
-                continue  # drop duplicate title H1; we render our own below
-            kept.append(line)
-        body_block = "\n".join(kept).strip()
-        return f"# {title}\n\n{body_block}\n"
-
-    # No headings in body — prepend title only; let the chunker handle structure.
-    return f"# {title}\n\n{body.strip()}\n"
-
-
-def _strip_reference_sections(md: str) -> str:
-    """Remove reference / bibliography sections from markdown.
-
-    Reference lists (References, 参考文献, 參考, Bibliography, Further reading,
-    …) are high in keyword overlap but carry no answer-worthy content, so they
-    pollute retrieval. They are stripped *before chunking/embedding*; the human
-    `.md` output is left untouched.
-
-    A section is removed from its heading line up to (but not including) the next
-    heading of the same or higher level, or end-of-file.
-    """
-    lines = md.split("\n")
-
-    headings: list[tuple[int, int, str]] = []  # (line_index, level, title)
-    for i, line in enumerate(lines):
-        m = re.match(r"^(#{1,6})\s+(.+)$", line)
-        if m:
-            headings.append((i, len(m.group(1)), m.group(2).strip()))
-
-    ref_lines = {i for i, _lvl, title in headings if _is_reference_title(title)}
-    if not ref_lines:
-        return md
-
-    delete: set[int] = set()
-    for i, level, _title in headings:
-        if i not in ref_lines:
-            continue
-        end = len(lines)
-        for j, lvl, _ in headings:
-            if j > i and lvl <= level:
-                end = j
-                break
-        delete.update(range(i, end))
-
-    return "\n".join(lines[k] for k in range(len(lines)) if k not in delete)
-
-
-# English (word-boundary) + CJK (substring) reference-section titles to drop.
-_REFERENCE_PATTERNS = [
-    re.compile(r"^(references?|reference list|bibliography|further reading|"
-               r"works cited|sources?|footnotes?|endnotes?|citations?|"
-               r"see also|external links)\b", re.IGNORECASE),
-]
-_REFERENCE_CJK = (
-    "参考文献", "参考资料", "參考文献", "參考資料", "參考", "引用文献", "引用",
-    "延伸閱讀", "延伸阅读", "脚注", "注脚", "文獻",
-)
-
-
-def _is_reference_title(title: str) -> bool:
-    """True if a section heading looks like a references / bibliography block."""
-    if any(c in title for c in _REFERENCE_CJK):
-        return True
-    return any(p.search(title) for p in _REFERENCE_PATTERNS)
-
-
-def _match_entities_to_chunks(chunks: list[dict], entities: list[dict]) -> list[dict]:
-    """Match document-level entities to individual chunks by text presence.
-
-    Scans each chunk's text for entity names (case-insensitive).
-    Only entities that actually appear in a chunk get tagged on that chunk.
-    This keeps entity search granular — querying 'GPT-4' returns only chunks
-    that mention GPT-4, not every chunk from the same document.
-
-    Args:
-        chunks: List of chunk dicts, each with at least a 'text' key.
-        entities: List of entity dicts with 'name' keys from formatter output.
-
-    Returns:
-        Same chunks list with 'entity_names' added to each chunk.
-    """
-    if not entities:
-        return chunks
-
-    # Pre-classify entities: CJK names have no word boundaries, so \b never
-    # matches them. For those we use a plain substring test; for Latin names we
-    # keep the case-insensitive word-boundary match to avoid partial matches.
-    cjk_entities = [e["name"] for e in entities if _contains_cjk(e["name"])]
-    latin_entities = [e["name"] for e in entities if not _contains_cjk(e["name"])]
-    latin_patterns = [
-        (name, re.compile(r'\b' + re.escape(name.lower()) + r'\b')) for name in latin_entities
-    ]
-
-    for chunk in chunks:
-        chunk_text_lower = chunk["text"].lower()
-        matched = [name for name in cjk_entities if name.lower() in chunk_text_lower]
-        matched += [name for name, pat in latin_patterns if pat.search(chunk_text_lower)]
-        chunk["entity_names"] = matched
-    return chunks
-
-
-def _contains_cjk(text: str) -> bool:
-    """Return True if *text* contains any CJK Unified Ideograph."""
-    return any("\u4e00" <= ch <= "\u9fff" for ch in text)
 
 
 def _build_doc_summary(title: str, tags: list[str], body: str, *, head: int = 800, tail: int = 400) -> str:
     """Build a document-level (B index) summary from head + tail of the body.
-
-    The first ``head`` chars capture the document's lead/abstract; for longer
-    documents the last ``tail`` chars are appended so the closing section also
-    informs the coarse-grained embedding (otherwise the B index only ever sees
-    the opening, which harms retrieval for documents whose answer is near the end).
+    
+    Delegates to utils.build_doc_summary for the actual implementation.
     """
-    body = body or ""
-    if len(body) <= head:
-        snippet = body
-    else:
-        snippet = body[:head]
-        if tail and len(body) > head + tail:
-            snippet += "\n...\n" + body[-tail:]
-    tag_str = " ".join(tags) if tags else ""
-    return f"Title: {title}\nTags: {tag_str}\n{snippet}".strip()
-
-
-def _resolve_parser(filepath: str):
-    from parsers.dispatcher import resolve_parser as rp
-    return rp(filepath)
-
-
-def _source_type_for(filepath: str) -> str:
-    """Map a file extension to the formatter's source_type hint."""
-    ext = Path(filepath).suffix.lstrip(".").lower()
-    return {
-        "pdf": "pdf",
-        "docx": "pdf",
-        "html": "web",
-        "htm": "web",
-        "md": "markdown",
-        "mkd": "markdown",
-        "txt": "web",
-    }.get(ext, "web")
+    return utils.build_doc_summary(title, tags, body, head=head, tail=tail)
 
 
 class TextCleaner:
@@ -267,7 +110,7 @@ def process_file(filepath: str, *, remove_page_breaks=True, collapse_whitespace=
     
     Returns list of dicts: [{"text": ..., "metadata": {...}}, ...]
     """
-    parser = _resolve_parser(filepath)
+    parser = utils.resolve_parser(filepath)
     if parser is None:
         logger.warning("Skipped %s — no parser found", filepath)
         return []
@@ -322,7 +165,7 @@ def process_file_hybrid(filepath: str, *, doc_id="doc_0", remove_page_breaks=Tru
         md_out_path = md_path
     else:
         # 1. Parse & Clean
-        parser = _resolve_parser(filepath)
+        parser = utils.resolve_parser(filepath)
         if parser is None:
             logger.warning("Skipped %s — no parser found", filepath)
             return {
@@ -337,12 +180,18 @@ def process_file_hybrid(filepath: str, *, doc_id="doc_0", remove_page_breaks=Tru
         cleaned = TextCleaner(remove_page_breaks=remove_page_breaks, collapse_whitespace=collapse_whitespace, rules_config=rules_config).clean(raw_text)
 
         # 2. LLM Format (async)
-        future = format_text_async(cleaned, source_type=_source_type_for(filepath))
+        future = format_text_async(cleaned, source_type=utils.source_type_for(filepath))
         try:
             result = future.result(timeout=cfg.format_timeout)
         except concurrent.futures.TimeoutError:
             logger.warning("LLM formatting timed out after %ds for %s", cfg.format_timeout, filepath)
-            return {"chunks": [], "document": {}}
+            return {
+                "chunks": [],
+                "document": {},
+                "format_result": {"title": "", "tags": [], "body": ""},
+                "md_path": None,
+                "db_path": None,
+            }
 
         # Write structured markdown if output_dir provided (same path as process_file_with_md)
         if md_output_dir:
@@ -350,15 +199,15 @@ def process_file_hybrid(filepath: str, *, doc_id="doc_0", remove_page_breaks=Tru
             logger.info("  → Markdown written to %s", md_out_path)
 
     # 3. Render markdown with headers from metadata.sections, then chunk
-    formatted_md = _render_markdown_with_sections(result)
+    formatted_md = markdown_utils.render_markdown_with_sections(result)
     # Drop reference/bibliography sections so they don't pollute retrieval.
-    formatted_md = _strip_reference_sections(formatted_md)
+    formatted_md = markdown_utils.strip_reference_sections(formatted_md)
     chunker = Chunker(chunk_size=chunk_size)
     all_chunks = chunker.chunk(formatted_md)
 
     # Match document-level entities to individual chunks (Phase C)
     entities = result.get("metadata", {}).get("entities", [])
-    all_chunks = _match_entities_to_chunks(all_chunks, entities)
+    all_chunks = markdown_utils.match_entities_to_chunks(all_chunks, entities)
 
     # Build summary text before the try block so it's always available in the except handler.
     title = result.get("title", "Untitled")
@@ -457,7 +306,7 @@ def process_file_with_md(filepath: str, *, output_dir="./output/", **kwargs):
     cfg = _get_config()
 
     # Parse & Clean
-    parser = _resolve_parser(filepath)
+    parser = utils.resolve_parser(filepath)
     if parser is None:
         logger.warning("Skipped %s — no parser found", filepath)
         return None
@@ -466,7 +315,7 @@ def process_file_with_md(filepath: str, *, output_dir="./output/", **kwargs):
     cleaned = TextCleaner(**kwargs).clean(raw_text)
 
     # LLM Format
-    future = format_text_async(cleaned, source_type=_source_type_for(filepath))
+    future = format_text_async(cleaned, source_type=utils.source_type_for(filepath))
     try:
         result = future.result(timeout=cfg.format_timeout)
     except concurrent.futures.TimeoutError:

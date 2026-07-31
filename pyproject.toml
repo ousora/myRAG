@@ -30,3 +30,40 @@ exclude = ["myrag_pipeline.egg-info", "tests*"]
 
 [tool.setuptools]
 py-modules = ["pipeline", "config"]
+
+[tool.mypy]
+python_version = "3.10"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+check_untyped_defs = true
+disallow_untyped_decorators = true
+no_implicit_optional = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+warn_unused_comments = true
+exclude = ["(?i)\\.git|(?i)\\.env|(?i)venv|(?i)node_modules|(?i)dist|(?i)build"]
+
+[[tool.mypy.overrides]]
+module = ["markitdown.*", "trafilatura.*", "sqlite_vec.*", "bge_m3.*"]
+ignore_missing_imports = true
+
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "N", "B", "A", "C4", "D", "DTZ", "EM", "FBT", "ICN", "ISC", "LOG", "PIE", "Q", "RSE", "RET", "SIM", "TCH", "TID", "TRY", "UP", "YTT"]
+ignore = ["E501", "D100", "D104", "D107"]
+
+[tool.ruff.lint.per-file-ignores]
+"__init__.py" = ["F401"]
+"tests/*" = ["D103", "D104", "S101"]
+
+[tool.pytest.ini_options]
+testpaths = ["src"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = "-v --tb=short"
