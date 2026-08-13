@@ -1,5 +1,56 @@
 # Changelog — myRAG Pipeline
 
+## [0.6.1] — 2026-08-13
+
+### Fixed
+
+- **`upsert_document` raised `NameError` after ON CONFLICT refactor**: `existing` and `cursor` were referenced but never defined. Now queries the document ID via `SELECT id FROM documents WHERE source_file=?` after the upsert. (src/storage/inserts.py)
+- **`hybrid` CLI command printed output twice**: Duplicate print block caused each piece of output (chunks, DB path, index message, title) to be printed twice. Removed the redundant block. (src/pipeline/cli.py)
+
+### Added
+
+- **Module splitting for large files**: Split `core.py` (688→531 lines) into `pipeline/core.py` + `pipeline/markdown_utils.py` + `pipeline/utils.py`. Split `formatters/__init__.py` (951→742 lines) into `formatters/__init__.py` + `formatters/tags.py` + `formatters/cache.py`. Split `sqlite_vec.py` (654→80 lines) into `storage/sqlite_vec.py` + `storage/schema.py` + `storage/inserts.py` + `storage/search.py`. All modules now under 500-line limit.
+- **Strict mypy configuration**: Added `[tool.mypy]` to `pyproject.toml` with `disallow_untyped_defs = true`. Added mypy hook to `.pre-commit-config.yaml`. All public functions have type hints.
+- **[tool.ruff] configuration**: Added project-level ruff config to `pyproject.toml` with line-length 120, target Python 3.10, and comprehensive rule sets (E, F, W, I, N, B, A, C4, D, DTZ, EM, FBT, ICN, ISC, LOG, PIE, Q, RSE, RET, SIM, TCH, TID, TRY, UP, YTT).
+- **[tool.pytest] configuration**: Added testpaths, python_files/classes/functions patterns, and addopts for consistent test discovery.
+- **`__init__.py` for `src/myrag/`**: Explicit package declaration with exception re-exports.
+- **4 new test modules** (+76 tests, total 194): `test_directory_hybrid.py`, `test_rag_query.py`, `test_local_embedder.py`, `test_rerank.py`.
+- **`[project.scripts]` entry point**: `myrag` command available after install.
+- **`*.db`, `*.sqlite3`, `*.sqlite` added to `.gitignore`**.
+- **mypy step added to CI workflow**.
+
+### Changed
+
+- **Unified `chunk_size` default**: CLI defaults raised from 512 to 1024 to match `pipeline.core` defaults. Consistent behaviour across all entry points.
+- **Pre-compiled CJK regex**: `_cjk_re` moved to module level in `storage/inserts.py` to avoid recompilation on every `_count_words()` call.
+- **Config alignment**: `config.yaml` now includes `query_instruction` and `debug_log_llm_responses` fields to match `config.example.yaml`.
+- **Bare except fix**: `parsers/text_cleaner.py` now catches specific `(OSError, yaml.YAMLError)` instead of bare `Exception`.
+- **Extracted `_call_llm_api` shared function** to avoid duplicate HTTP request logic in `call_llm` and `call_llm_raw`.
+- **Pre-compiled `_PARAGRAPH_SPLIT` regex** at module level.
+- **`upsert_document` now atomic** via `INSERT ... ON CONFLICT` instead of SELECT + conditional INSERT/UPDATE.
+- **Pre-compiled CJK regex** in `_build_fts_query` at module level.
+- **`_count_words` optimized**: uses `re.sub` + `re.findall` instead of character-by-character iteration.
+- **Case-insensitive title matching** in `markdown_utils.py` added `re.IGNORECASE`.
+- **`rag_query` return type** annotated as `dict[str, Any]`.
+- **`LocalEmbedder` type annotations** corrected for `embed` and `embed_query` return types.
+- **`try_fix_common_issues` uses `copy.deepcopy`** instead of shallow `dict()` copy.
+- **Cache key hashes components separately** to avoid system prompt dominating hash computation.
+- **`sentence-transformers` upper bound removed** (`>=2.7` without `<3`).
+- **`httpx.TimeoutException` handling** updated for httpx 1.0+ compatibility.
+- **`MarkdownIt` pre-compiled in `Chunker.__init__`** and reused across `chunk()` calls.
+- **`store_chunks` accepts `batch_size` parameter** to split large batches and avoid API limits.
+- **`IN` clause capped at 1000 items** to prevent SQLite variable number overflow.
+- **`Embedder` and `SQLiteVecStore` now support context managers** (`__enter__`/`__exit__`).
+- **`ingest.py` wraps `Embedder` and `SQLiteVecStore` in `with` statements** to prevent resource leaks.
+- **`search_documents` now uses `query_vector`** for vector-based sorting when provided.
+- **`logs/` directory creation checks** for pre-existing file before `mkdir`.
+- **`pyproject.toml` duplicate `[tool.pytest.ini_options]` merged** into single section.
+- **`writer.py` YAML frontmatter** uses consistent quoting.
+
+### Added Tests (total 194)
+
+- **4 new test modules** (+76 tests): `test_directory_hybrid.py`, `test_rag_query.py`, `test_local_embedder.py`, `test_rerank.py`.
+
 ## [Unreleased]
 
 ### Added
