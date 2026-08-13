@@ -14,7 +14,7 @@ class TestConfigDefaults:
 
     def test_formatter_defaults(self):
         cfg = Config({})
-        assert cfg.chunk_threshold_chars == 28000
+        assert cfg.chunk_threshold_chars == 20000
         assert cfg.chunk_max_tokens == 16384
         assert cfg.chunk_timeout == 300
 

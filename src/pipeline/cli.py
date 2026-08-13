@@ -20,19 +20,19 @@ def main():
     # process_file command (traditional)
     file_parser = subparsers.add_parser("process-file", help="Process a single file (traditional)")
     file_parser.add_argument("input", help="file to process")
-    file_parser.add_argument("--chunk-size", type=int, default=512)
+    file_parser.add_argument("--chunk-size", type=int, default=1024)
     
     # process_directory command (batch traditional)
     dir_parser = subparsers.add_parser("process-directory", help="Process all files in directory")
     dir_parser.add_argument("input", help="directory to process")
-    dir_parser.add_argument("--chunk-size", type=int, default=512)
+    dir_parser.add_argument("--chunk-size", type=int, default=1024)
     
     # ingest command: .md → chunk → embed → sqlite-vec
     ingest_parser = subparsers.add_parser("ingest", help="Chunk .md file and store to sqlite-vec")
     ingest_parser.add_argument("input", help=".md file to ingest")
     ingest_parser.add_argument("--store", required=True, help="Path to sqlite-vec database")
     ingest_parser.add_argument("--doc-id", default="doc_0", help="Document ID for storage")
-    ingest_parser.add_argument("--chunk-size", type=int, default=512)
+    ingest_parser.add_argument("--chunk-size", type=int, default=1024)
 
     # process command: .md → sqlite-vec (two-step: generate .md, then ingest)
     process_parser = subparsers.add_parser("process", help="Generate .md and store to sqlite-vec")
@@ -40,7 +40,7 @@ def main():
     process_parser.add_argument("--store", required=True, help="Path to sqlite-vec database")
     process_parser.add_argument("--doc-id", default="doc_0", help="Document ID for storage")
     process_parser.add_argument("--output-dir", default="./output/", help="Output directory for .md files")
-    process_parser.add_argument("--chunk-size", type=int, default=512)
+    process_parser.add_argument("--chunk-size", type=int, default=1024)
 
     # md command (generate markdown output)
     md_parser = subparsers.add_parser("md", help="Generate structured markdown output only")

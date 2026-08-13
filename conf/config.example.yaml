@@ -23,12 +23,16 @@ embedding:
   model: "bge-m3"
   timeout: 60                # seconds for HTTP request
 
+  # Instruction prepended to *queries* (not documents) for retrieval-trained
+  # models like bge-m3. Empty string disables it. Keep the trailing space.
+  query_instruction: "Represent this sentence for searching relevant passages: "
+
   # When mode == "local":
   # local_model: "BAAI/bge-m3"   # HF model name, auto-downloads on first use
 
 # ── Formatter Settings ───────────────────────────────────────────────
 formatter:
-  chunk_threshold_chars: 28000   # texts above this trigger chunked processing (~7000 tokens)
+  chunk_threshold_chars: 20000   # texts above this trigger chunked processing (~5000 tokens)
   chunk_max_tokens: 16384        # max output tokens per chunk LLM call
   chunk_timeout: 300             # seconds for each chunk LLM call
 

@@ -110,7 +110,7 @@ class TextCleaner:
                 except re.error as e:
                     logger.warning("Failed to compile custom rule [%s]: %s", pattern_str, e)
 
-        except Exception as e:
+        except (OSError, yaml.YAMLError) as e:
             logger.warning("Failed to load YAML rules file %s: %s", path, e)
 
     # ------------------------------------------------------------------ #

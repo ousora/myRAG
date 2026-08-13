@@ -35,6 +35,8 @@ Schema:
 
 import httpx
 import logging
+import threading
+from collections import OrderedDict
 
 from config import get_config
 
@@ -45,6 +47,28 @@ logger = logging.getLogger(__name__)
 # Expected embedding dimension for bge-m3 models. Other models may differ,
 # but this serves as a sanity check to catch misconfigured endpoints early.
 EXPECTED_EMBEDDING_DIMENSION = 1024
+
+# ── Process-wide embedding cache ────────────────────────────────────────
+# Identical texts (queries, document summaries, repeated chunks) are embedded
+# only once per process. Bounded LRU; keyed by the exact input string.
+_EMBED_CACHE: "OrderedDict[str, list[float]]" = OrderedDict()
+_EMBED_CACHE_LOCK = threading.Lock()
+_EMBED_CACHE_MAX = 4096
+
+
+def _embed_cache_get(text: str) -> "list[float] | None":
+    with _EMBED_CACHE_LOCK:
+        if text in _EMBED_CACHE:
+            _EMBED_CACHE.move_to_end(text)
+            return _EMBED_CACHE[text]
+    return None
+
+
+def _embed_cache_put(text: str, embedding: list[float]) -> None:
+    with _EMBED_CACHE_LOCK:
+        _EMBED_CACHE[text] = embedding
+        if len(_EMBED_CACHE) > _EMBED_CACHE_MAX:
+            _EMBED_CACHE.popitem(last=False)
 
 
 def _validate_embedding_dimension(embedding: list[float]) -> None:
@@ -77,10 +101,8 @@ class Embedder:
         if mode == "local":
             from .local_bge import LocalEmbedder
 
-            instance = object.__new__(LocalEmbedder)
             local_model = getattr(cfg, "embedding_local_model", None) or "BAAI/bge-m3"
-            instance.__init__(model_name=local_model)
-            return instance  # type: ignore[return-value]
+            return LocalEmbedder(model_name=local_model)  # type: ignore[return-value]
 
         return super().__new__(cls)
 
@@ -96,6 +118,28 @@ class Embedder:
 
         self.client = httpx.Client(base_url=base_url, timeout=cfg.embedding_timeout)
         self.model = model
+
+    def _maybe_prepend_instruction(self, text: str | list[str]) -> str | list[str]:
+        """Prepend the retrieval query instruction for query texts only.
+
+        bge-m3 (and other retrieval-trained models) expect a task instruction
+        on the *query* side but NOT on documents. Returns text unchanged when
+        no instruction is configured.
+        """
+        instruction = getattr(get_config(), "embedding_query_instruction", "") or ""
+        if not instruction:
+            return text
+        if isinstance(text, str):
+            return f"{instruction}{text}"
+        return [f"{instruction}{t}" for t in text]
+
+    def embed_query(self, text: str | list[str]) -> list[float] | list[list[float]]:
+        """Embed a user *query* with the model's retrieval instruction prefix.
+
+        Use this (not ``embed``) for queries so the query is mapped into the
+        same vector space as document embeddings produced by ``embed``/``store_*``.
+        """
+        return self.embed(self._maybe_prepend_instruction(text))
 
     def __enter__(self):
         return self
@@ -140,9 +184,18 @@ class Embedder:
 
         raise RuntimeError(f"Embedding API failed after {max_retries} retries: {last_exc}") from last_exc
 
-    def embed(self, text: str | list[str]) -> list[list[float]]:
-        """Get embeddings for one or multiple texts."""
+    def embed(self, text: str | list[str]) -> list[float] | list[list[float]]:
+        """Get embeddings for one or multiple texts.
+
+        Returns a single ``list[float]`` when *text* is a ``str``, and a
+        ``list[list[float]]`` when *text* is a ``list[str]``. Callers that pass
+        a string (e.g. a query or document summary) must use the vector
+        directly rather than indexing ``[0]``.
+        """
         if isinstance(text, str):
+            cached = _embed_cache_get(text)
+            if cached is not None:
+                return cached
             payload = {"model": self.model, "input": [text]}
         else:
             payload = {"model": self.model, "input": text}
@@ -154,6 +207,7 @@ class Embedder:
         if isinstance(text, str):
             emb = data["data"][0]["embedding"]
             _validate_embedding_dimension(emb)
+            _embed_cache_put(text, emb)
             return emb
         else:
             embeddings = [d["embedding"] for d in data["data"]]

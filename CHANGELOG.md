@@ -1,5 +1,96 @@
 # Changelog — myRAG Pipeline
 
+## [Unreleased]
+
+### Added
+
+- **Module splitting for large files**: Split `core.py` (688→531 lines) into `pipeline/core.py` + `pipeline/markdown_utils.py` + `pipeline/utils.py`. Split `formatters/__init__.py` (951→742 lines) into `formatters/__init__.py` + `formatters/tags.py` + `formatters/cache.py`. Split `sqlite_vec.py` (654→80 lines) into `storage/sqlite_vec.py` + `storage/schema.py` + `storage/inserts.py` + `storage/search.py`. All modules now under 500-line limit.
+- **Strict mypy configuration**: Added `[tool.mypy]` to `pyproject.toml` with `disallow_untyped_defs = true`. Added mypy hook to `.pre-commit-config.yaml`. All public functions have type hints.
+- **[tool.ruff] configuration**: Added project-level ruff config to `pyproject.toml` with line-length 120, target Python 3.10, and comprehensive rule sets (E, F, W, I, N, B, A, C4, D, DTZ, EM, FBT, ICN, ISC, LOG, PIE, Q, RSE, RET, SIM, TCH, TID, TRY, UP, YTT).
+- **[tool.pytest] configuration**: Added testpaths, python_files/classes/functions patterns, and addopts for consistent test discovery.
+- **`__init__.py` for `src/myrag/`**: Explicit package declaration with exception re-exports.
+- **4 new test modules** (+76 tests, total 194): `test_directory_hybrid.py`, `test_rag_query.py`, `test_local_embedder.py`, `test_rerank.py`.
+
+### Changed
+
+- **Unified `chunk_size` default**: CLI defaults raised from 512 to 1024 to match `pipeline.core` defaults. Consistent behaviour across all entry points.
+- **Pre-compiled CJK regex**: `_cjk_re` moved to module level in `storage/inserts.py` to avoid recompilation on every `_count_words()` call.
+- **Config alignment**: `config.yaml` now includes `query_instruction` and `debug_log_llm_responses` fields to match `config.example.yaml`.
+- **Bare except fix**: `parsers/text_cleaner.py` now catches specific `(OSError, yaml.YAMLError)` instead of bare `Exception`.
+
+### Fixed
+
+- **`process_file_hybrid` timeout return shape**: Timeout handler now returns all 5 keys (`chunks`, `document`, `format_result`, `md_path`, `db_path`) matching the normal path, preventing KeyError in callers.
+
+## [0.5.6] — 2026-07-24
+
+### Fixed
+
+- **FTS query stripping missed `-`, `[`, `]`, `{}`, `<>/~?!.`**: `_build_fts_query()` stripped `"*^:()\\` but left FTS operators like `-` (AND NOT) and unmatched parentheses in queries. A user question "retrieval-augmented generation" or "(foo AND bar)" could crash with `no such column` errors instead of returning results. Expanded `_FTS_SPECIAL` regex to cover all recognized FTS5 operator characters; updated docstring (`src/storage/sqlite_vec.py`).
+- **Embedding deserialization silently produced length-1 vectors**: `_deserialize_embedding()` fell back to `list(raw)` for unexpected types (None, dict, int), which downstream cosine-distance calls would reject with a confusing dimension-mismatch error. Now raises `ValueError` naming the actual type so callers see exactly what's corrupt (`src/storage/sqlite_vec.py`).
+- **NaN / infinity embeddings could silently corrupt vector store**: sqlite-vec serializes them as invalid float32 bytes, and downstream `vec_distance_cosine()` returns garbage distances that pollute every query. Added `_validate_embedding_finite()` guard on both `upsert_chunk` (single) and `upsert_chunks` (batch); raises with the offending index before any write reaches SQLite (`src/storage/sqlite_vec.py`).
+- **Early return from no-parser branch returned inconsistent shape**: `process_file_hybrid()` skipped back only `{chunks, document}` while normal path returns 5 keys. Callers accessing missing keys would get KeyError; callers iterating results got misaligned dicts. Now always returns the same 5-key structure (`src/pipeline/core.py`).
+- **CJK word count and FTS search coverage was ~1% short**: `_count_words()` and `_build_fts_query()` used only `\u4e00-\u9fff` (basic CJK plane) which misses Extension B/C/D characters (~35K codepoints of rare names, place names, historical forms). Replaced with hex-range constants covering Blocks A–D (`>99.5% coverage`) and converted at import time to proper `\\uXXXX` regex patterns; shared between both call sites so count/FTS agree on what counts as CJK (`src/storage/sqlite_vec.py`).
+
+## [0.5.5] — 2026-07-11
+
+### Added
+- **`process_directory_hybrid()`**: batch-process every supported file in a directory through the LLM-formatted Hybrid A+B pipeline. The parse/format/chunk/embed phase runs concurrently (`max_workers`, default 4); `doc_id` is derived deterministically from each file's path relative to the directory so re-runs overwrite the same records instead of duplicating them. (src/pipeline/core.py)
+- **`md_path` reuse in `process_file_hybrid()`**: pass an existing `.md` file and the (expensive) LLM formatter is skipped entirely — the markdown is reused for chunking/embedding. Enables the two-phase workflow (generate `.md` once, ingest/experiment many times) without re-paying for formatting. (src/pipeline/core.py)
+- **`SQLiteVecStore.get_embeddings_by_ids()`**: fetch chunk embeddings already stored in the index, keyed by row id and aligned to the requested order. Unknown ids yield an empty list in position. (src/storage/sqlite_vec.py)
+- **`rag_query()` accepts optional pre-opened `db` / `embedder`** so a session can reuse one connection/embedder across queries instead of re-opening on every call. (src/pipeline/core.py)
+
+### Changed
+- **Skip ALL embedding when not persisting**: `process_file_hybrid()` no longer constructs the embedder or embeds chunks when `store_path` is None (previously only the document-level embedding was skipped). The most expensive remote step is now avoided entirely for `.md`-only / in-memory callers. (src/pipeline/core.py)
+- **MMR re-ranking reuses stored chunk vectors**: `rag_query()` fetches the retrieved chunks' embeddings from the index via `get_embeddings_by_ids()` instead of re-embedding every chunk (a per-query batch of remote embedding calls). Missing vectors fall back to on-demand embedding only for the gaps. (src/pipeline/core.py, src/storage/sqlite_vec.py)
+- **`upsert_chunks()` now writes in a single transaction** via `executemany` (was a per-chunk INSERT loop), then maps generated row ids back by `(source_doc_id, chunk_index)`. Faster for large documents. (src/storage/sqlite_vec.py)
+- **Document-level (B) summary uses head+tail of the body** instead of only the first 500 characters, so long documents also contribute their closing context to the coarse-grained embedding. Shared helper `_build_doc_summary()` used by both `process_file_hybrid()` and `_ingest_markdown()`. (src/pipeline/core.py, src/pipeline/ingest.py)
+- **Lowered large-doc auto-chunk threshold 28000 → 20000 chars** (`chunk_threshold_chars` default in `src/config.py`, `conf/config.yaml`, `conf/config.example.yaml`). Texts above this are split for chunked LLM processing (~5000 tokens for English). (src/config.py, src/formatters/__init__.py, AGENTS.md, README.md)
+
+## [0.5.4] — 2026-07-09
+
+### Added
+- **bge-m3 query instruction prefix**: new `embed_query()` on both remote and local embedders prepends the retrieval instruction (`Represent this sentence for searching relevant passages: `) to queries only — documents are embedded without it. Configurable via `embedding.query_instruction` (default set in `conf/config.example.yaml`). (src/embedders/bge_m3.py, src/embedders/local_bge.py, src/config.py)
+- **Document-level (B) vector index now functional**: `documents` table gains an `embedding BLOB` column; `upsert_document()` persists the doc embedding; `search_documents()` supports vector ranking by cosine distance (with `k` limit). Existing DBs are migrated via `ALTER TABLE` on open. (src/storage/sqlite_vec.py)
+- **MMR re-ranking of retrieved chunks**: new `src/rerank.py` re-orders hybrid-search results by Maximal Marginal Relevance (lexical relevance + embedding diversity) so context blocks are not near-duplicates. Wired into `rag_query()`.
+- **Process-wide caches**: bounded LRU caches for embedding results (`src/embedders/bge_m3.py`, `local_bge.py`) and formatting results (`src/formatters/__init__.py`) — identical inputs are processed once per process.
+
+### Changed
+- **`rag_query()` now uses true hybrid retrieval**: switched from pure-vector `search_chunks()` to `hybrid_search()` (vector + FTS5 RRF fusion) with `embed_query()`, then MMR re-ranks. When chunk recall is sparse it appends the top document summary as a coarse-grained B fallback. (src/pipeline/core.py)
+- **Document (B) summary embeds the LLM-formatted body** instead of raw cleaned text, so the coarse index captures structured semantics. (src/pipeline/core.py)
+- **Default `chunk_size` raised 512 → 1024** for bge-m3's large context window (process_file / process_file_hybrid / process_directory). (src/pipeline/core.py)
+- **`_render_markdown_with_sections()` simplified**: dropped the mis-nesting no-headings branch (it listed headers then dumped the whole body); now just prepends the title and lets the chunker fall back to plain-text splitting. (src/pipeline/core.py)
+- **`Embedder.__new__` cleaned up**: local mode now constructs `LocalEmbedder` directly instead of the `object.__new__` + manual `__init__` hack; `LocalEmbedder` gained `__enter__/__exit__` so `with Embedder() as e:` works in local mode too. (src/embedders/bge_m3.py, src/embedders/local_bge.py)
+
+### Fixed
+- **CJK entity matching was broken**: `_match_entities_to_chunks()` used `\b` word boundaries which never match Chinese names. Now uses substring match for CJK entity names and word-boundary match for Latin ones. (src/pipeline/core.py)
+- **Wasted document embedding when not persisting**: `process_file_hybrid()` no longer calls `store_document()` (and its embedding) when `store_path` is None; it returns a lightweight metadata dict instead. (src/pipeline/core.py)
+- **`TrafilaturaParser` broken on trafilatura 2.x**: removed the removed `prefer_full_output` kwarg (now `favor_recall`) so HTML parsing no longer crashes. (src/parsers/dispatcher.py)
+- **`hybrid_search()` crashed on hyphenated queries**: user questions like "retrieval-augmented generation" were passed verbatim to FTS5 MATCH, where the hyphen is parsed as an operator (`no such column: augmented`). Added `_build_fts_query()` to strip FTS5 special characters and OR-join tokens. (src/storage/sqlite_vec.py)
+- **`rag_query()` reused the JSON-only `call_llm` to synthesize answers**: the LLM replies in free text, not JSON, so it raised "no JSON-like content". Added `call_llm_raw()` and switched `rag_query` to it. (src/formatters/__init__.py, src/pipeline/core.py)
+- **Reference/bibliography sections polluted retrieval**: reference lists (References, 参考文献, 參考, Bibliography, Further reading, …) are high in keyword overlap but carry no answer-worthy content, so they dominated top-k. `process_file_hybrid()` now strips such sections from the markdown *before chunking/embedding* (the human `.md` output is untouched). Added `_strip_reference_sections()` + `_is_reference_title()` with English (word-boundary) and CJK (substring) title matching. (src/pipeline/core.py)
+
+## [0.5.3] — 2026-07-09
+
+### Fixed
+
+- **`rag_query()` crashed on every query**: `Embedder.embed(str)` returns a single embedding vector (`list[float]`), but the code indexed `query_vectors[0]`, turning the vector into a bare float and crashing `serialize_float32()`. Now uses the vector directly, with a guard handling both `str` and `list` return shapes. `Embedder` is also closed via a context manager (fixes connection leak). (src/pipeline/core.py)
+- **Vector search returned duplicate chunks with truncated `section_path`**: `search_chunks()` and `hybrid_search()` used `FROM chunks c, json_each(c.section_path)` — a cross join that multiplied each chunk once per section-path element (wasting the `LIMIT` budget) and returned a single `json_each.value` element instead of the full path. Replaced with `FROM chunks c` + `EXISTS (... json_each ...)` filtering so results are deduplicated and `section_path` is the complete array. (src/storage/sqlite_vec.py)
+- **Hybrid search RRF fusion used bm25 score as rank**: `fts_rank` was taken from the raw bm25 `rank` value (a negative float), making the `+rrf_k` (60) offset meaningless and corrupting fused ordering. FTS rank now uses 1-based result order; vector ranks are also precomputed once. (src/storage/sqlite_vec.py)
+- **`_render_markdown_with_sections()` reordered document content**: it hoisted all `metadata.sections` headers above the body, shifting every section's content under the wrong header when the LLM body already contained headings (the common case). Now keeps the body's own heading structure intact, falling back to `metadata.sections` only when the body has no headings. (src/pipeline/core.py)
+- **`process_file_hybrid` / `process_file_with_md` hardcoded `source_type="pdf"`** regardless of the actual file type. Now derives the formatter hint from the file extension (pdf/docx→pdf, html/htm→web, md/mkd→markdown, txt→web). (src/pipeline/core.py)
+- **CJK `word_count` was always 1 for unspaced text**: `len(text.split())` counts only whitespace-delimited tokens, so Chinese paragraphs counted as a single word. Added a `_count_words()` helper that counts CJK characters plus whitespace-split tokens. (src/storage/sqlite_vec.py)
+- **Dead code in `SQLiteVecStore.close()`**: removed an empty `if not self.conn.in_transaction: pass` branch. (src/storage/sqlite_vec.py)
+- **`Embedder.embed()` docstring** claimed `list[list[float]]` for all inputs; corrected to document the actual contract (`str → list[float]`, `list[str] → list[list[float]]`). (src/embedders/bge_m3.py)
+
+### Changed
+
+- **`hybrid_search()` fusion loop** no longer re-sorts `vec_results` on every iteration (O(n²) → O(n)); the sorted rank map is computed once. (src/storage/sqlite_vec.py)
+
+### Added Tests (total 103)
+
+- No new tests added; existing suite (103 passing) covers the modified behavior, and an end-to-end run (`python -m pipeline.cli process`) confirms parse → clean → LLM format → embed → sqlite-vec persistence and correct deduplicated retrieval.
+
 ## [0.5.2] — 2026-07-06
 
 ### Fixed
@@ -60,7 +151,7 @@
 
 ### Changed
 
-- **CJK-aware chunk threshold** (`_detect_cjk_ratio()`): Chunk size scales down from 28000 chars to ~7000 when text is ≥50% CJK (Chinese/Japanese/Korean), based on character-to-token ratio of 1:1 for CJK vs 4:1 for English. Linear interpolation at 10–50% CJK density.
+ - **CJK-aware chunk threshold** (`_detect_cjk_ratio()`): Chunk size scales down from the configured base (default 20000 chars, ~5000 tokens) to ~5000 chars when text is ≥50% CJK (Chinese/Japanese/Korean), based on character-to-token ratio of 1:1 for CJK vs 4:1 for English. Linear interpolation at 10–50% CJK density.
 - **Multi-language tag extraction**: `_detect_body_script()` detects text script; `_tokenize_cjk()` uses bigram + whitespace tokenization for CJK; `_tokenize_latin()` uses `[a-zA-Z]{3,}` regex; multi-language stopword sets (English, Chinese, Japanese); `_extract_cjk_entities()` extracts named-entity-like phrases from CJK text.
 - **Sentence-split abbreviation handling**: `_SENTENCE_ABBREVIATIONS` set with 50+ common abbreviations ("Mr.", "Dr.", "U.S.A.", etc.) prevents false sentence boundary detection in title/initials/acronyms contexts.
 - **O(n) heading lookup** (`_split_by_headings()`): Pre-build `heading_by_line` dict for constant-time per-line lookups instead of O(n*m) nested loop scanning.

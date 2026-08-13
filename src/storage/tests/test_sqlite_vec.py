@@ -91,6 +91,41 @@ class TestUpsertChunk:
         for r in results:
             assert r["source_doc_id"] == "doc_batch"
 
+    def test_upsert_chunks_returns_aligned_ids(self, store):
+        """Batch upsert must return one result per chunk with correct ids/order."""
+        chunks = [
+            {"text": f"C{i}", "section_path": ["S"]} for i in range(3)
+        ]
+        embs = [_make_embedding() for _ in range(3)]
+        for i, c in enumerate(chunks):
+            c["embedding"] = embs[i]
+
+        results = store.upsert_chunks(chunks, doc_id="doc_ids")
+        assert [r["chunk_index"] for r in results] == [0, 1, 2]
+        assert all(r["id"] is not None for r in results)
+        # Ids must be distinct per chunk_index within the same doc.
+        assert len({r["id"] for r in results}) == 3
+
+    def test_get_embeddings_by_ids_round_trip(self, store):
+        """Stored chunk embeddings are returned aligned to the requested ids."""
+        embs = [_make_embedding() for _ in range(2)]
+        r0 = store.upsert_chunk({"text": "a", "section_path": ["S"]}, doc_id="doc_ge", embedding=embs[0], chunk_index=0)
+        r1 = store.upsert_chunk({"text": "b", "section_path": ["S"]}, doc_id="doc_ge", embedding=embs[1], chunk_index=1)
+
+        out = store.get_embeddings_by_ids([r0["id"], r1["id"]])
+        assert len(out) == 2
+        for orig, got in zip(embs, out):
+            assert len(got) == 1024
+            assert all(abs(o - g) < 0.001 for o, g in zip(orig, got))
+
+    def test_get_embeddings_by_ids_unknown_is_empty(self, store):
+        """Unknown ids yield an empty list kept in the requested position."""
+        out = store.get_embeddings_by_ids([999, 12345])
+        assert out == [[], []]
+
+    def test_get_embeddings_by_ids_empty_input(self, store):
+        assert store.get_embeddings_by_ids([]) == []
+
 
 # ---------------------------------------------------------------------------
 # search_chunks
@@ -318,6 +353,39 @@ class TestHybridRRF:
         # Empty text + provided vector → pure vector search.
         results = store.hybrid_search("", query_vector=emb)
         assert len(results) >= 1
+
+    def test_hybrid_search_sanitizes_fts_special_chars(self, store):
+        """Hyphens / FTS5 operators in the query must not crash the search.
+
+        Regression test: a query like 'retrieval-augmented generation' used to
+        raise sqlite3.OperationalError: no such column: augmented because FTS5
+        parsed the hyphen as an operator.
+        """
+        emb = _make_embedding()
+        store.upsert_chunk(
+            {"text": "Retrieval-augmented generation combines retrieval with generation",
+             "section_path": ["RAG"]},
+            doc_id="doc_hyphen", embedding=emb, chunk_index=0,
+        )
+        store.upsert_chunk(
+            {"text": "Unrelated content about cooking pasta", "section_path": ["Food"]},
+            doc_id="doc_hyphen", embedding=_make_embedding(), chunk_index=1,
+        )
+
+        # Should not raise; should return the matching chunk.
+        results = store.hybrid_search("What is retrieval-augmented generation?")
+        assert any("Retrieval-augmented" in r["text"] for r in results)
+
+    def test_build_fts_query_strips_special_chars(self):
+        """_build_fts_query returns FTS5-safe OR-joined tokens (or None)."""
+        from storage.sqlite_vec import _build_fts_query
+
+        assert _build_fts_query("retrieval-augmented generation") == "retrieval OR augmented OR generation"
+        assert _build_fts_query("") is None
+        assert _build_fts_query("   ") is None
+        # Parentheses / quotes / colons are stripped, not treated as operators.
+        assert "OR" in _build_fts_query('RAG: "what is this" (explained)')
+
 
 
 # ---------------------------------------------------------------------------

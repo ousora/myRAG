@@ -51,11 +51,12 @@ def _ingest_markdown(md_path: str, store_path: str, *,
     # Embed + store
     from embedders import Embedder
     from storage.sqlite_vec import SQLiteVecStore
+    from pipeline.core import _build_doc_summary
 
     e = Embedder()
     stored_chunks = e.store_chunks(all_chunks, doc_id=doc_id)
 
-    summary_text = md_content[:500].strip()
+    summary_text = _build_doc_summary(title, [], md_content)
     stored_doc = e.store_document(
         title=title,
         tags=[],

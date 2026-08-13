@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import logging
 
-from .bge_m3 import _validate_embedding_dimension
+from .bge_m3 import _validate_embedding_dimension, _embed_cache_get, _embed_cache_put
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +40,13 @@ class LocalEmbedder:
         self.batch_size = batch_size
         self.max_tokens_per_batch = max_tokens_per_batch or 512 * 32  # ~16K tokens
 
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc_info):
+        # sentence-transformers holds no open network/file handles to close.
+        return False
+
     # ── Public API (mirrors embedders.bge_m3.Embedder) ────────────────────
 
     def embed(self, text: str | list[str]) -> list[list[float]]:
@@ -50,8 +57,12 @@ class LocalEmbedder:
             - list[str] input: list[list[float]] (batch embeddings)
         """
         if isinstance(text, str):
+            cached = _embed_cache_get(text)
+            if cached is not None:
+                return cached
             emb = self._model.encode(text).tolist()
             _validate_embedding_dimension(emb)
+            _embed_cache_put(text, emb)
             return emb
 
         # Batch encoding with memory protection
@@ -94,6 +105,29 @@ class LocalEmbedder:
             all_embeddings.extend(embeddings.tolist())
 
         return all_embeddings
+
+    def _maybe_prepend_instruction(self, text: str | list[str]) -> str | list[str]:
+        """Prepend the retrieval query instruction for query texts only.
+
+        Mirrors ``Embedder._maybe_prepend_instruction`` on the remote backend:
+        documents are embedded without the prefix, queries with it.
+        """
+        from config import get_config
+
+        instruction = getattr(get_config(), "embedding_query_instruction", "") or ""
+        if not instruction:
+            return text
+        if isinstance(text, str):
+            return f"{instruction}{text}"
+        return [f"{instruction}{t}" for t in text]
+
+    def embed_query(self, text: str | list[str]) -> list[list[float]]:
+        """Embed a user *query* with the retrieval instruction prefix.
+
+        Returns ``list[list[float]]`` (one inner list per input) to stay
+        consistent with LocalEmbedder.embed's return shape.
+        """
+        return self.embed(self._maybe_prepend_instruction(text))
 
     def store_chunks(self, chunks: list[dict], *, doc_id: str = "doc_0") -> list[dict]:
         """Embed multiple chunks and return metadata for storage.
