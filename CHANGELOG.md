@@ -51,30 +51,6 @@
 
 - **4 new test modules** (+76 tests): `test_directory_hybrid.py`, `test_rag_query.py`, `test_local_embedder.py`, `test_rerank.py`.
 
-## [Unreleased]
-
-### Added
-
-- **Module splitting for large files**: Split `core.py` (688→531 lines) into `pipeline/core.py` + `pipeline/markdown_utils.py` + `pipeline/utils.py`. Split `formatters/__init__.py` (951→742 lines) into `formatters/__init__.py` + `formatters/tags.py` + `formatters/cache.py`. Split `sqlite_vec.py` (654→80 lines) into `storage/sqlite_vec.py` + `storage/schema.py` + `storage/inserts.py` + `storage/search.py`. All modules now under 500-line limit.
-- **Strict mypy configuration**: Added `[tool.mypy]` to `pyproject.toml` with `disallow_untyped_defs = true`. Added mypy hook to `.pre-commit-config.yaml`. All public functions have type hints.
-- **[tool.ruff] configuration**: Added project-level ruff config to `pyproject.toml` with line-length 120, target Python 3.10, and comprehensive rule sets (E, F, W, I, N, B, A, C4, D, DTZ, EM, FBT, ICN, ISC, LOG, PIE, Q, RSE, RET, SIM, TCH, TID, TRY, UP, YTT).
-- **[tool.pytest] configuration**: Added testpaths, python_files/classes/functions patterns, and addopts for consistent test discovery.
-- **`__init__.py` for `src/myrag/`**: Explicit package declaration with exception re-exports.
-- **4 new test modules** (+76 tests, total 194): `test_directory_hybrid.py`, `test_rag_query.py`, `test_local_embedder.py`, `test_rerank.py`.
-
-### Changed
-
-- **Unified `chunk_size` default**: CLI defaults raised from 512 to 1024 to match `pipeline.core` defaults. Consistent behaviour across all entry points.
-- **Pre-compiled CJK regex**: `_cjk_re` moved to module level in `storage/inserts.py` to avoid recompilation on every `_count_words()` call.
-- **Config alignment**: `config.yaml` now includes `query_instruction` and `debug_log_llm_responses` fields to match `config.example.yaml`.
-- **Bare except fix**: `parsers/text_cleaner.py` now catches specific `(OSError, yaml.YAMLError)` instead of bare `Exception`.
-
-### Fixed
-
-- **`upsert_document` raised `NameError` after ON CONFLICT refactor**: `existing` and `cursor` were referenced but never defined. Now queries the document ID via `SELECT id FROM documents WHERE source_file=?` after the upsert. (src/storage/inserts.py)
-- **`hybrid` CLI command printed output twice**: Duplicate print block caused each piece of output (chunks, DB path, index message, title) to be printed twice. Removed the redundant block. (src/pipeline/cli.py)
-- **`process_file_hybrid` timeout return shape**: Timeout handler now returns all 5 keys (`chunks`, `document`, `format_result`, `md_path`, `db_path`) matching the normal path, preventing KeyError in callers.
-
 ## [0.5.6] — 2026-07-24
 
 ### Fixed
