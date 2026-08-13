@@ -178,7 +178,7 @@ def _write_yaml_frontmatter(lines, result):
 
     lines.append("---")
     if title := result.get("title"):
-        lines.append(f"title: {repr(title)}")  # use repr for safe YAML string quoting
+        lines.append(f"title: {repr(title)}")
     if source_file:
         lines.append(f"source: {repr(source_file)}")
     if created_at:

@@ -5,6 +5,7 @@ Auto-detects which path to use based on input size.
 """
 
 import atexit
+import hashlib
 import json
 import logging
 import os
@@ -61,6 +62,9 @@ def _get_config():
 # Default chars-per-token ratios by language family used to adjust the threshold.
 _CJK_CHARS_PER_TOKEN = 1.0
 _ENGLISH_CHARS_PER_TOKEN = 4.0
+
+# Pre-compiled regex for paragraph splitting.
+_PARAGRAPH_SPLIT = re.compile(r'\n\n+')
 
 
 def _detect_cjk_ratio(text: str) -> float:
@@ -138,6 +142,22 @@ def get_executor() -> ThreadPoolExecutor:
     return _executor
 
 
+def _call_llm_api(payload: dict[str, Any], timeout: int | None) -> httpx.Response:
+    """Make HTTP POST to LLM endpoint with basic error handling.
+
+    Shared by ``call_llm`` and ``call_llm_raw`` to avoid duplicate request logic.
+    Does NOT handle schema fallback — that is specific to ``call_llm``.
+    """
+    cfg = _get_config()
+    try:
+        response = httpx.post(cfg.llm_endpoint, json=payload, timeout=timeout or cfg.llm_timeout)
+        response.raise_for_status()
+        return response
+    except httpx.HTTPError as e:
+        logger.error("LLM call failed after %.1fs: %s", (timeout or cfg.llm_timeout), e)
+        raise RuntimeError(f"LLM API request failed: {e}") from e
+
+
 def call_llm(system_prompt: str, user_message: str, *,
              max_tokens: int | None = None,
              timeout: int | None = None,
@@ -170,32 +190,22 @@ def call_llm(system_prompt: str, user_message: str, *,
         }
 
     try:
-        response = httpx.post(cfg.llm_endpoint, json=payload, timeout=timeout or cfg.llm_timeout)
-        response.raise_for_status()
-    except httpx.HTTPError as e:
+        response = _call_llm_api(payload, timeout)
+    except RuntimeError:
         # Some llama.cpp backends fail on JSON Schema enforcement
         # (peg-grammar incompatibility). Retry without schema if this happens.
-        resp_for_retry = getattr(e, "response", None)
+        resp_for_retry = getattr(response, "response", None) if 'response' in dir() else None
         schema_fallback_codes = {500, 503, 429}
         if schema is not None and resp_for_retry is not None and resp_for_retry.status_code in schema_fallback_codes:
             err_body = resp_for_retry.text
             if "peg" in err_body.lower() or "format" in err_body.lower():
                 logger.warning("Schema-based response_format rejected by server (HTTP %d), retrying without schema", resp_for_retry.status_code)
                 payload.pop("response_format", None)
-                try:
-                    response = httpx.post(cfg.llm_endpoint, json=payload, timeout=timeout or cfg.llm_timeout)
-                    response.raise_for_status()
-                except httpx.HTTPError as e2:
-                    logger.error("LLM call failed (no schema fallback): %s", e2)
-                    raise RuntimeError(f"LLM API request failed: {e2}") from e2
+                response = _call_llm_api(payload, timeout)
             else:
-                logger.error("LLM call failed after %.1fs: %s",
-                             (timeout or cfg.llm_timeout), e)
-                raise RuntimeError(f"LLM API request failed: {e}") from e
+                raise
         else:
-            logger.error("LLM call failed after %.1fs: %s",
-                          (timeout or cfg.llm_timeout), e)
-            raise RuntimeError(f"LLM API request failed: {e}") from e
+            raise
 
     try:
         raw_content = response.json()["choices"][0]["message"]["content"]
@@ -271,12 +281,7 @@ def call_llm_raw(system_prompt: str, user_message: str, *,
         "temperature": cfg.llm_temperature,
         "max_tokens": max_tokens or cfg.llm_max_tokens,
     }
-    try:
-        response = httpx.post(cfg.llm_endpoint, json=payload, timeout=timeout or cfg.llm_timeout)
-        response.raise_for_status()
-    except httpx.HTTPError as e:
-        logger.error("LLM call failed after %.1fs: %s", (timeout or cfg.llm_timeout), e)
-        raise RuntimeError(f"LLM API request failed: {e}") from e
+    response = _call_llm_api(payload, timeout)
 
     try:
         return response.json()["choices"][0]["message"]["content"]
@@ -426,7 +431,7 @@ def _split_by_paragraph(text: str, max_chars: int | None = None) -> list[str]:
     Returns:
         List of paragraph-boundary-aligned text chunks, each ≤ max_chars.
     """
-    paragraphs = re.split(r'\n\n+', text)
+    paragraphs = _PARAGRAPH_SPLIT.split(text)
     paragraphs = [p.strip() for p in paragraphs if p.strip()]
 
     if not paragraphs:

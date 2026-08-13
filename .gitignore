@@ -49,3 +49,8 @@ test/llmoutput/
 # Local config (if any secrets)
 conf/config.yaml
 .env
+
+# Database files (anywhere)
+*.db
+*.sqlite3
+*.sqlite

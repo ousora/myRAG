@@ -145,6 +145,10 @@ class Embedder:
         return self
 
     def __exit__(self, *exc_info):
+        self.close()
+
+    def close(self):
+        """Close the underlying HTTP client."""
         if hasattr(self, "client") and self.client is not None:
             try:
                 self.client.close()
@@ -174,7 +178,7 @@ class Embedder:
                 )
                 last_exc = RuntimeError(f"HTTP {resp.status_code}: {resp.text[:200]}")
                 _time.sleep(wait)
-            except httpx.TimeoutException as exc:
+            except (httpx.TimeoutException, httpx.ReadTimeout, httpx.WriteTimeout) as exc:
                 logger.warning(
                     "Embedding API timed out (attempt %d/%d), retrying in %ds",
                     attempt + 1, max_retries + 1, min(2 ** attempt, 8),
@@ -235,22 +239,27 @@ class Embedder:
             "embedding": embedding,
         }
 
-    def store_chunks(self, chunks: list[dict], *, doc_id: str = "doc_0") -> list[dict]:
-        """Embed multiple chunks and return metadata for storage."""
-        texts = [c["text"] for c in chunks]
-        embeddings = self.embed(texts) if texts else []
+    def store_chunks(self, chunks: list[dict], *, doc_id: str = "doc_0", batch_size: int = 32) -> list[dict]:
+        """Embed multiple chunks and return metadata for storage.
 
-        results = []
-        for i, chunk in enumerate(chunks):
-            result = dict(chunk)
-            result["source_doc_id"] = doc_id
-            result["chunk_index"] = i
-            result["word_count"] = len(chunk.get("text", "").split())
-            if embeddings:
-                result["embedding"] = embeddings[i]
-            results.append(result)
+        Splits chunks into batches of *batch_size to avoid oversized API requests.
+        """
+        all_results: list[dict] = []
+        for i in range(0, len(chunks), batch_size):
+            batch = chunks[i:i + batch_size]
+            texts = [c["text"] for c in batch]
+            embeddings = self.embed(texts) if texts else []
 
-        return results
+            for j, chunk in enumerate(batch):
+                result = dict(chunk)
+                result["source_doc_id"] = doc_id
+                result["chunk_index"] = i + j
+                result["word_count"] = len(chunk.get("text", "").split())
+                if embeddings:
+                    result["embedding"] = embeddings[j]
+                all_results.append(result)
+
+        return all_results
 
     def store_document(
         self,

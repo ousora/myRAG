@@ -16,6 +16,8 @@ from markdown_it import MarkdownIt
 
 
 class Chunker:
+    # Pre-compiled MarkdownIt parser — created once in __init__ and reused.
+    _MD_PARSER: MarkdownIt | None = None
     """Split markdown text into embeddable chunks using markdown-it-py.
 
     Primary split: header-aware splitting on #/##/### boundaries,
@@ -48,6 +50,7 @@ class Chunker:
             ]
 
         self.headers_to_split_on = headers_to_split_on
+        self._md = MarkdownIt()
 
         # Build level ↔ key mappings — H1 → 1, "H1" → 1, etc.
         self._level_to_key: dict[int, str] = {}
@@ -120,8 +123,7 @@ class Chunker:
         Returns list of dicts with keys: level, key, title, line (0-indexed).
         markdown-it-py handles setext headers (underlined with ===/---) natively.
         """
-        md = MarkdownIt()
-        tokens = md.parse(text)
+        tokens = self._md.parse(text)
 
         headings = []
         for i, token in enumerate(tokens):

@@ -53,30 +53,30 @@ def _ingest_markdown(md_path: str, store_path: str, *,
     from storage.sqlite_vec import SQLiteVecStore
     from pipeline.core import _build_doc_summary
 
-    e = Embedder()
-    stored_chunks = e.store_chunks(all_chunks, doc_id=doc_id)
+    with Embedder() as e:
+        stored_chunks = e.store_chunks(all_chunks, doc_id=doc_id)
 
-    summary_text = _build_doc_summary(title, [], md_content)
-    stored_doc = e.store_document(
-        title=title,
-        tags=[],
-        text_summary=summary_text,
-        source_file=str(md_file.resolve()),
-        total_chunks=len(stored_chunks),
-    )
+        summary_text = _build_doc_summary(title, [], md_content)
+        stored_doc = e.store_document(
+            title=title,
+            tags=[],
+            text_summary=summary_text,
+            source_file=str(md_file.resolve()),
+            total_chunks=len(stored_chunks),
+        )
 
-    db = SQLiteVecStore(store_path)
-    db.upsert_chunks(stored_chunks, doc_id=doc_id)
+        with SQLiteVecStore(store_path) as db:
+            db.upsert_chunks(stored_chunks, doc_id=doc_id)
 
-    doc_embedding = stored_doc.get("embedding")
-    db.upsert_document(
-        title=title,
-        tags=[],
-        text_summary=summary_text,
-        source_file=str(md_file.resolve()),
-        total_chunks=len(stored_chunks),
-        embedding=doc_embedding,
-    )
+            doc_embedding = stored_doc.get("embedding")
+            db.upsert_document(
+                title=title,
+                tags=[],
+                text_summary=summary_text,
+                source_file=str(md_file.resolve()),
+                total_chunks=len(stored_chunks),
+                embedding=doc_embedding,
+            )
 
     logger.info("  → Persisted %d chunks + 1 doc to %s", len(stored_chunks), store_path)
     return store_path

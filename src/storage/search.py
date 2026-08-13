@@ -34,6 +34,10 @@ def _deserialize_embedding(raw) -> list[float]:
     return list(raw)
 
 
+# Pre-compile CJK pattern once at module level.
+_CJK_PAT = re.compile("|".join(_CJK_RANGE))
+
+
 def _build_fts_query(text: str) -> "str | None":
     """Turn free-text into an FTS5-safe MATCH query.
 
@@ -42,10 +46,9 @@ def _build_fts_query(text: str) -> "str | None":
     None when no usable token remains, so callers can fall back to vector-only.
     """
     cleaned = _FTS_SPECIAL.sub(" ", text)
-    cjk_re_str = "|".join(_CJK_RANGE)  # e.g. "\u4e00-\u9fff|..." — valid regex with \u escapes for each block range.
+    cjk_re_str = "|".join(_CJK_RANGE)
     tokens = re.findall(r"[A-Za-z0-9]+|" + cjk_re_str, cleaned)
-    cjk_pat = re.compile("|".join(_CJK_RANGE))
-    tokens = [t for t in tokens if len(t) > 1 or bool(cjk_pat.match(t))]
+    tokens = [t for t in tokens if len(t) > 1 or bool(_CJK_PAT.match(t))]
     if not tokens:
         return None
     return " OR ".join(tokens)
@@ -141,12 +144,10 @@ class _SearchOps:
                 params.append(tag)
 
         # Vector search requires a non-null embedding column.
+        where = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
         if query_vector is not None:
             where_clauses.append("embedding IS NOT NULL")
-
-        where = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
-
-        if query_vector is not None:
+            where = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
             emb_str = _SQLITE_VEC.serialize_float32(query_vector)
             sql = (
                 f"""SELECT id, title, tags as raw_tags, text_summary,
@@ -248,7 +249,9 @@ class _SearchOps:
                     combined[v["id"]] = dict(v)
 
             # Compute cosine distances once per combined ID (batched).
-            ids_to_score = [v["id"] for v in vec_results]
+            # Cap at 1000 to stay under SQLite's SQLITE_MAX_VARIABLE_NUMBER.
+            _MAX_IN_CLAUSE = 1000
+            ids_to_score = [v["id"] for v in vec_results[:_MAX_IN_CLAUSE]]
             score_map = {}
             if ids_to_score:
                 placeholders = ",".join("?" * len(ids_to_score))

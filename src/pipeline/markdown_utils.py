@@ -43,7 +43,7 @@ def render_markdown_with_sections(result: dict[str, Any]) -> str:
         title_seen = False
         for line in body_lines:
             stripped = line.strip()
-            if not title_seen and re.match(rf'^#\s+{re.escape(title)}$', stripped):
+            if not title_seen and re.match(rf'^#\s+{re.escape(title)}$', stripped, re.IGNORECASE):
                 title_seen = True
                 continue  # drop duplicate title H1; we render our own below
             kept.append(line)

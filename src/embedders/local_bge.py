@@ -49,11 +49,11 @@ class LocalEmbedder:
 
     # ── Public API (mirrors embedders.bge_m3.Embedder) ────────────────────
 
-    def embed(self, text: str | list[str]) -> list[list[float]]:
+    def embed(self, text: str | list[str]) -> list[float] | list[list[float]]:
         """Get embeddings for one or multiple texts.
 
         Returns:
-            - str input: list[float] (single embedding) — matches remote Embedder behavior
+            - str input: list[float] (single embedding)
             - list[str] input: list[list[float]] (batch embeddings)
         """
         if isinstance(text, str):
@@ -121,11 +121,11 @@ class LocalEmbedder:
             return f"{instruction}{text}"
         return [f"{instruction}{t}" for t in text]
 
-    def embed_query(self, text: str | list[str]) -> list[list[float]]:
-        """Embed a user *query* with the retrieval instruction prefix.
+    def embed_query(self, text: str | list[str]) -> list[float] | list[list[float]]:
+        """Embed a user *query with the retrieval instruction prefix.
 
-        Returns ``list[list[float]]`` (one inner list per input) to stay
-        consistent with LocalEmbedder.embed's return shape.
+        Returns the same shape as ``embed``: ``list[float]`` for str input,
+        ``list[list[float]]`` for list[str] input.
         """
         return self.embed(self._maybe_prepend_instruction(text))
 

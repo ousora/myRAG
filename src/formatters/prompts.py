@@ -335,7 +335,8 @@ def validate_format_output(result: dict) -> list[str]:
 
 def try_fix_common_issues(result: dict) -> dict:
     """Attempt to fix common formatting issues without re-calling the LLM."""
-    fixed = dict(result)
+    import copy
+    fixed = copy.deepcopy(result)
     
     # Ensure tags is a list of strings
     if isinstance(fixed.get("tags"), str):

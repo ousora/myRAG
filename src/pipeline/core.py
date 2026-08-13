@@ -49,6 +49,7 @@ import concurrent.futures
 import httpx
 import logging
 from pathlib import Path
+from typing import Any
 
 from config import get_config_lazy as _get_config
 from embedders import Embedder  # noqa: F401 — used in rag_query type hints
@@ -417,7 +418,7 @@ def process_directory_hybrid(dirpath: str, *, store_path=None, md_output_dir=Non
 
 def rag_query(question: str, db_path: str, *, k: int = 5,
               db: "SQLiteVecStore | None" = None,
-              embedder: "Embedder | None" = None) -> dict:
+              embedder: "Embedder | None" = None) -> dict[str, Any]:
     """Retrieve relevant chunks from sqlite-vec and generate an LLM answer.
 
     Args:

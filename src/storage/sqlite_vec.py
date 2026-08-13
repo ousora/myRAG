@@ -61,6 +61,13 @@ class SQLiteVecStore(_InsertOps, _SearchOps):
             "word_count": row[6],
         } for row in results]
 
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc_info):
+        self.close()
+        return False
+
     def close(self):
         """Close the database connection safely."""
         try:

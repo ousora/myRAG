@@ -19,17 +19,19 @@ dependencies = [
 dev = [
     "pytest>=7.4",
     "ruff>=0.3",
+    "mypy>=1.0",
+    "types-PyYAML",
 ]
-sqlite-vec = ["sqlite-vec"]  # Local vector storage (lightweight, single-file)
-local-embeddings = ["sentence-transformers>=2.7,<3"]  # Local bge-m3 (CPU inference, ~1.1GB model)
+sqlite-vec = ["sqlite-vec>=0.1"]  # Local vector storage (lightweight, single-file)
+local-embeddings = ["sentence-transformers>=2.7"]  # Local bge-m3 (CPU inference, ~1.1GB model)
+
+[project.scripts]
+myrag = "pipeline.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
 include = ["*"]
 exclude = ["myrag_pipeline.egg-info", "tests*"]
-
-[tool.pytest.ini_options]
-pythonpath = ["src"]
 
 [tool.setuptools]
 py-modules = ["pipeline", "config"]
@@ -65,6 +67,7 @@ ignore = ["E501", "D100", "D104", "D107"]
 "tests/*" = ["D103", "D104", "S101"]
 
 [tool.pytest.ini_options]
+pythonpath = ["src"]
 testpaths = ["src"]
 python_files = ["test_*.py"]
 python_classes = ["Test*"]

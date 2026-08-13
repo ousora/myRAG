@@ -21,10 +21,15 @@ _FORMAT_CACHE_MAX = 256
 
 
 def format_cache_key(raw: str, source_type: str, system_prompt) -> str:
-    """Generate a cache key from the input parameters."""
-    sp = system_prompt or ""
+    """Generate a cache key from the input parameters.
+
+    Hashes each component separately to avoid the system prompt (several KB)
+    dominating the hash computation.
+    """
+    sp_hash = hashlib.sha256((system_prompt or "").encode()).hexdigest()
+    raw_hash = hashlib.sha256(raw.encode()).hexdigest()
     return hashlib.md5(
-        f"{source_type}|{sp}|{raw}".encode("utf-8")
+        f"{source_type}|{sp_hash}|{raw_hash}".encode("utf-8")
     ).hexdigest()
 
 
