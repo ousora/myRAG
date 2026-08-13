@@ -19,23 +19,15 @@ _CJK_RE = re.compile("|".join(_CJK_RANGE))
 def _count_words(text: str) -> int:
     """Count words, treating CJK characters as individual tokens.
 
-    ``str.split()`` only splits on whitespace, so an unspaced CJK paragraph
-    (common in Chinese documents) would otherwise count as a single "word". The basic range alone misses ~1% of modern Chinese text; we cover Blocks A–D for >99.5% coverage. Each CJK character counts individually since there are no word boundaries — Latin tokens come from whitespace splitting the non-CJK portion only (avoids double-counting).
+    Uses ``re.sub`` to remove CJK in one pass, then counts Latin tokens
+    via ``\\S+`` splitting. Each CJK character counts individually since
+    there are no word boundaries.
     """
     if not text:
         return 0
-
-    latin_text_parts: list[str] = []
-    cjk_count = 0
-    for ch in text:
-        if bool(_CJK_RE.match(ch)):
-            cjk_count += 1
-        else:
-            # Preserve whitespace so \S+ splitting still works correctly.
-            latin_text_parts.append(ch)
-
-    non_cjk = len(re.findall(r"\S+", "".join(latin_text_parts)))
-    return cjk_count + non_cjk
+    cjk_count = len(_CJK_RE.findall(text))
+    non_cjk = re.sub(_CJK_RE, '', text)
+    return cjk_count + len(re.findall(r"\S+", non_cjk))
 
 
 class _InsertOps:
@@ -72,7 +64,7 @@ class _InsertOps:
                 title TEXT NOT NULL,
                 tags TEXT DEFAULT '[]',
                 text_summary TEXT NOT NULL,
-                source_file TEXT NOT NULL,
+                source_file TEXT NOT NULL UNIQUE,
                 total_chunks INTEGER DEFAULT 0,
                 embedding BLOB,
                 created_at TEXT
@@ -197,28 +189,25 @@ class _InsertOps:
         created_at = datetime.now(timezone.utc).isoformat()
         emb_blob = _SQLITE_VEC.serialize_float32(embedding) if embedding else None
 
-        # Upsert by source_file — re-ingesting the same file overwrites.
-        existing = self.conn.execute(
-            "SELECT id FROM documents WHERE source_file=?", (source_file,)
-        ).fetchone()
-
-        if existing:
-            cursor = self.conn.execute(
-                """UPDATE documents SET title=?, tags=?, text_summary=?, 
-                   total_chunks=?, embedding=?, created_at=? WHERE id=?""",
-                (title, tags_json, text_summary[:1000], total_chunks, emb_blob, created_at, existing[0])
-            )
-        else:
-            cursor = self.conn.execute(
-                """INSERT INTO documents (title, tags, text_summary, source_file, 
-                                          total_chunks, embedding, created_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
-                (title, tags_json, text_summary[:1000], source_file, total_chunks, emb_blob, created_at)
-            )
-
+        # Upsert by source_file using ON CONFLICT for atomicity.
+        self.conn.execute(
+            """INSERT INTO documents (title, tags, text_summary, source_file, 
+                                      total_chunks, embedding, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?)
+               ON CONFLICT(source_file) DO UPDATE SET
+                   title=excluded.title,
+                   tags=excluded.tags,
+                   text_summary=excluded.text_summary,
+                   total_chunks=excluded.total_chunks,
+                   embedding=excluded.embedding,
+                   created_at=excluded.created_at""",
+            (title, tags_json, text_summary[:1000], source_file, total_chunks, emb_blob, created_at)
+        )
         self.conn.commit()
 
-        doc_id = existing[0] if existing else cursor.lastrowid or 1
+        doc_id = self.conn.execute(
+            "SELECT id FROM documents WHERE source_file=?", (source_file,)
+        ).fetchone()[0]
         return {
             "id": doc_id,
             "title": title,

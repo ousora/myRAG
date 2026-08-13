@@ -20,6 +20,8 @@
 
 ### Fixed
 
+- **`upsert_document` raised `NameError` after ON CONFLICT refactor**: `existing` and `cursor` were referenced but never defined. Now queries the document ID via `SELECT id FROM documents WHERE source_file=?` after the upsert. (src/storage/inserts.py)
+- **`hybrid` CLI command printed output twice**: Duplicate print block caused each piece of output (chunks, DB path, index message, title) to be printed twice. Removed the redundant block. (src/pipeline/cli.py)
 - **`process_file_hybrid` timeout return shape**: Timeout handler now returns all 5 keys (`chunks`, `document`, `format_result`, `md_path`, `db_path`) matching the normal path, preventing KeyError in callers.
 
 ## [0.5.6] — 2026-07-24

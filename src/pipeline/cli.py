@@ -47,10 +47,18 @@ def main():
     md_parser.add_argument("input", help="file to process")
     md_parser.add_argument("--output-dir", default="./output/", help="Output directory for .md files")
 
+    # hybrid command
+    hybrid_parser = subparsers.add_parser("hybrid", help="Process file with hybrid indexing")
+    hybrid_parser.add_argument("input", help="file to process")
+    hybrid_parser.add_argument("--store", required=True, help="Path to sqlite-vec database")
+    hybrid_parser.add_argument("--doc-id", default="doc_0", help="Document ID for storage")
+
     args = parser.parse_args()
 
     # Setup logging: console + file
     log_dir = Path("logs")
+    if log_dir.is_file():
+        raise OSError(f"'{log_dir}' exists as a file, not a directory")
     log_dir.mkdir(exist_ok=True)
     log_file = log_dir / "pipeline.log"
 
@@ -103,7 +111,7 @@ def main():
         if result.get("db_path"):
             print(f"DB:     {result['db_path']}")
         print("Document index created")
-        if result["format_result"]:
+        if result.get("format_result"):
             print(f"Title: {result['format_result'].get('title', 'N/A')}")
 
     elif args.command == "ingest":
