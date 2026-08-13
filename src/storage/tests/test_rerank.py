@@ -1,11 +1,5 @@
 """Tests for rerank.py — MMR re-ranking of retrieved chunks."""
 
-import json
-from pathlib import Path
-from unittest.mock import Mock, patch
-
-import pytest
-
 from rerank import _cosine, _lexical_score, _tokenize, mmr_rerank
 
 

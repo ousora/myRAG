@@ -5,7 +5,6 @@ from __future__ import annotations
 import importlib
 import logging
 import sys
-from typing import Optional
 
 logger = logging.getLogger(__name__)
 
@@ -30,7 +29,7 @@ _CJK_RANGE = [f"\\u{r}" for r in _CJK_RANGE_HEX]
 #   ``importlib.metadata.distribution("sqlite-vec").files`` — robust across
 #   editable installs, wheels, and different Python versions.
 # ---------------------------------------------------------------------------
-_sqlite_vec: Optional[object] = None
+_sqlite_vec: object | None = None
 
 
 def _load_sqlite_vec() -> object:

@@ -189,12 +189,13 @@ def call_llm(system_prompt: str, user_message: str, *,
             "schema": schema,
         }
 
+    response: httpx.Response | None = None
     try:
         response = _call_llm_api(payload, timeout)
     except RuntimeError:
         # Some llama.cpp backends fail on JSON Schema enforcement
         # (peg-grammar incompatibility). Retry without schema if this happens.
-        resp_for_retry = getattr(response, "response", None) if 'response' in dir() else None
+        resp_for_retry = getattr(response, "response", None) if response is not None else None
         schema_fallback_codes = {500, 503, 429}
         if schema is not None and resp_for_retry is not None and resp_for_retry.status_code in schema_fallback_codes:
             err_body = resp_for_retry.text

@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import re
-from typing import Optional, Union
+from typing import Optional
 
 from .schema import _CJK_RANGE, _SQLITE_VEC
 
@@ -38,7 +38,7 @@ def _deserialize_embedding(raw) -> list[float]:
 _CJK_PAT = re.compile("|".join(_CJK_RANGE))
 
 
-def _build_fts_query(text: str) -> "str | None":
+def _build_fts_query(text: str) -> str | None:
     """Turn free-text into an FTS5-safe MATCH query.
 
     Strips all recognized FTS5 operator characters, then OR-joins the surviving tokens so any
@@ -79,7 +79,7 @@ class _SearchOps:
         return _parse_section_path(raw)
 
     def search_chunks(self, query_vector: list[float], *, k: int = 10,
-                      source_doc_id: Optional[str] = None, section_filter: Optional[list[str]] = None) -> list[dict]:
+                      source_doc_id: str | None = None, section_filter: list[str] | None = None) -> list[dict]:
         """Search chunks by vector similarity (cosine distance)."""
         self._setup_schema()
 
@@ -122,8 +122,8 @@ class _SearchOps:
             "word_count": row[5],
         } for row in results]
 
-    def search_documents(self, query_vector: Optional[list[float]] = None,
-                         tags: Optional[list[str]] = None, k: int = 5) -> list[dict]:
+    def search_documents(self, query_vector: list[float] | None = None,
+                         tags: list[str] | None = None, k: int = 5) -> list[dict]:
         """Search documents by vector similarity or tag filter.
 
         When *query_vector* is provided, ranks documents by cosine distance
@@ -180,7 +180,7 @@ class _SearchOps:
             })
         return results
 
-    def hybrid_search(self, query_text: str, query_vector: Optional[list[float]] = None,
+    def hybrid_search(self, query_text: str, query_vector: list[float] | None = None,
                       k: int = 10) -> list[dict]:
         """Hybrid search: vector similarity + full-text (FTS5)."""
         self._setup_schema()

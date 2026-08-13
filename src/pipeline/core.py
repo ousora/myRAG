@@ -223,9 +223,6 @@ def process_file_hybrid(filepath: str, *, doc_id="doc_0", remove_page_breaks=Tru
     db_path = None
 
     if store_path:
-        # Only construct the embedder and pay for the (remote, expensive)
-        # embedding calls when we actually persist. Otherwise we return
-        # lightweight metadata and skip all embedding work.
         try:
             from embedders import Embedder
             from storage.sqlite_vec import SQLiteVecStore
@@ -417,8 +414,8 @@ def process_directory_hybrid(dirpath: str, *, store_path=None, md_output_dir=Non
 
 
 def rag_query(question: str, db_path: str, *, k: int = 5,
-              db: "SQLiteVecStore | None" = None,
-              embedder: "Embedder | None" = None) -> dict[str, Any]:
+              db: SQLiteVecStore | None = None,
+              embedder: Embedder | None = None) -> dict[str, Any]:
     """Retrieve relevant chunks from sqlite-vec and generate an LLM answer.
 
     Args:

@@ -63,8 +63,8 @@ class Config:
         self.llm_endpoint: str         = llm.get("endpoint", "http://localhost:8081/v1/chat/completions")
         self.llm_model: str            = llm.get("model", "local-model")
         self.llm_temperature: float    = llm.get("temperature", 0.3)
-        self.llm_max_tokens: int       = llm.get("max_tokens", 8192)
-        self.llm_timeout: int          = llm.get("timeout", 180)
+        self.llm_max_tokens: int       = llm.get("max_tokens", 16384)
+        self.llm_timeout: int          = llm.get("timeout", 300)
 
         # ── Embedding ──
         emb = raw.get("embedding", {})

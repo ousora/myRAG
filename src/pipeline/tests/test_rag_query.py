@@ -1,6 +1,5 @@
 """Tests for rag_query() in pipeline.core."""
 
-import json
 import os
 import tempfile
 from pathlib import Path

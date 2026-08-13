@@ -1,5 +1,18 @@
 # Changelog — myRAG Pipeline
 
+## [0.6.2] — 2026-08-14
+
+### Fixed
+
+- **`formatters/__init__.py` — `response` may be undefined on schema fallback**: When `_call_llm_api()` raises `RuntimeError`, the `response` variable was referenced via `getattr(response, "response", None)` which could fail if the variable was never assigned. Changed to `response: httpx.Response | None = None` with `if response is not None` guard.
+- **`pipeline/ingest.py` — `chunk_size` default mismatch**: CLI default was 512 while all other pipeline functions used 1024. Unified to 1024.
+- **`config.py` — default values inconsistent with CHANGELOG**: `llm_max_tokens` default was 8192 (CHANGELOG says 16384), `llm_timeout` was 180 (CHANGELOG says 300). Updated defaults to 16384 and 300 respectively.
+- **`pyproject.toml` — invalid mypy config**: Removed `warn_unused_comments = true` (not a valid mypy option). Fixed `exclude` regex from `(?i)\.git` (inline flags not supported by Python `re`) to `\.git`. Added `myrag_pipeline\.egg-info` to exclude list.
+- **`pipeline/core.py` — duplicate chunk/doc construction**: Extracted repeated `stored_chunks`/`stored_doc` dict construction from try/except/else branches into a single consistent pattern.
+- **`pipeline/core.py` — quoted type annotations**: Removed unnecessary string quotes from `SQLiteVecStore | None` and `Embedder | None` type hints in `rag_query()` signature.
+- **Unused imports cleaned up** across multiple files: `search.py` (Union), `sqlite_vec.py` (Optional, _SQLITE_VEC), `inserts.py` (Optional), `schema.py` (Optional), `utils.py` (re), `test_rerank.py` (json, Path, Mock, patch, pytest), `test_directory_hybrid.py` (os), `test_rag_query.py` (json).
+- **`Optional[X]` → `X | None`** syntax unified in `search.py`, `inserts.py`, and `schema.py` for modern type annotation consistency.
+
 ## [0.6.1] — 2026-08-13
 
 ### Fixed

@@ -8,7 +8,7 @@ logger = logging.getLogger(__name__)
 
 
 def _ingest_markdown(md_path: str, store_path: str, *,
-                     doc_id: str = "doc_0", chunk_size: int = 512) -> str:
+                     doc_id: str = "doc_0", chunk_size: int = 1024) -> str:
     """Read a .md file, chunk, embed, and persist to sqlite-vec.
 
     This is the second step of a two-phase pipeline:

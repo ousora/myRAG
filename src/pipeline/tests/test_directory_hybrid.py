@@ -1,7 +1,6 @@
 """Tests for process_directory_hybrid() in pipeline.core."""
 
 import concurrent.futures
-import os
 import shutil
 import tempfile
 from pathlib import Path

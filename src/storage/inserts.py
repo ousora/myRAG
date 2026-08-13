@@ -6,7 +6,6 @@ import json
 import logging
 import re
 from datetime import datetime, timezone
-from typing import Optional
 
 from .schema import _CJK_RANGE, _SQLITE_VEC
 
@@ -177,7 +176,7 @@ class _InsertOps:
 
     def upsert_document(self, title: str, tags: list[str], text_summary: str,
                         source_file: str, total_chunks: int,
-                        embedding: Optional[list[float]] = None) -> dict:
+                        embedding: list[float] | None = None) -> dict:
         """Insert or update a document-level record (B index).
 
         Persists the document-level embedding so the coarse-grained B index

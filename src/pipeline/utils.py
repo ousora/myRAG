@@ -8,7 +8,6 @@ This module contains helper functions used by the main pipeline:
 
 from __future__ import annotations
 
-import re
 from pathlib import Path
 
 

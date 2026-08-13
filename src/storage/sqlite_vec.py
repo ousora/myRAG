@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Optional
 
 from .inserts import _InsertOps
 from .schema import _SQLITE_VEC

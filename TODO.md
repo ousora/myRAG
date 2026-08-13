@@ -12,6 +12,14 @@
 - [x] Centralized config (`conf/config.yaml` + `config.py`)
 - [x] End-to-end verification on cncc.txt — 20 chunks, accurate vector retrieval
 - [x] Unit tests — 48 passed (config 11, chunkers 8, formatters 9, cleaners 5, embedders 7, parsers 13)
+- [x] **Fixed `response` undefined on schema fallback** in `formatters/__init__.py`
+- [x] **Fixed `chunk_size` default mismatch** — unified to 1024 across all pipeline entry points
+- [x] **Fixed config default values** — `llm_max_tokens` 8192→16384, `llm_timeout` 180→300
+- [x] **Fixed invalid mypy config** — removed `warn_unused_comments`, fixed `exclude` regex
+- [x] **Fixed duplicate chunk/doc construction** in `pipeline/core.py`
+- [x] **Fixed quoted type annotations** in `rag_query()` signature
+- [x] **Cleaned up unused imports** across 8 files
+- [x] **Unified `Optional[X]` → `X | None`** syntax in storage modules
 - [x] **Improve sqlite_vec import detection** — replaced fragile sys.path walking with importlib.metadata-based detection
 - [x] **Split pipeline.py** — split 549-line file into core.py, cli.py, ingest.py (all under 500 lines)
 - [x] **Replace bare except in `process_file_hybrid`** — changed to specific httpx.HTTPError and RuntimeError
