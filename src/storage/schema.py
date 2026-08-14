@@ -12,7 +12,7 @@ logger = logging.getLogger(__name__)
 # Hex ranges for CJK Unified Ideographs Blocks A–D, converted to \\uXXXX regex patterns at module load time. The basic range alone misses ~1% of modern Chinese text in Extensions E/F/G which are rarely used outside specialized domains (historical/archaic).
 _CJK_RANGE_HEX = [
     "4e00-9fff",        # CJK Unified Ideographs (basic plane)
-    "3400-4dbf",        # Block A — historical/archaic characters  
+    "3400-4dbf",        # Block A — historical/archaic characters
     "20000-2a6df",      # Block B — rare characters, names, place names
     "2a700-2ebef",      # Block C — rare variants and archaic forms
 ]
@@ -50,33 +50,32 @@ def _load_sqlite_vec() -> object:
     # Strategy 1: Direct import (canonical install path).
     try:
         _sqlite_vec = importlib.import_module("sqlite_vec")
-        return _sqlite_vec
     except ImportError:
         pass
+    else:
+        return _sqlite_vec
 
-    from importlib.metadata import PackageNotFoundError, distribution
     import importlib.util as _util
+    from importlib.metadata import PackageNotFoundError, distribution
 
     # Strategy 2: Locate __init__.py via the distribution's file list — robust
     # across editable installs, wheels, and different Python versions.
     try:
         dist = distribution("sqlite-vec")
     except PackageNotFoundError as exc:  # type: ignore[attr-defined]
-        raise RuntimeError(
-            "The 'sqlite-vec' package is required but not installed.\n"
-            "Install it with: pip install sqlite-vec\n"
-            "(or: uv add --dev sqlite-vec)"
-        ) from exc
+        _msg = ("The 'sqlite-vec' package is required but not installed.\n"
+                "Install it with: pip install sqlite-vec\n"
+                "(or: uv add --dev sqlite-vec)")
+        raise RuntimeError(_msg) from exc
 
     init_py = next(
         (f for f in dist.files or [] if str(f) == "sqlite_vec/__init__.py"),
         None,
     )
     if init_py is None:
-        raise RuntimeError(
-            "Could not locate sqlite_vec.__init__ inside the 'sqlite-vec' distribution.\n"
-            "The installed version may be corrupted or incompatible."
-        )
+        _msg = ("Could not locate sqlite_vec.__init__ inside the 'sqlite-vec' distribution.\n"
+                "The installed version may be corrupted or incompatible.")
+        raise RuntimeError(_msg)
 
     spec = _util.spec_from_file_location(
         "_third_party_sqlite_vec", str(dist.locate_file(init_py)),

@@ -25,7 +25,7 @@ def _count_words(text: str) -> int:
     if not text:
         return 0
     cjk_count = len(_CJK_RE.findall(text))
-    non_cjk = re.sub(_CJK_RE, '', text)
+    non_cjk = re.sub(_CJK_RE, "", text)
     return cjk_count + len(re.findall(r"\S+", non_cjk))
 
 
@@ -190,7 +190,7 @@ class _InsertOps:
 
         # Upsert by source_file using ON CONFLICT for atomicity.
         self.conn.execute(
-            """INSERT INTO documents (title, tags, text_summary, source_file, 
+            """INSERT INTO documents (title, tags, text_summary, source_file,
                                       total_chunks, embedding, created_at)
                VALUES (?, ?, ?, ?, ?, ?, ?)
                ON CONFLICT(source_file) DO UPDATE SET

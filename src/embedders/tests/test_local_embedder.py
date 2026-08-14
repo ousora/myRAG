@@ -2,7 +2,6 @@
 
 import sys
 import types
-from pathlib import Path
 from unittest.mock import Mock, patch
 
 import pytest
@@ -16,6 +15,7 @@ class FakeSentenceTransformer:
     For list input: returns [[emb1], [emb2], ...].
     tolist() returns the first embedding for str input, or full list for list input.
     """
+
     def __init__(self, model_name, device="cpu"):
         self.model_name = model_name
         self.device = device
@@ -30,6 +30,7 @@ class FakeSentenceTransformer:
 
 class _NumpyLike:
     """Minimal numpy array-like with tolist() method."""
+
     def __init__(self, data, is_batch=False):
         self._data = data
         self._is_batch = is_batch

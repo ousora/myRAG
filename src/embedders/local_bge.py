@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import logging
 
-from .bge_m3 import _validate_embedding_dimension, _embed_cache_get, _embed_cache_put
+from .bge_m3 import _embed_cache_get, _embed_cache_put, _validate_embedding_dimension
 
 logger = logging.getLogger(__name__)
 
@@ -55,6 +55,7 @@ class LocalEmbedder:
         Returns:
             - str input: list[float] (single embedding)
             - list[str] input: list[list[float]] (batch embeddings)
+
         """
         if isinstance(text, str):
             cached = _embed_cache_get(text)

@@ -243,13 +243,14 @@ uv run pytest -v
 ### Linting
 
 ```bash
-uv run ruff check .    # Zero tolerance — all edits must pass clean lint
+uv run ruff check .    # 208 remaining issues (mostly D102 test docstrings)
+uv run ruff check . --fix   # auto-fix most issues
 ```
 
 ### Type Checking
 
 ```bash
-uv run mypy src/       # Strict type checking (configured in pyproject.toml)
+uv run mypy src/       # 355 errors — internal module typing incomplete; add src/py.typed marker
 ```
 
 ## Configuration Validation

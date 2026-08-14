@@ -10,20 +10,20 @@ Pipeline flow:
         ↓ embedder.store_chunks() / store_document()  # Hybrid A+B indexing
 
 Hybrid Retrieval (A + B):
-    A: Chunk-level index — fine-grained search, direct answer generation
-       [chunk] → bge-m3 embedding → sqlite-vec vector DB
-    
-    B: Document-level index — coarse-grained context fallback
+     A: Chunk-level index — fine-grained search, direct answer generation
+        [chunk] → bge-m3 embedding → sqlite-vec vector DB
+
+     B: Document-level index — coarse-grained context fallback
        [doc_summary] → bge-m3 embedding → sqlite-vec vector DB
 
 Usage (traditional RAG):
     from pipeline.core import process_file, process_directory
-    
+
     chunks = process_file("path/to/report.pdf")  # traditional chunking only
 
 Usage (LLM-formatted + Hybrid A+B):
     from pipeline.core import process_file_hybrid
-    
+
     result = process_file_hybrid(
         filepath="path/to/document.pdf",
         doc_id="doc_001"
@@ -35,7 +35,7 @@ Usage (LLM-formatted + Hybrid A+B):
 
 Usage (LLM-formatted + Markdown output):
     from pipeline.core import process_file_with_md
-    
+
     md_path = process_file_with_md(
         filepath="path/to/document.pdf",
         output_dir="./output/",
@@ -46,17 +46,17 @@ Usage (LLM-formatted + Markdown output):
 from __future__ import annotations
 
 import concurrent.futures
-import httpx
 import logging
 from pathlib import Path
 from typing import Any
 
-from config import get_config_lazy as _get_config
-from embedders import Embedder  # noqa: F401 — used in rag_query type hints
-from storage.sqlite_vec import SQLiteVecStore  # noqa: F401 — used in rag_query type hints
+import httpx
 
 # Trigger parser registration at module load time
 import parsers  # noqa: F401 — loads dispatcher (MarkItDown + Trafilatura)
+from config import get_config_lazy as _get_config
+from embedders import Embedder  # noqa: F401,TC001 — used in rag_query type hints and runtime
+from storage.sqlite_vec import SQLiteVecStore  # noqa: F401,TC001 — used in rag_query type hints and runtime
 
 from . import markdown_utils, utils
 
@@ -65,7 +65,7 @@ logger = logging.getLogger(__name__)
 
 def _build_doc_summary(title: str, tags: list[str], body: str, *, head: int = 800, tail: int = 400) -> str:
     """Build a document-level (B index) summary from head + tail of the body.
-    
+
     Delegates to utils.build_doc_summary for the actual implementation.
     """
     return utils.build_doc_summary(title, tags, body, head=head, tail=tail)
@@ -73,7 +73,7 @@ def _build_doc_summary(title: str, tags: list[str], body: str, *, head: int = 80
 
 class TextCleaner:
     """Facade — delegates to parsers.text_cleaner.TextCleaner.
-    
+
     Kept as a class in pipeline.py for backward compatibility with existing callers.
     The actual implementation lives in parsers/text_cleaner.py (YAML config support).
     """
@@ -87,6 +87,7 @@ class TextCleaner:
         )
 
     def clean(self, text: str) -> str:
+        """Clean text using the configured cleaner."""
         return self._cleaner.clean(text)
 
 
@@ -96,9 +97,11 @@ class Chunker:
     Kept in pipeline.py for backward compatibility with existing callers.
     The canonical implementation lives in chunkers/__init__.py.
     """
+
     from chunkers import Chunker as _RealChunker
 
     def __new__(cls, **kwargs):
+        """Create a Chunker instance delegating to the real Chunker class."""
         return cls._RealChunker(**kwargs)
 
 
@@ -106,9 +109,9 @@ def process_file(filepath: str, *, remove_page_breaks=True, collapse_whitespace=
     """Parse a single file and return structured chunks (traditional RAG).
 
     Pipeline: parser → cleaner → chunker → output dict list.
-    
+
     For LLM-formatted output with hybrid A+B indexing, use process_file_hybrid().
-    
+
     Returns list of dicts: [{"text": ..., "metadata": {...}}, ...]
     """
     parser = utils.resolve_parser(filepath)
@@ -128,11 +131,11 @@ def process_file(filepath: str, *, remove_page_breaks=True, collapse_whitespace=
     return result
 
 
-def process_file_hybrid(filepath: str, *, doc_id="doc_0", remove_page_breaks=True, 
+def process_file_hybrid(filepath: str, *, doc_id="doc_0", remove_page_breaks=True,
                         collapse_whitespace=True, rules_config="conf/clean_rules.yaml", chunk_size=1024, store_path=None, md_output_dir=None, md_path=None):
     """Parse file with LLM formatter → chunker → embedder → sqlite-vec (Hybrid A+B).
 
-    Args:
+    Args:  # noqa: D417
         filepath: Path to the document file.
         doc_id: Unique identifier for this document in the index.
         chunk_size: Max characters per chunk.
@@ -148,9 +151,11 @@ def process_file_hybrid(filepath: str, *, doc_id="doc_0", remove_page_breaks=Tru
         document — single dict with summary + embedding (B - coarse-grained)
         db_path  — path to sqlite-vec DB if store_path was provided, else None
         md_path  — path to generated/reused .md file, else None
+
     """
-    from formatters import format_text_async, write_to_md
     import re as _re
+
+    from formatters import format_text_async, write_to_md
 
     cfg = _get_config()
 
@@ -160,7 +165,7 @@ def process_file_hybrid(filepath: str, *, doc_id="doc_0", remove_page_breaks=Tru
         # Reuse an existing .md — skip the (expensive) LLM formatter entirely.
         logger.info("Reusing existing markdown: %s", md_path)
         content = Path(md_path).read_text(encoding="utf-8")
-        title_match = _re.search(r'^#\s+(.+)$', content, _re.MULTILINE)
+        title_match = _re.search(r"^#\s+(.+)$", content, _re.MULTILINE)
         title = title_match.group(1).strip() if title_match else "Untitled"
         result = {"title": title, "body": content, "tags": [], "metadata": {"entities": []}}
         md_out_path = md_path
@@ -295,7 +300,7 @@ def process_file_with_md(filepath: str, *, output_dir="./output/", **kwargs):
     """Parse file → LLM formatter → write structured markdown to output/.
 
     Returns the path of the generated .md file.
-    
+
     This is the user-facing pipeline for generating human-readable documents.
     For vector DB indexing (Hybrid A+B), use process_file_hybrid() instead.
     """
@@ -319,11 +324,9 @@ def process_file_with_md(filepath: str, *, output_dir="./output/", **kwargs):
     except concurrent.futures.TimeoutError:
         logger.warning("LLM formatting timed out after %ds for %s", cfg.format_timeout, filepath)
         return None
-    
+
     # Write markdown to output_dir
-    md_path = write_to_md(result, output_dir)
-    
-    return md_path
+    return write_to_md(result, output_dir)
 
 
 def process_directory(dirpath: str, *, extensions=None, chunk_size=1024, **kwargs) -> list[dict]:
@@ -357,7 +360,7 @@ def process_directory_hybrid(dirpath: str, *, store_path=None, md_output_dir=Non
     file's path relative to *dirpath* so re-running overwrites the same records
     instead of duplicating them.
 
-    Args:
+    Args:  # noqa: D417
         dirpath: Directory to walk (recursively).
         store_path: Optional sqlite-vec DB; when given, every file's chunks +
                     document record are persisted.
@@ -368,6 +371,7 @@ def process_directory_hybrid(dirpath: str, *, store_path=None, md_output_dir=Non
 
     Returns:
         dict mapping each file path → the per-file result dict from process_file_hybrid.
+
     """
     from parsers.dispatcher import PARSERS
 
@@ -398,10 +402,10 @@ def process_directory_hybrid(dirpath: str, *, store_path=None, md_output_dir=Non
                 md_output_dir=md_output_dir,
                 **kwargs,
             )
-            return fp, res
         except Exception as exc:  # noqa: BLE001 — one bad file shouldn't abort the batch
             logger.warning("Failed to process %s: %s", fp, exc)
             return fp, {"chunks": [], "document": {}}
+        return fp, res
 
     summary: dict = {}
     with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as ex:
@@ -430,9 +434,10 @@ def rag_query(question: str, db_path: str, *, k: int = 5,
         "answer": str — LLM-generated answer text.
         "context": list[dict] — retrieved chunks used as context.
         "question": str — the original question (echoed back).
+
     """
-    from storage.sqlite_vec import SQLiteVecStore
     from embedders import Embedder
+    from storage.sqlite_vec import SQLiteVecStore
 
     # 1. Embed the query with the retrieval instruction prefix (bge-m3 needs it).
     #    embed_query returns a single vector for str input; normalize for the
@@ -481,7 +486,7 @@ def rag_query(question: str, db_path: str, *, k: int = 5,
             # from the store (e.g. legacy rows written before the embedding col).
             if any(not v for v in chunk_vectors):
                 missing_texts = [
-                    c["text"] for c, v in zip(results, chunk_vectors) if not v
+                    c["text"] for c, v in zip(results, chunk_vectors, strict=True) if not v
                 ]
                 for emb in e.embed(missing_texts):
                     # Fill the first empty slot in order.

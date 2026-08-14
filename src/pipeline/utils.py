@@ -38,6 +38,7 @@ def resolve_parser(filepath: str):
         
     Returns:
         Parser instance or None if no parser is available.
+
     """
     from parsers.dispatcher import resolve_parser as rp
     return rp(filepath)
@@ -51,6 +52,7 @@ def source_type_for(filepath: str) -> str:
         
     Returns:
         Source type string for the formatter.
+
     """
     ext = Path(filepath).suffix.lstrip(".").lower()
     return {

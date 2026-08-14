@@ -15,11 +15,11 @@ from pipeline.core import (
     rag_query,
 )
 
-# Re-export utilities that were previously in core
-from pipeline.utils import resolve_parser, source_type_for
-
 # Re-export ingest for backward compat (used by docs and skills)
 from pipeline.ingest import _ingest_markdown
+
+# Re-export utilities that were previously in core
+from pipeline.utils import resolve_parser, source_type_for
 
 __all__ = [
     "Chunker",

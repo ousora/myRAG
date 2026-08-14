@@ -16,8 +16,7 @@ Usage:
 import os
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, Dict, Optional
-
+from typing import Any
 
 # ---------------------------------------------------------------------------
 # Resolve project root — parent of the myrag package directory (i.e., the repo root)
@@ -28,7 +27,7 @@ _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 _CONF_DIR = _PROJECT_ROOT / "conf"
 
 
-def _resolve_config_path() -> Optional[Path]:
+def _resolve_config_path() -> Path | None:
     """Find the first existing config file in the resolution chain."""
     # 1. Env var override
     env_path = os.environ.get("MYRAG_CONFIG")
@@ -57,7 +56,7 @@ class Config:
     with localhost endpoints when no config file is present.
     """
 
-    def __init__(self, raw: Dict[str, Any]):
+    def __init__(self, raw: dict[str, Any]):
         # ── LLM ──
         llm = raw.get("llm", {})
         self.llm_endpoint: str         = llm.get("endpoint", "http://localhost:8081/v1/chat/completions")

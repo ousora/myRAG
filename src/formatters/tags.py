@@ -9,37 +9,36 @@ from __future__ import annotations
 import re
 from collections import Counter
 
-
 # Multi-language stopword sets keyed by detected script family.
 _STOP_WORDS_BY_SCRIPT: dict[str, frozenset[str]] = {
     "latin": frozenset({
-        'the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to',
-        'for', 'of', 'with', 'by', 'from', 'is', 'are', 'was', 'were',
-        'be', 'been', 'being', 'have', 'has', 'had', 'do', 'does', 'did',
-        'will', 'would', 'could', 'should', 'may', 'might', 'can', 'shall',
-        'it', 'its', 'this', 'that', 'these', 'those', 'i', 'you', 'he',
-        'she', 'we', 'they', 'me', 'him', 'her', 'us', 'them',
+        "the", "a", "an", "and", "or", "but", "in", "on", "at", "to",
+        "for", "of", "with", "by", "from", "is", "are", "was", "were",
+        "be", "been", "being", "have", "has", "had", "do", "does", "did",
+        "will", "would", "could", "should", "may", "might", "can", "shall",
+        "it", "its", "this", "that", "these", "those", "i", "you", "he",
+        "she", "we", "they", "me", "him", "her", "us", "them",
     }),
     "cjk": frozenset({
         # Common Chinese function words / particles that carry little semantic weight.
-        '的', '了', '在', '是', '我', '有', '和', '就', '不', '人', '都', '一',
-        '一个', '上', '也', '很', '到', '说', '要', '去', '你', '会', '着',
-        '没有', '看', '好', '自己', '这', '他', '她', '它', '们', '那', '些',
-        '什么', '怎么', '如何', '为什么', '因为', '所以', '但是', '虽然',
+        "的", "了", "在", "是", "我", "有", "和", "就", "不", "人", "都", "一",
+        "一个", "上", "也", "很", "到", "说", "要", "去", "你", "会", "着",
+        "没有", "看", "好", "自己", "这", "他", "她", "它", "们", "那", "些",
+        "什么", "怎么", "如何", "为什么", "因为", "所以", "但是", "虽然",
     }),
 }
 
 # Generic single words (English) that are almost never useful as tags.
 _GENERIC_WORDS = frozenset({
-    'the', 'and', 'from', 'into', 'over', 'under', 'between', 'through',
-    'during', 'before', 'after', 'above', 'below', 'within', 'across',
-    'about', 'against', 'along', 'among', 'around', 'behind', 'beyond',
-    'since', 'until', 'upon', 'toward', 'towards',
-    'system', 'payment', 'china', 'country', 'bank', 'data',
-    'information', 'process', 'service', 'user', 'network',
-    'document', 'file', 'text', 'content', 'example',
-    'channel', 'series', 'program', 'programs', 'programming',
-    'original', 'retrieved', 'archived', 'published', 'based',
+    "the", "and", "from", "into", "over", "under", "between", "through",
+    "during", "before", "after", "above", "below", "within", "across",
+    "about", "against", "along", "among", "around", "behind", "beyond",
+    "since", "until", "upon", "toward", "towards",
+    "system", "payment", "china", "country", "bank", "data",
+    "information", "process", "service", "user", "network",
+    "document", "file", "text", "content", "example",
+    "channel", "series", "program", "programs", "programming",
+    "original", "retrieved", "archived", "published", "based",
 })
 
 
@@ -59,6 +58,7 @@ def extract_tags_from_body(body: str, title: str) -> list[str]:
 
     Returns:
         Up to 5 tag strings.
+
     """
     script = _detect_body_script(body + " " + title)
     stop_words = _STOP_WORDS_BY_SCRIPT.get(script, frozenset(_STOP_WORDS_BY_SCRIPT["latin"]))
@@ -134,8 +134,8 @@ def _detect_body_script(text: str) -> str:
 
 def _tokenize_latin(body: str, title: str) -> tuple[list[str], list[str]]:
     """Tokenize Latin-script text into lowercase word tokens."""
-    body_tokens = re.findall(r'[a-zA-Z]{3,}', body.lower())
-    title_tokens = re.findall(r'[a-zA-Z]{3,}', title.lower())
+    body_tokens = re.findall(r"[a-zA-Z]{3,}", body.lower())
+    title_tokens = re.findall(r"[a-zA-Z]{3,}", title.lower())
     return body_tokens, title_tokens
 
 
@@ -153,7 +153,7 @@ def _tokenize_cjk(body: str, title: str) -> tuple[list[str], list[str]]:
         ws_tokens = [t.lower() for t in text.split() if len(t) > 1]
 
         # Character bigrams from pure-CJK runs capture compound terms.
-        cjk_runs = re.findall(r'[\u4e00-\u9fff]{2,}', text)
+        cjk_runs = re.findall(r"[\u4e00-\u9fff]{2,}", text)
         bg: list[str] = []
         for run in cjk_runs:
             bg.extend(run[i:i + 2].lower() for i in range(len(run) - 1))
@@ -167,9 +167,9 @@ def _tokenize_cjk(body: str, title: str) -> tuple[list[str], list[str]]:
 
 def _extract_latin_proper_nouns(text: str) -> list[str]:
     """Extract capitalized words/phrases that look like proper nouns."""
-    title_parts = re.findall(r'[A-Z][a-zA-Z0-9\-]+(?:\s+[A-Z][a-zA-Z0-9\-]+)*', text[:200])
+    title_parts = re.findall(r"[A-Z][a-zA-Z0-9\-]+(?:\s+[A-Z][a-zA-Z0-9\-]+)*", text[:200])
     entity_phrases = re.findall(
-        r'(?<![a-z])([A-Z][a-zA-Z0-9\-]+(?:\s+[A-Z][a-zA-Z0-9\-]+){1,3})(?![a-z])',
+        r"(?<![a-z])([A-Z][a-zA-Z0-9\-]+(?:\s+[A-Z][a-zA-Z0-9\-]+){1,3})(?![a-z])",
         text[:min(len(text), 5000)],
     )
     return title_parts + entity_phrases
@@ -181,5 +181,5 @@ def _extract_cjk_entities(text: str) -> list[str]:
     Looks for runs of ≥2 Chinese characters preceded/followed by non-CJK or
     line boundaries, which tend to be proper nouns in context.
     """
-    candidates = re.findall(r'(?<![\u4e00-\u9fff])([\u4e00-\u9fff]{2,16})(?![\u4e00-\u9fff])', text[:min(len(text), 5000)])
+    candidates = re.findall(r"(?<![\u4e00-\u9fff])([\u4e00-\u9fff]{2,16})(?![\u4e00-\u9fff])", text[:min(len(text), 5000)])
     return [c for c in candidates if len(c) >= 2]

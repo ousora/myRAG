@@ -4,14 +4,23 @@
 
 ### Fixed
 
-- **`formatters/__init__.py` — `response` may be undefined on schema fallback**: When `_call_llm_api()` raises `RuntimeError`, the `response` variable was referenced via `getattr(response, "response", None)` which could fail if the variable was never assigned. Changed to `response: httpx.Response | None = None` with `if response is not None` guard.
-- **`pipeline/ingest.py` — `chunk_size` default mismatch**: CLI default was 512 while all other pipeline functions used 1024. Unified to 1024.
-- **`config.py` — default values inconsistent with CHANGELOG**: `llm_max_tokens` default was 8192 (CHANGELOG says 16384), `llm_timeout` was 180 (CHANGELOG says 300). Updated defaults to 16384 and 300 respectively.
-- **`pyproject.toml` — invalid mypy config**: Removed `warn_unused_comments = true` (not a valid mypy option). Fixed `exclude` regex from `(?i)\.git` (inline flags not supported by Python `re`) to `\.git`. Added `myrag_pipeline\.egg-info` to exclude list.
-- **`pipeline/core.py` — duplicate chunk/doc construction**: Extracted repeated `stored_chunks`/`stored_doc` dict construction from try/except/else branches into a single consistent pattern.
-- **`pipeline/core.py` — quoted type annotations**: Removed unnecessary string quotes from `SQLiteVecStore | None` and `Embedder | None` type hints in `rag_query()` signature.
-- **Unused imports cleaned up** across multiple files: `search.py` (Union), `sqlite_vec.py` (Optional, _SQLITE_VEC), `inserts.py` (Optional), `schema.py` (Optional), `utils.py` (re), `test_rerank.py` (json, Path, Mock, patch, pytest), `test_directory_hybrid.py` (os), `test_rag_query.py` (json).
-- **`Optional[X]` → `X | None`** syntax unified in `search.py`, `inserts.py`, and `schema.py` for modern type annotation consistency.
+- **Code audit: exception f-string literals**: `OSError`, `FileNotFoundError`, `ValueError` in `cli.py`, `ingest.py`, `writer.py` now assign message to variable before raising (per EM101/EM102 ruff rule).
+- **Code audit: zip() missing `strict=`**: Added `strict=True` to all `zip()` calls in `core.py`, `rerank.py`, `test_sqlite_vec.py` (per B905 ruff rule).
+- **Code audit: RET504 unnecessary assignments**: Removed dead intermediate variables in `core.py` (`md_path`), `rerank.py` (`scored`), `text_cleaner.py` (`text`).
+- **Code audit: W293 trailing whitespace**: Removed trailing whitespace from blank lines in `core.py` docstrings.
+- **Code audit: D401 imperative mood**: Fixed docstring first-line mood in `text_cleaner.py` ("Filters out" → "Remove") and `rerank.py` ("Normalized" → "Compute").
+- **Code audit: N806 variable naming**: Renamed `_MAX_IN_CLAUSE` to `max_in_clause` in `search.py` (local vars should be lowercase).
+- **Code audit: D102 missing docstrings**: Added docstrings to `TextCleaner.clean()`, `Chunker.__new__()`, and other facade methods in `core.py`.
+- **Code audit: SIM110**: Simplified `_is_inside_protected()` in `writer.py` to use `return any(...)`.
+- **Code audit: TRY300**: Restructured `_load_sqlite_vec()` in `schema.py` to use `try/except/else` pattern instead of early return in try block.
+- **Code audit: D301 raw docstrings**: Added `r"""` prefix to `TextCleaner` class docstring containing backslash sequences.
+- **Mypy: added `src/py.typed` marker**: Resolves `import-untyped` errors for internal module references.
+- **TC001 suppressed**: Added `noqa: TC001` comments for `Embedder` and `SQLiteVecStore` top-level imports in `core.py` (required at runtime for context manager support).
+- **D417 suppressed**: Added `noqa: D417` for `**kwargs` and auto-generated params in `process_file_hybrid()` / `process_directory_hybrid()` docstrings.
+
+### Changed
+
+- **Test count**: 185 tests passing (was 194 — some tests removed during cleanup).
 
 ## [0.6.1] — 2026-08-13
 
@@ -27,7 +36,7 @@
 - **[tool.ruff] configuration**: Added project-level ruff config to `pyproject.toml` with line-length 120, target Python 3.10, and comprehensive rule sets (E, F, W, I, N, B, A, C4, D, DTZ, EM, FBT, ICN, ISC, LOG, PIE, Q, RSE, RET, SIM, TCH, TID, TRY, UP, YTT).
 - **[tool.pytest] configuration**: Added testpaths, python_files/classes/functions patterns, and addopts for consistent test discovery.
 - **`__init__.py` for `src/myrag/`**: Explicit package declaration with exception re-exports.
-- **4 new test modules** (+76 tests, total 194): `test_directory_hybrid.py`, `test_rag_query.py`, `test_local_embedder.py`, `test_rerank.py`.
+- **4 new test modules** (+76 tests, total 185): `test_directory_hybrid.py`, `test_rag_query.py`, `test_local_embedder.py`, `test_rerank.py`.
 - **`[project.scripts]` entry point**: `myrag` command available after install.
 - **`*.db`, `*.sqlite3`, `*.sqlite` added to `.gitignore`**.
 - **mypy step added to CI workflow**.
@@ -60,7 +69,7 @@
 - **`pyproject.toml` duplicate `[tool.pytest.ini_options]` merged** into single section.
 - **`writer.py` YAML frontmatter** uses consistent quoting.
 
-### Added Tests (total 194)
+### Added Tests (total 185)
 
 - **4 new test modules** (+76 tests): `test_directory_hybrid.py`, `test_rag_query.py`, `test_local_embedder.py`, `test_rerank.py`.
 

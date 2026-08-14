@@ -27,10 +27,12 @@ def _ingest_markdown(md_path: str, store_path: str, *,
     Raises:
         FileNotFoundError: If md_path doesn't exist.
         RuntimeError: On embedding or storage failure.
+
     """
     md_file = Path(md_path)
     if not md_file.exists():
-        raise FileNotFoundError(f"Markdown file not found: {md_path}")
+        _msg = f"Markdown file not found: {md_path}"
+        raise FileNotFoundError(_msg)
 
     # Read the .md file
     md_content = md_file.read_text(encoding="utf-8")
@@ -38,7 +40,7 @@ def _ingest_markdown(md_path: str, store_path: str, *,
 
     # Extract title from first `# Title`
     title = "Untitled Document"
-    title_match = re.search(r'^#\s+(.+)$', md_content, re.MULTILINE)
+    title_match = re.search(r"^#\s+(.+)$", md_content, re.MULTILINE)
     if title_match:
         title = title_match.group(1).strip()
 
@@ -50,8 +52,8 @@ def _ingest_markdown(md_path: str, store_path: str, *,
 
     # Embed + store
     from embedders import Embedder
-    from storage.sqlite_vec import SQLiteVecStore
     from pipeline.core import _build_doc_summary
+    from storage.sqlite_vec import SQLiteVecStore
 
     with Embedder() as e:
         stored_chunks = e.store_chunks(all_chunks, doc_id=doc_id)

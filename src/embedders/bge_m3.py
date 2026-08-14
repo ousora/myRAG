@@ -33,13 +33,13 @@ Schema:
         - vector: float[]  # bge-m3 → 1024-d
 """
 
-import httpx
 import logging
 import threading
 from collections import OrderedDict
 
-from config import get_config
+import httpx
 
+from config import get_config
 from myrag.exceptions import EmbeddingError
 
 logger = logging.getLogger(__name__)
@@ -213,11 +213,10 @@ class Embedder:
             _validate_embedding_dimension(emb)
             _embed_cache_put(text, emb)
             return emb
-        else:
-            embeddings = [d["embedding"] for d in data["data"]]
-            for e in embeddings:
-                _validate_embedding_dimension(e)
-            return embeddings
+        embeddings = [d["embedding"] for d in data["data"]]
+        for e in embeddings:
+            _validate_embedding_dimension(e)
+        return embeddings
 
     def store_chunk(
         self,
@@ -296,6 +295,7 @@ def create_embedder(
 
     Returns:
         An Embedder instance whose concrete class depends on *mode*.
+
     """
     if mode is None:
         cfg = get_config()

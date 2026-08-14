@@ -15,8 +15,7 @@ import logging
 from pathlib import Path
 
 from .inserts import _InsertOps
-from .schema import _SQLITE_VEC
-from .search import _SearchOps, _build_fts_query, _deserialize_embedding  # noqa: F401 — re-exported for tests
+from .search import _build_fts_query, _deserialize_embedding, _SearchOps  # noqa: F401 — re-exported for tests
 
 logger = logging.getLogger(__name__)
 

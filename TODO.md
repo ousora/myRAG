@@ -11,7 +11,7 @@
 - [x] sqlite-vec persistence (chunks + documents + FTS5) via `process_file_hybrid()`
 - [x] Centralized config (`conf/config.yaml` + `config.py`)
 - [x] End-to-end verification on cncc.txt — 20 chunks, accurate vector retrieval
-- [x] Unit tests — 48 passed (config 11, chunkers 8, formatters 9, cleaners 5, embedders 7, parsers 13)
+- [x] Unit tests — 185 passed
 - [x] **Fixed `response` undefined on schema fallback** in `formatters/__init__.py`
 - [x] **Fixed `chunk_size` default mismatch** — unified to 1024 across all pipeline entry points
 - [x] **Fixed config default values** — `llm_max_tokens` 8192→16384, `llm_timeout` 180→300
@@ -59,6 +59,17 @@
 - [x] **L8: Added `batch_size` parameter to `store_chunks`** — splits large batches to avoid API limits
 - [x] **L9: Added 1000-item cap on `IN` clause placeholders** — prevents SQLite variable number overflow
 - [x] **L10: Added `UNIQUE(source_file)` constraint on `documents` table** — required for ON CONFLICT
+- [x] **Code audit: exception f-string literals** — EM101/EM102 fixed in cli.py, ingest.py, writer.py
+- [x] **Code audit: zip() strict mode** — B905 fixed in core.py, rerank.py, test_sqlite_vec.py
+- [x] **Code audit: RET504 unnecessary assignments** — fixed in core.py, rerank.py, text_cleaner.py
+- [x] **Code audit: W293 trailing whitespace** — fixed in core.py docstrings
+- [x] **Code audit: D401 imperative mood** — fixed in text_cleaner.py, rerank.py
+- [x] **Code audit: N806 variable naming** — renamed _MAX_IN_CLAUSE to max_in_clause
+- [x] **Code audit: D102 missing docstrings** — added to core.py facade methods
+- [x] **Code audit: SIM110** — simplified _is_inside_protected() in writer.py
+- [x] **Code audit: TRY300** — restructured _load_sqlite_vec() in schema.py
+- [x] **Code audit: D301 raw docstrings** — added r prefix to text_cleaner.py
+- [x] **Code audit: py.typed marker** — added src/py.typed for mypy import resolution
 
 ---
 

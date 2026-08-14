@@ -11,11 +11,12 @@ import hashlib
 import logging
 import threading
 from collections import OrderedDict
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
-_FORMAT_CACHE: "OrderedDict[str, dict]" = OrderedDict()
+_FORMAT_CACHE: OrderedDict[str, dict] = OrderedDict()
 _FORMAT_CACHE_LOCK = threading.Lock()
 _FORMAT_CACHE_MAX = 256
 
@@ -29,7 +30,7 @@ def format_cache_key(raw: str, source_type: str, system_prompt) -> str:
     sp_hash = hashlib.sha256((system_prompt or "").encode()).hexdigest()
     raw_hash = hashlib.sha256(raw.encode()).hexdigest()
     return hashlib.md5(
-        f"{source_type}|{sp_hash}|{raw_hash}".encode("utf-8")
+        f"{source_type}|{sp_hash}|{raw_hash}".encode()
     ).hexdigest()
 
 
@@ -44,6 +45,7 @@ def format_cached(raw: str, source_type: str, system_prompt, compute: Callable[[
         
     Returns:
         The formatting result (from cache or computed).
+
     """
     key = format_cache_key(raw, source_type, system_prompt)
     with _FORMAT_CACHE_LOCK:

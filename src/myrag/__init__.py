@@ -1,12 +1,12 @@
 """myRAG package — exception types and shared utilities."""
 
 from .exceptions import (
+    ChunkingError,
+    EmbeddingError,
+    FormattingError,
     MyRagException,
     ParserNotFoundError,
-    EmbeddingError,
     StorageError,
-    FormattingError,
-    ChunkingError,
 )
 
 __all__ = [

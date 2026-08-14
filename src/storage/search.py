@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import logging
 import re
-from typing import Optional
 
 from .schema import _CJK_RANGE, _SQLITE_VEC
 
@@ -62,10 +61,9 @@ def _parse_section_path(raw: str) -> list[str]:
         data = json.loads(raw)
         if isinstance(data, list):
             return data
-        elif isinstance(data, str):
+        if isinstance(data, str):
             return [data]
-        else:
-            return [str(data)]
+        return [str(data)]
     except json.JSONDecodeError:
         logger.debug("Failed to parse section_path JSON: %r", raw)
         return []
@@ -250,8 +248,8 @@ class _SearchOps:
 
             # Compute cosine distances once per combined ID (batched).
             # Cap at 1000 to stay under SQLite's SQLITE_MAX_VARIABLE_NUMBER.
-            _MAX_IN_CLAUSE = 1000
-            ids_to_score = [v["id"] for v in vec_results[:_MAX_IN_CLAUSE]]
+            max_in_clause = 1000
+            ids_to_score = [v["id"] for v in vec_results[:max_in_clause]]
             score_map = {}
             if ids_to_score:
                 placeholders = ",".join("?" * len(ids_to_score))
@@ -278,25 +276,24 @@ class _SearchOps:
                 result_list.append({k: v for k, v in data.items() if not k.startswith("_")} | {"_rrf_score": rrf_score})
 
             return sorted(result_list, key=lambda x: -x["_rrf_score"])[:k]
-        else:
-            # Text-only query (no vector): fetch all chunk details in one JOIN.
-            if fts_results:
-                ids = [r[0] for r in fts_results]
-                placeholders = ",".join("?" * len(ids))
-                rows = self.conn.execute(
-                    f"""SELECT id, text, section_path, source_doc_id, chunk_index, word_count 
+        # Text-only query (no vector): fetch all chunk details in one JOIN.
+        if fts_results:
+            ids = [r[0] for r in fts_results]
+            placeholders = ",".join("?" * len(ids))
+            rows = self.conn.execute(
+                f"""SELECT id, text, section_path, source_doc_id, chunk_index, word_count
                         FROM chunks WHERE id IN ({placeholders})""",
-                    ids,
-                ).fetchall()
-                return [{
-                    "id": row[0],
-                    "text": row[1],
-                    "section_path": self._parse_section_path(row[2]),
-                    "source_doc_id": row[3],
-                    "chunk_index": row[4],
-                    "word_count": row[5],
-                } for row in rows][:k]
-            return []
+                ids,
+            ).fetchall()
+            return [{
+                "id": row[0],
+                "text": row[1],
+                "section_path": self._parse_section_path(row[2]),
+                "source_doc_id": row[3],
+                "chunk_index": row[4],
+                "word_count": row[5],
+            } for row in rows][:k]
+        return []
 
     def get_embeddings_by_ids(self, ids: list[int]) -> list[list[float]]:
         """Return chunk embeddings aligned to *ids* (document-side vectors).

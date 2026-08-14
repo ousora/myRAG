@@ -11,7 +11,6 @@ from __future__ import annotations
 import re
 from typing import Any
 
-
 # English (word-boundary) + CJK (substring) reference-section titles to drop.
 _REFERENCE_PATTERNS = [
     re.compile(r"^(references?|reference list|bibliography|further reading|"
@@ -37,13 +36,13 @@ def render_markdown_with_sections(result: dict[str, Any]) -> str:
     title = result.get("title", "Untitled")
     body = result.get("body", "") or ""
 
-    if re.search(r'^#{1,6}\s+', body):
+    if re.search(r"^#{1,6}\s+", body):
         body_lines = body.split("\n")
         kept = []
         title_seen = False
         for line in body_lines:
             stripped = line.strip()
-            if not title_seen and re.match(rf'^#\s+{re.escape(title)}$', stripped, re.IGNORECASE):
+            if not title_seen and re.match(rf"^#\s+{re.escape(title)}$", stripped, re.IGNORECASE):
                 title_seen = True
                 continue  # drop duplicate title H1; we render our own below
             kept.append(line)
@@ -112,6 +111,7 @@ def match_entities_to_chunks(chunks: list[dict[str, Any]], entities: list[dict[s
 
     Returns:
         Same chunks list with 'entity_names' added to each chunk.
+
     """
     if not entities:
         return chunks
@@ -122,7 +122,7 @@ def match_entities_to_chunks(chunks: list[dict[str, Any]], entities: list[dict[s
     cjk_entities = [e["name"] for e in entities if _contains_cjk(e["name"])]
     latin_entities = [e["name"] for e in entities if not _contains_cjk(e["name"])]
     latin_patterns = [
-        (name, re.compile(r'\b' + re.escape(name.lower()) + r'\b')) for name in latin_entities
+        (name, re.compile(r"\b" + re.escape(name.lower()) + r"\b")) for name in latin_entities
     ]
 
     for chunk in chunks:

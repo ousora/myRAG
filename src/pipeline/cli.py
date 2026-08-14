@@ -8,7 +8,6 @@ from pathlib import Path
 
 from config import get_config_lazy as _get_config
 
-
 logger = logging.getLogger(__name__)
 
 
@@ -16,17 +15,17 @@ def main():
     """CLI entry point."""
     parser = argparse.ArgumentParser(description="RAG data cleanup pipeline")
     subparsers = parser.add_subparsers(dest="command")
-    
+
     # process_file command (traditional)
     file_parser = subparsers.add_parser("process-file", help="Process a single file (traditional)")
     file_parser.add_argument("input", help="file to process")
     file_parser.add_argument("--chunk-size", type=int, default=1024)
-    
+
     # process_directory command (batch traditional)
     dir_parser = subparsers.add_parser("process-directory", help="Process all files in directory")
     dir_parser.add_argument("input", help="directory to process")
     dir_parser.add_argument("--chunk-size", type=int, default=1024)
-    
+
     # ingest command: .md → chunk → embed → sqlite-vec
     ingest_parser = subparsers.add_parser("ingest", help="Chunk .md file and store to sqlite-vec")
     ingest_parser.add_argument("input", help=".md file to ingest")
@@ -58,7 +57,8 @@ def main():
     # Setup logging: console + file
     log_dir = Path("logs")
     if log_dir.is_file():
-        raise OSError(f"'{log_dir}' exists as a file, not a directory")
+        _msg = f"'{log_dir}' exists as a file, not a directory"
+        raise OSError(_msg)
     log_dir.mkdir(exist_ok=True)
     log_file = log_dir / "pipeline.log"
 
@@ -98,12 +98,12 @@ def main():
         from pipeline.core import process_file
         chunks = process_file(args.input, chunk_size=args.chunk_size)
         print(json.dumps(chunks, indent=2, ensure_ascii=False))
-        
+
     elif args.command == "process-directory":
         from pipeline.core import process_directory
         chunks = process_directory(args.input, chunk_size=args.chunk_size)
         print(json.dumps(chunks, indent=2, ensure_ascii=False))
-        
+
     elif args.command == "hybrid":
         from pipeline.core import process_file_hybrid
         result = process_file_hybrid(args.input, doc_id=args.doc_id, store_path=args.store)

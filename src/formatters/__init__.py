@@ -10,20 +10,20 @@ import json
 import logging
 import os
 import re
-from concurrent.futures import ThreadPoolExecutor, Future
+from concurrent.futures import Future, ThreadPoolExecutor
 from typing import Any, Dict
 
 import httpx
 
-from .prompts import (
-    get_system_prompt,
-    get_chunked_system_prompt,
-    validate_format_output,
-    try_fix_common_issues,
-)
-from .constants import FORMATTER_SCHEMA, CHUNKED_SCHEMA
-from .tags import extract_tags_from_body
 from .cache import format_cached
+from .constants import CHUNKED_SCHEMA, FORMATTER_SCHEMA
+from .prompts import (
+    get_chunked_system_prompt,
+    get_system_prompt,
+    try_fix_common_issues,
+    validate_format_output,
+)
+from .tags import extract_tags_from_body
 
 logger = logging.getLogger(__name__)
 
@@ -64,7 +64,7 @@ _CJK_CHARS_PER_TOKEN = 1.0
 _ENGLISH_CHARS_PER_TOKEN = 4.0
 
 # Pre-compiled regex for paragraph splitting.
-_PARAGRAPH_SPLIT = re.compile(r'\n\n+')
+_PARAGRAPH_SPLIT = re.compile(r"\n\n+")
 
 
 def _detect_cjk_ratio(text: str) -> float:
@@ -120,16 +120,15 @@ def effective_chunk_threshold(text: str) -> int:
     if ratio >= 0.5:
         # Mostly CJK — scale down so we don't exceed ~7000 tokens.
         return int(base * (_CJK_CHARS_PER_TOKEN / _ENGLISH_CHARS_PER_TOKEN))
-    elif ratio > 0.1:
+    if ratio > 0.1:
         # Mixed — linear interpolation between the two extremes.
         mix = (ratio - 0.1) / 0.4  # 0 at 10% CJK, 1 at 50% CJK
         chars_per_token = _ENGLISH_CHARS_PER_TOKEN - mix * (
             _ENGLISH_CHARS_PER_TOKEN - _CJK_CHARS_PER_TOKEN
         )
         return int(base * (_CJK_CHARS_PER_TOKEN / chars_per_token))
-    else:
-        # Mostly English — use base threshold unchanged.
-        return base
+    # Mostly English — use base threshold unchanged.
+    return base
 
 _executor = None
 
@@ -171,6 +170,7 @@ def call_llm(system_prompt: str, user_message: str, *,
         timeout: Request timeout in seconds (defaults to config).
         schema: Optional JSON Schema dict sent as ``response_format``.
                 When provided, llama.cpp / OpenAI servers enforce output structure.
+
     """
     cfg = _get_config()
 
@@ -300,7 +300,7 @@ def _preprocess_json(raw_content: str) -> str | None:
     if not isinstance(raw_content, str):
         return None
     # Strip markdown code blocks
-    stripped = re.sub(r'^```(?:json)?\s*\n', '', raw_content.strip())
+    stripped = re.sub(r"^```(?:json)?\s*\n", "", raw_content.strip())
 
     brace_start = stripped.find("{")
     if brace_start == -1:
@@ -361,20 +361,20 @@ def _fix_bare_quotes_in_body_field(content: str) -> str | None:
     while j < len(content):
         c = content[j]
 
-        if c == '\\' and j + 1 < len(content) and content[j+1] in ('"', '\\', '/', 'n', 't', 'r', 'u'):
-            skip = 2 if content[j+1] != 'u' else 6
+        if c == "\\" and j + 1 < len(content) and content[j+1] in ('"', "\\", "/", "n", "t", "r", "u"):
+            skip = 2 if content[j+1] != "u" else 6
             j += skip
             continue
 
         if c == '"':
             rest_after_quote = content[j+1:].lstrip()
-            if not rest_after_quote or rest_after_quote[0] in (',', '}'):
+            if not rest_after_quote or rest_after_quote[0] in (",", "}"):
                 raw_body = content[after_key + 1 : j]
                 fixed_parts: list[str] = []
                 k = 0
                 while k < len(raw_body):
                     ch = raw_body[k]
-                    if ch == '\\' and k + 1 < len(raw_body) and raw_body[k+1] in ('"', '\\', '/', 'n', 't', 'r', 'u'):
+                    if ch == "\\" and k + 1 < len(raw_body) and raw_body[k+1] in ('"', "\\", "/", "n", "t", "r", "u"):
                         fixed_parts.append(ch)
                         fixed_parts.append(raw_body[k+1])
                         k += 2
@@ -392,7 +392,7 @@ def _fix_bare_quotes_in_body_field(content: str) -> str | None:
 
                 before = content[:after_key]
                 after = content[j + 1:]  # skip past the closing quote itself
-                return before + '"' + ''.join(fixed_parts) + '"' + after
+                return before + '"' + "".join(fixed_parts) + '"' + after
         j += 1
 
     return None
@@ -407,6 +407,7 @@ def _get_last_n_lines(md_parts: list[str], n: int = 10) -> str:
 
     Returns:
         Empty string if no parts yet, otherwise the last N content lines.
+
     """
     if not md_parts:
         return ""
@@ -431,6 +432,7 @@ def _split_by_paragraph(text: str, max_chars: int | None = None) -> list[str]:
 
     Returns:
         List of paragraph-boundary-aligned text chunks, each ≤ max_chars.
+
     """
     paragraphs = _PARAGRAPH_SPLIT.split(text)
     paragraphs = [p.strip() for p in paragraphs if p.strip()]
@@ -450,7 +452,7 @@ def _split_by_paragraph(text: str, max_chars: int | None = None) -> list[str]:
         """Flush accumulated paragraphs as a chunk."""
         nonlocal current, current_len
         if current:
-            chunks.append('\n\n'.join(current))
+            chunks.append("\n\n".join(current))
             current = []
             current_len = 0
 
@@ -461,19 +463,19 @@ def _split_by_paragraph(text: str, max_chars: int | None = None) -> list[str]:
         if p_len > max_chars + 2:
             _flush()
             # Split at sentence boundaries
-            sentences = re.split(r'(?<=[.!?])\s+', p)
+            sentences = re.split(r"(?<=[.!?])\s+", p)
             sent_buf: list[str] = []
             sent_len = 0
             for s in sentences:
                 s_len = len(s) + 1
                 if sent_len + s_len > max_chars and sent_buf:
-                    chunks.append(' '.join(sent_buf))
+                    chunks.append(" ".join(sent_buf))
                     sent_buf = []
                     sent_len = 0
                 sent_buf.append(s)
                 sent_len += s_len
             if sent_buf:
-                chunks.append(' '.join(sent_buf))
+                chunks.append(" ".join(sent_buf))
             continue
 
         # Normal paragraph: accumulate until threshold
@@ -487,9 +489,9 @@ def _split_by_paragraph(text: str, max_chars: int | None = None) -> list[str]:
     return chunks
 
 
-def _format_text_single(raw: str, source_type: str = "web", *, system_prompt: str | None = None) -> Dict[str, Any]:
+def _format_text_single(raw: str, source_type: str = "web", *, system_prompt: str | None = None) -> dict[str, Any]:
     """Single-shot formatting — original behavior for small documents."""
-    def _compute() -> Dict[str, Any]:
+    def _compute() -> dict[str, Any]:
         prompt = system_prompt if system_prompt is not None else get_system_prompt(source_type)
         result = call_llm(prompt, raw.strip(), schema=FORMATTER_SCHEMA)
 
@@ -512,7 +514,7 @@ def _format_text_single(raw: str, source_type: str = "web", *, system_prompt: st
     return format_cached(raw, source_type, system_prompt, _compute)
 
 
-def _format_text_chunked_uncached(raw: str, source_type: str = "pdf", *, system_prompt: str | None = None) -> Dict[str, Any]:
+def _format_text_chunked_uncached(raw: str, source_type: str = "pdf", *, system_prompt: str | None = None) -> dict[str, Any]:
     """Chunked formatting for large documents (uncached worker).
 
     Splits text by paragraph, processes each chunk with LLM context
@@ -535,7 +537,7 @@ def _format_text_chunked_uncached(raw: str, source_type: str = "pdf", *, system_
         base_system_prompt = get_chunked_system_prompt(0, total)  # title will be empty until merge
 
     for i, chunk_text in enumerate(chunks):
-        # For non-first chunks with a document title available from metadata, 
+        # For non-first chunks with a document title available from metadata,
         # regenerate the prompt to include it. Otherwise use the base prompt.
         if system_prompt is None and i > 0:
             current_system_prompt = get_chunked_system_prompt(i, total)
@@ -589,24 +591,24 @@ def _format_text_chunked_uncached(raw: str, source_type: str = "pdf", *, system_
 
     # Extract title from the first `# Title` in body
     title = "Untitled Document"
-    title_match = re.search(r'^#\s+(.+)$', body, re.MULTILINE)
+    title_match = re.search(r"^#\s+(.+)$", body, re.MULTILINE)
     if title_match:
         title = title_match.group(1).strip()
 
     # Post-process: strip duplicate top-level headings matching the document title
     if title and title != "Untitled Document":
-        lines = body.split('\n')
+        lines = body.split("\n")
         cleaned_lines = []
         for line in lines:
             stripped = line.strip()
-            if re.match(r'^#\s+', stripped) and stripped.startswith(f'# {title}'):
+            if re.match(r"^#\s+", stripped) and stripped.startswith(f"# {title}"):
                 continue  # skip duplicate title heading
             cleaned_lines.append(line)
-        body = '\n'.join(cleaned_lines)
+        body = "\n".join(cleaned_lines)
 
     # Extract sections from ## and ### headers in body (after dedup)
     sections: list[dict] = []
-    for match in re.finditer(r'^(#{2,3})\s+(.+)$', body, re.MULTILINE):
+    for match in re.finditer(r"^(#{2,3})\s+(.+)$", body, re.MULTILINE):
         level = len(match.group(1))
         section_title = match.group(2).strip()
         sections.append({"level": level, "title": section_title})
@@ -637,13 +639,13 @@ def _format_text_chunked_uncached(raw: str, source_type: str = "pdf", *, system_
     return result
 
 
-def _format_text_chunked(raw: str, source_type: str = "pdf", *, system_prompt: str | None = None) -> Dict[str, Any]:
+def _format_text_chunked(raw: str, source_type: str = "pdf", *, system_prompt: str | None = None) -> dict[str, Any]:
     """Chunked formatting for large documents, with process-wide caching.
 
     Delegates to ``_format_text_chunked_uncached`` and caches the merged result
     so re-ingesting identical text skips the (expensive) multi-call LLM pass.
     """
-    def _compute() -> Dict[str, Any]:
+    def _compute() -> dict[str, Any]:
         return _format_text_chunked_uncached(raw, source_type, system_prompt=system_prompt)
 
     return format_cached(raw, source_type, system_prompt, _compute)
@@ -652,7 +654,7 @@ def _format_text_chunked(raw: str, source_type: str = "pdf", *, system_prompt: s
 # ── Public API ──────────────────────────────────────────────────────────
 
 
-def format_text(raw: str, source_type: str = "web") -> Dict[str, Any]:
+def format_text(raw: str, source_type: str = "web") -> dict[str, Any]:
     """Format raw extracted text into structured knowledge content.
 
     Auto-detects the best processing mode:
@@ -670,6 +672,7 @@ def format_text(raw: str, source_type: str = "web") -> Dict[str, Any]:
     Raises:
         httpx.HTTPError: If the API request fails.
         ValueError: If the LLM returns invalid JSON or unexpected response format.
+
     """
     if not raw.strip():
         raise ValueError("Input text is empty")
@@ -688,7 +691,7 @@ def format_text(raw: str, source_type: str = "web") -> Dict[str, Any]:
     return _format_text_single(raw, source_type)
 
 
-def _format_text_async_impl(raw: str, source_type: str, *, system_prompt: str | None = None) -> Dict[str, Any]:
+def _format_text_async_impl(raw: str, source_type: str, *, system_prompt: str | None = None) -> dict[str, Any]:
     """Internal implementation of async formatting that respects custom system prompts."""
     if not raw.strip():
         raise ValueError("Input text is empty")
@@ -701,7 +704,7 @@ def _format_text_async_impl(raw: str, source_type: str, *, system_prompt: str | 
     return _format_text_single(raw, source_type, system_prompt=system_prompt)
 
 
-def format_text_async(raw: str, source_type: str = "web", *, system_prompt: str | None = None) -> Future[Dict[str, Any]]:
+def format_text_async(raw: str, source_type: str = "web", *, system_prompt: str | None = None) -> Future[dict[str, Any]]:
     """Submit formatting task to thread pool. Returns a Future.
 
     Args:
@@ -709,12 +712,13 @@ def format_text_async(raw: str, source_type: str = "web", *, system_prompt: str 
         source_type: Source context for the LLM ('web', 'markdown', 'pdf_clip').
         system_prompt: Optional custom system prompt (overrides default).
                        Useful for RAG queries where you want a different prompt style.
+
     """
     future = get_executor().submit(_format_text_async_impl, raw, source_type, system_prompt=system_prompt)
     return future
 
 
-def format_text_with_system(raw: str, source_type: str = "web", *, system_prompt: str | None = None) -> Dict[str, Any]:
+def format_text_with_system(raw: str, source_type: str = "web", *, system_prompt: str | None = None) -> dict[str, Any]:
     """Format text with an optional custom system prompt.
 
     Convenience wrapper that delegates to _format_text_single() or _format_text_chunked()
@@ -727,6 +731,7 @@ def format_text_with_system(raw: str, source_type: str = "web", *, system_prompt
 
     Returns:
         Dict with keys: title, tags, metadata, body.
+
     """
     if not raw.strip():
         raise ValueError("Input text is empty")

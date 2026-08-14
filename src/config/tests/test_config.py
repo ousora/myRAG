@@ -4,7 +4,6 @@ import os
 
 from config import Config, get_config
 
-
 # ---------------------------------------------------------------------------
 # Config defaults — each new field must have a sensible default
 # ---------------------------------------------------------------------------

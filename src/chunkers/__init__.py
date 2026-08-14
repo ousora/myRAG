@@ -32,7 +32,7 @@ class Chunker:
         *,
         chunk_size: int = 512,
         chunk_overlap: int = 64,
-        headers_to_split_on: Optional[list[tuple[str, str]]] = None,
+        headers_to_split_on: list[tuple[str, str]] | None = None,
     ):
         if chunk_size <= 0:
             raise ValueError(f"chunk_size must be positive (got {chunk_size})")
@@ -73,6 +73,7 @@ class Chunker:
 
         Returns:
             List of dicts with 'text', 'section_path', and 'metadata' keys.
+
         """
         if not isinstance(text, str) or not text.strip():
             return []
@@ -346,25 +347,25 @@ class Chunker:
 
     # Common English abbreviations that should NOT trigger a sentence split.
     _SENTENCE_ABBREVIATIONS: frozenset[str] = frozenset({
-        'mr', 'mrs', 'ms', 'dr', 'prof', 'sr', 'jr', 'sgt', 'cpl', 'pvt',
-        'gen', 'adm', 'col', 'maj', 'capt', 'lt', 'st', 'ave',
-        'blvd', 'dept', 'est', 'inc', 'ltd', 'corp', 'co', 'vol', 'vs',
-        'eg', 'ie', 'etc', 'approx', 'asp', 'avg', 'cf', 'cm', 'eq',
-        'fig', 'govt', 'jan', 'feb', 'mar', 'apr', 'jun', 'jul', 'aug',
-        'sep', 'oct', 'nov', 'dec', 'min', 'max', 'msg', 'num', 'opp',
-        'orig', 'p', 'pp', 'pred', 'pres', 'repr', 'rev', 'sec', 'sen',
-        'rep', 'sq', 'sra', 'ssa', 'us', 'usa', 'uk', 'un', 'nato',
-        'who', 'fbi', 'cia', 'na', 'no', 'nos', 'pt', 'pts',
+        "mr", "mrs", "ms", "dr", "prof", "sr", "jr", "sgt", "cpl", "pvt",
+        "gen", "adm", "col", "maj", "capt", "lt", "st", "ave",
+        "blvd", "dept", "est", "inc", "ltd", "corp", "co", "vol", "vs",
+        "eg", "ie", "etc", "approx", "asp", "avg", "cf", "cm", "eq",
+        "fig", "govt", "jan", "feb", "mar", "apr", "jun", "jul", "aug",
+        "sep", "oct", "nov", "dec", "min", "max", "msg", "num", "opp",
+        "orig", "p", "pp", "pred", "pres", "repr", "rev", "sec", "sen",
+        "rep", "sq", "sra", "ssa", "us", "usa", "uk", "un", "nato",
+        "who", "fbi", "cia", "na", "no", "nos", "pt", "pts",
     })
 
     def _is_abbreviation_boundary(self, text: str, dot_pos: int) -> bool:
         """Return True if the '.' at *dot_pos* follows a known abbreviation."""
         before = text[:dot_pos].rstrip()
-        match = re.search(r'([A-Za-z]+(?:\.[A-Za-z]+)*\.?)$', before + '.')
+        match = re.search(r"([A-Za-z]+(?:\.[A-Za-z]+)*\.?)$", before + ".")
         if not match:
             return False
-        abbr_raw = match.group(1).lower().rstrip('.')
-        candidates = {abbr_raw, re.sub(r'\.', '', abbr_raw)}
+        abbr_raw = match.group(1).lower().rstrip(".")
+        candidates = {abbr_raw, re.sub(r"\.", "", abbr_raw)}
         return bool(candidates & self._SENTENCE_ABBREVIATIONS)
 
     def _split_by_sentence(self, text: str) -> list[str]:
@@ -374,7 +375,7 @@ class Chunker:
         only fires on periods that follow a non-abbreviation token.
         """
         # Step 1: Split on Chinese sentence-ending punctuation unconditionally.
-        parts = re.split(r'(?<=[。！？])\s*', text)
+        parts = re.split(r"(?<=[。！？])\s*", text)
 
         # Step 2: For each segment, find English '.' positions that are NOT
         # abbreviation boundaries and split there too.
@@ -382,14 +383,14 @@ class Chunker:
         for seg in parts:
             if not seg.strip():
                 continue
-            if any(c in seg for c in '。！？'):
+            if any(c in seg for c in "。！？"):
                 sentences.append(seg.strip())
                 continue
 
             # Find positions of '.' that are sentence boundaries (not abbreviations).
             boundary_positions: list[int] = []
             for i, ch in enumerate(seg):
-                if ch == '.' and not self._is_abbreviation_boundary(seg, i):
+                if ch == "." and not self._is_abbreviation_boundary(seg, i):
                     boundary_positions.append(i)
 
             if not boundary_positions:
