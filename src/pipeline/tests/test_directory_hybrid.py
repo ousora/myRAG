@@ -207,7 +207,7 @@ class TestProcessDirectoryHybrid:
              patch("pipeline.core.markdown_utils.render_markdown_with_sections") as render_mock, \
              patch("pipeline.core.markdown_utils.strip_reference_sections") as strip_mock, \
              patch("pipeline.core.markdown_utils.match_entities_to_chunks") as match_mock, \
-             patch("pipeline.core.process_file_hybrid") as hybrid_mock:
+              patch("pipeline.hybrid.process_file_hybrid") as hybrid_mock:
 
             cfg_mock.return_value.format_timeout = 30
             resolve_mock.return_value = self._make_parser()
@@ -244,7 +244,7 @@ class TestProcessDirectoryHybrid:
              patch("pipeline.core.markdown_utils.render_markdown_with_sections") as render_mock, \
              patch("pipeline.core.markdown_utils.strip_reference_sections") as strip_mock, \
              patch("pipeline.core.markdown_utils.match_entities_to_chunks") as match_mock, \
-             patch("pipeline.core.process_file_hybrid") as hybrid_mock:
+              patch("pipeline.hybrid.process_file_hybrid") as hybrid_mock:
 
             cfg_mock.return_value.format_timeout = 30
             resolve_mock.return_value = self._make_parser()
@@ -274,7 +274,7 @@ class TestProcessDirectoryHybrid:
              patch("pipeline.core.markdown_utils.render_markdown_with_sections") as render_mock, \
              patch("pipeline.core.markdown_utils.strip_reference_sections") as strip_mock, \
              patch("pipeline.core.markdown_utils.match_entities_to_chunks") as match_mock, \
-             patch("pipeline.core.process_file_hybrid") as hybrid_mock:
+              patch("pipeline.hybrid.process_file_hybrid") as hybrid_mock:
 
             cfg_mock.return_value.format_timeout = 30
             resolve_mock.return_value = self._make_parser()
@@ -349,7 +349,7 @@ class TestProcessDirectoryHybrid:
              patch("pipeline.core.markdown_utils.render_markdown_with_sections") as render_mock, \
              patch("pipeline.core.markdown_utils.strip_reference_sections") as strip_mock, \
              patch("pipeline.core.markdown_utils.match_entities_to_chunks") as match_mock, \
-             patch("pipeline.core.process_file_hybrid") as hybrid_mock:
+              patch("pipeline.hybrid.process_file_hybrid") as hybrid_mock:
 
             cfg_mock.return_value.format_timeout = 30
             resolve_mock.return_value = self._make_parser()

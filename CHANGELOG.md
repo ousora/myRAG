@@ -24,7 +24,9 @@
 ### Changed
 
 - **Test count**: 253 tests passing (was 185 — +68 new tests across 5 modules).
-- **Module splitting**: `formatters/__init__.py` (750→200 lines) split into `formatters/__init__.py` + `formatters/_internal.py` (475 lines). The `_internal.py` module contains JSON preprocessing, paragraph splitting, single-shot/chunked formatting, LLM API calls, and CJK-aware threshold calculation. Public API (`format_text`, `format_text_async`, `format_text_with_system`, `call_llm`, `call_llm_raw`) remains unchanged.
+- **Module splitting**: 
+  - `formatters/__init__.py` (750→200 lines) split into `formatters/__init__.py` + `formatters/_internal.py` (475 lines). The `_internal.py` module contains JSON preprocessing, paragraph splitting, single-shot/chunked formatting, LLM API calls, and CJK-aware threshold calculation. Public API (`format_text`, `format_text_async`, `format_text_with_system`, `call_llm`, `call_llm_raw`) remains unchanged.
+  - `pipeline/core.py` (539→100 lines) split into `pipeline/core.py` + `pipeline/hybrid.py` (415 lines). The `hybrid.py` module contains all LLM-powered functions (`process_file_hybrid`, `process_file_with_md`, `process_directory_hybrid`, `rag_query`). `core.py` retains facades (`TextCleaner`, `Chunker`), traditional RAG functions (`process_file`, `process_directory`), and re-exports from `hybrid.py` for backward compatibility.
 
 ## [0.6.2] — 2026-08-14
 
