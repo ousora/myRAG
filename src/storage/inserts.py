@@ -104,12 +104,13 @@ class _InsertOps:
 
         section_path = chunk_data.get("section_path", ["General"])
         entity_names = chunk_data.get("entity_names", [])
-        word_count = _count_words(chunk_data.get("text", ""))
+        text = chunk_data.get("text", "")
+        word_count = _count_words(text)
 
         cursor = self.conn.execute(
             """INSERT OR REPLACE INTO chunks (text, embedding, source_doc_id, chunk_index, section_path, word_count, entity_names)
                VALUES (?, ?, ?, ?, ?, ?, ?)""",
-            (chunk_data["text"], _SQLITE_VEC.serialize_float32(embedding), doc_id,
+            (text, _SQLITE_VEC.serialize_float32(embedding), doc_id,
              chunk_index, json.dumps(section_path), word_count, json.dumps(entity_names))
         )
 
@@ -136,6 +137,9 @@ class _InsertOps:
         if not chunks:
             return []
 
+        # Pre-compute word counts once per chunk to avoid duplicate calls.
+        word_counts = [_count_words(chunk.get("text", "")) for chunk in chunks]
+
         params = [
             (
                 chunk["text"],
@@ -143,7 +147,7 @@ class _InsertOps:
                 doc_id,
                 i,
                 json.dumps(chunk.get("section_path", ["General"])),
-                _count_words(chunk.get("text", "")),
+                word_counts[i],
                 json.dumps(chunk.get("entity_names", [])),
             )
             for i, chunk in enumerate(chunks)
@@ -169,7 +173,7 @@ class _InsertOps:
                 "section_path": chunk.get("section_path", ["General"]),
                 "source_doc_id": doc_id,
                 "chunk_index": i,
-                "word_count": _count_words(chunk.get("text", "")),
+                "word_count": word_counts[i],
             }
             for i, chunk in enumerate(chunks)
         ]

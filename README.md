@@ -243,17 +243,23 @@ uv run pytest -v
 ### Linting
 
 ```bash
-uv run ruff check .    # 208 remaining issues (mostly D102 test docstrings)
+uv run ruff check .
 uv run ruff check . --fix   # auto-fix most issues
 ```
 
 ### Type Checking
 
 ```bash
-uv run mypy src/       # 355 errors — internal module typing incomplete; add src/py.typed marker
+uv run mypy src/       # ~355 errors — internal module typing incomplete; add src/py.typed marker
 ```
 
-## Configuration Validation
+## Testing
+
+```bash
+cd myrag
+uv run pytest -v
+# 253 tests: chunkers 12 + formatters 46 + storage 46 + integration 9 + config 9 + parsers 24 + embedders 29 + test_formatter 13 + pipeline 36 + test_rerank 20 + test_directory_hybrid + test_rag_query + test_local_embedder + test_text_cleaner 24 + test_tags 17 + test_cache 11 + test_ingest 5 + test_utils 16
+```
 
 `get_config()` validates required fields (LLM endpoint, model name) on every call. Invalid configs raise `ValueError` with descriptive messages before any pipeline work begins. Debug logging of LLM responses controlled by `debug_log_llm_responses: true` in config (gated by `logging.debug`).
 
@@ -261,6 +267,6 @@ uv run mypy src/       # 355 errors — internal module typing incomplete; add s
 
 - **Config resolution chain**: `$MYRAG_CONFIG` → `conf/config.yaml` → `conf/config.example.yaml`. All endpoints configurable via YAML.
 - **Facade pattern** — `TextCleaner` and `Chunker` classes in `pipeline.core` are thin facades that delegate to `parsers.text_cleaner.TextCleaner` and `chunkers.Chunker` respectively. The canonical implementations live in their own modules with full feature support (YAML config, markdown-it-py chunking).
-- **Module splitting**: Large files (>500 lines) split into focused modules: `pipeline/markdown_utils.py`, `pipeline/utils.py`, `formatters/tags.py`, `formatters/cache.py`, `storage/schema.py`, `storage/inserts.py`, `storage/search.py`. Each module has clear single responsibility.
+- **Module splitting**: Large files (>500 lines) split into focused modules: `pipeline/markdown_utils.py`, `pipeline/utils.py`, `formatters/tags.py`, `formatters/cache.py`, `storage/schema.py`, `storage/inserts.py`, `storage/search.py`. Each module has clear single responsibility. All modules now use consistent module-level imports.
 - **Type checking**: Strict mypy configuration enabled (`disallow_untyped_defs = true`). All public functions have type hints. Run `uv run mypy src/` to verify.
 - **Pre-commit hooks**: ruff check/format + mypy run automatically before each commit. Configure with `pre-commit install`.

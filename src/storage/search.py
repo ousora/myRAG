@@ -45,8 +45,7 @@ def _build_fts_query(text: str) -> str | None:
     None when no usable token remains, so callers can fall back to vector-only.
     """
     cleaned = _FTS_SPECIAL.sub(" ", text)
-    cjk_re_str = "|".join(_CJK_RANGE)
-    tokens = re.findall(r"[A-Za-z0-9]+|" + cjk_re_str, cleaned)
+    tokens = re.findall(r"[A-Za-z0-9]+|" + "|".join(_CJK_RANGE), cleaned)
     tokens = [t for t in tokens if len(t) > 1 or bool(_CJK_PAT.match(t))]
     if not tokens:
         return None

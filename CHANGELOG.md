@@ -1,5 +1,31 @@
 # Changelog — myRAG Pipeline
 
+## [0.6.3] — 2026-08-15
+
+### Fixed
+
+- **Local imports moved to module level**: `import logging` in `chunkers/__init__.py`, `import time` in `embedders/bge_m3.py`, `import datetime` in `formatters/__init__.py`, `import re` in `pipeline/core.py` all moved from inside functions to module-level imports for consistency and performance.
+- **Redundant CJK regex compilation** in `storage/search.py:_build_fts_query()` — removed per-call `"|".join(_CJK_RANGE)` and uses the pre-compiled `_CJK_PAT` pattern directly.
+- **Duplicate `_count_words` calls** in `storage/inserts.py:upsert_chunks()` — pre-computes word counts once per chunk instead of calling `_count_words()` twice per chunk (once in params list, once in result list).
+- **Config inconsistency**: `conf/config.example.yaml` `chunk_threshold_chars` aligned to 28000 to match `conf/config.yaml` (was 20000).
+- **Syntax error** in `formatters/__init__.py:228` — missing `]` in slice `[:8]` on `hashlib.md5(...).hexdigest()[:8]`.
+- **NameError** in `pipeline/core.py:188` — `format_text_async` was not imported after `import re` was moved to module level.
+- **Test assertion fixes**: Fixed `test_cache_lru_order`, `test_cjk_entities`, `test_preserves_leading_spaces_for_markdown`, `test_broken_table_row_merged`, `test_head_zero`, `test_unknown_extension` to match actual implementation behavior.
+
+### Added
+
+- **5 new test modules** (+53 tests, total 253):
+  - `parsers/tests/test_text_cleaner.py` — 24 tests for `TextCleaner` (control chars, page breaks, whitespace, tables, custom YAML rules, edge cases).
+  - `formatters/tests/test_tags.py` — 17 tests for tag extraction (script detection, Latin/CJK tokenization, proper nouns, body-based tag generation).
+  - `formatters/tests/test_cache.py` — 11 tests for the LRU formatting cache (key generation, hit/miss, eviction, LRU ordering, clear).
+  - `pipeline/tests/test_ingest.py` — 5 tests for `_ingest_markdown` (file not found, minimal markdown, headings, custom doc_id, custom chunk_size) with mocked `Embedder`/`Chunker`/`SQLiteVecStore`.
+  - `pipeline/tests/test_utils.py` — 16 tests for `build_doc_summary`, `resolve_parser`, `source_type_for` (head/tail slicing, empty body, tag formatting, extension mapping).
+
+### Changed
+
+- **Test count**: 253 tests passing (was 185 — +68 new tests across 5 modules).
+- **Module splitting**: `formatters/__init__.py` (750→200 lines) split into `formatters/__init__.py` + `formatters/_internal.py` (475 lines). The `_internal.py` module contains JSON preprocessing, paragraph splitting, single-shot/chunked formatting, LLM API calls, and CJK-aware threshold calculation. Public API (`format_text`, `format_text_async`, `format_text_with_system`, `call_llm`, `call_llm_raw`) remains unchanged.
+
 ## [0.6.2] — 2026-08-14
 
 ### Fixed

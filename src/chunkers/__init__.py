@@ -9,10 +9,13 @@ Output format (backward compatible with existing pipeline):
      "metadata": {"H1": "...", "H2": "...", "H3": "..."}}
 """
 
+import logging
 import re
 from typing import Optional
 
 from markdown_it import MarkdownIt
+
+logger = logging.getLogger(__name__)
 
 
 class Chunker:
@@ -294,8 +297,6 @@ class Chunker:
         chunks = self._merge_segments(paragraphs)
 
         # If any chunk still oversized, split by sentence boundary then char-level.
-        import logging as _logging
-        _logger = _logging.getLogger(__name__)
         final_chunks: list[str] = []
         for chunk in chunks:
             if len(chunk) > self.chunk_size:
@@ -303,7 +304,7 @@ class Chunker:
                 # If sentence split still produces oversized pieces, do char-level.
                 remaining_oversized = [c for c in sub if len(c) > self.chunk_size]
                 if remaining_oversized:
-                    _logger.warning(
+                    logger.warning(
                         "Chunk %d (%d chars) exceeded chunk_size after sentence split; using character-level fallback",
                         len(final_chunks), len(remaining_oversized[0]),
                     )

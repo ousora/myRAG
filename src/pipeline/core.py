@@ -47,6 +47,7 @@ from __future__ import annotations
 
 import concurrent.futures
 import logging
+import re
 from pathlib import Path
 from typing import Any
 
@@ -153,8 +154,6 @@ def process_file_hybrid(filepath: str, *, doc_id="doc_0", remove_page_breaks=Tru
         md_path  — path to generated/reused .md file, else None
 
     """
-    import re as _re
-
     from formatters import format_text_async, write_to_md
 
     cfg = _get_config()
@@ -165,7 +164,7 @@ def process_file_hybrid(filepath: str, *, doc_id="doc_0", remove_page_breaks=Tru
         # Reuse an existing .md — skip the (expensive) LLM formatter entirely.
         logger.info("Reusing existing markdown: %s", md_path)
         content = Path(md_path).read_text(encoding="utf-8")
-        title_match = _re.search(r"^#\s+(.+)$", content, _re.MULTILINE)
+        title_match = re.search(r"^#\s+(.+)$", content, re.MULTILINE)
         title = title_match.group(1).strip() if title_match else "Untitled"
         result = {"title": title, "body": content, "tags": [], "metadata": {"entities": []}}
         md_out_path = md_path

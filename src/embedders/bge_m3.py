@@ -35,6 +35,7 @@ Schema:
 
 import logging
 import threading
+import time
 from collections import OrderedDict
 
 import httpx
@@ -162,8 +163,6 @@ class Embedder:
         Retries on HTTP 429 (rate limit), 502/503/504 (server errors). Exponential
         backoff starts at 1s, capped at 8s. Non-transient errors raise immediately.
         """
-        import time as _time
-
         last_exc = None
         for attempt in range(max_retries + 1):
             try:
@@ -177,14 +176,14 @@ class Embedder:
                     resp.status_code, attempt + 1, max_retries + 1, wait,
                 )
                 last_exc = RuntimeError(f"HTTP {resp.status_code}: {resp.text[:200]}")
-                _time.sleep(wait)
+                time.sleep(wait)
             except (httpx.TimeoutException, httpx.ReadTimeout, httpx.WriteTimeout) as exc:
                 logger.warning(
                     "Embedding API timed out (attempt %d/%d), retrying in %ds",
                     attempt + 1, max_retries + 1, min(2 ** attempt, 8),
                 )
                 last_exc = exc
-                _time.sleep(min(2 ** attempt, 8))
+                time.sleep(min(2 ** attempt, 8))
 
         raise RuntimeError(f"Embedding API failed after {max_retries} retries: {last_exc}") from last_exc
 
