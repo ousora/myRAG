@@ -31,8 +31,37 @@ from .utils import build_doc_summary as _build_doc_summary
 logger = logging.getLogger(__name__)
 
 
+def _format_result(cleaned: str, filepath: str, *, use_llm: bool = True,
+                  format_text_async=None, cfg=None) -> dict | None:
+    """Build the formatter result dict for *cleaned* text.
+
+    When *use_llm* is True, delegates to ``format_text_async`` (LLM call).
+    When False, returns a minimal dict with the parsed text as body and the
+    first ``# `` heading as title — no model call, fully deterministic.
+    Returns None on timeout/failure.
+    """
+    if not use_llm:
+        # ponytail: skip LLM — build a minimal result dict from parsed text.
+        # Title from first H1, or "Untitled"; tags/sections empty.
+        title_match = re.search(r"^#\s+(.+)$", cleaned, re.MULTILINE)
+        title = title_match.group(1).strip() if title_match else "Untitled"
+        return {
+            "title": title,
+            "tags": [],
+            "metadata": {"sections": [], "entities": []},
+            "body": cleaned,
+        }
+
+    future = format_text_async(cleaned, source_type=utils.source_type_for(filepath))
+    try:
+        return future.result(timeout=cfg.format_timeout)
+    except concurrent.futures.TimeoutError:
+        logger.warning("LLM formatting timed out after %ds for %s", cfg.format_timeout, filepath)
+        return None
+
+
 def process_file_hybrid(filepath: str, *, doc_id="doc_0", remove_page_breaks=True,
-                        collapse_whitespace=True, rules_config="conf/clean_rules.yaml", chunk_size=1024, store_path=None, md_output_dir=None, md_path=None):
+                        collapse_whitespace=True, rules_config="conf/clean_rules.yaml", chunk_size=1024, store_path=None, md_output_dir=None, md_path=None, use_llm=True):
     """Parse file with LLM formatter → chunker → embedder → sqlite-vec (Hybrid A+B).
 
     Args:  # noqa: D417
@@ -83,12 +112,10 @@ def process_file_hybrid(filepath: str, *, doc_id="doc_0", remove_page_breaks=Tru
         raw_text = parser.parse(filepath)
         cleaned = TextCleaner(remove_page_breaks=remove_page_breaks, collapse_whitespace=collapse_whitespace, rules_config=rules_config).clean(raw_text)
 
-        # 2. LLM Format (async)
-        future = format_text_async(cleaned, source_type=utils.source_type_for(filepath))
-        try:
-            result = future.result(timeout=cfg.format_timeout)
-        except concurrent.futures.TimeoutError:
-            logger.warning("LLM formatting timed out after %ds for %s", cfg.format_timeout, filepath)
+        # 2. LLM Format (async) — skip when use_llm=False
+        result = _format_result(cleaned, filepath, use_llm=use_llm,
+                                format_text_async=format_text_async, cfg=cfg)
+        if result is None:
             return {
                 "chunks": [],
                 "document": {},
@@ -194,13 +221,16 @@ def process_file_hybrid(filepath: str, *, doc_id="doc_0", remove_page_breaks=Tru
     }
 
 
-def process_file_with_md(filepath: str, *, output_dir="./output/", **kwargs):
+def process_file_with_md(filepath: str, *, output_dir="./output/", use_llm=True, **kwargs):
     """Parse file → LLM formatter → write structured markdown to output/.
 
-    Returns the path of the generated .md file.
+    When *use_llm* is False, skips the LLM formatting step and writes the
+    parser's raw output as the .md body (title extracted from the first
+    ``# `` heading, or "Untitled"). This gives a deterministic, offline
+    markdown dump without any model call — useful for inspection, indexing
+    fallback, or when the LLM endpoint is unavailable.
 
-    This is the user-facing pipeline for generating human-readable documents.
-    For vector DB indexing (Hybrid A+B), use process_file_hybrid() instead.
+    Returns the path of the generated .md file, or None on failure.
     """
     from formatters import format_text_async, write_to_md
 
@@ -215,12 +245,9 @@ def process_file_with_md(filepath: str, *, output_dir="./output/", **kwargs):
     raw_text = parser.parse(filepath)
     cleaned = TextCleaner(**kwargs).clean(raw_text)
 
-    # LLM Format
-    future = format_text_async(cleaned, source_type=utils.source_type_for(filepath))
-    try:
-        result = future.result(timeout=cfg.format_timeout)
-    except concurrent.futures.TimeoutError:
-        logger.warning("LLM formatting timed out after %ds for %s", cfg.format_timeout, filepath)
+    result = _format_result(cleaned, filepath, use_llm=use_llm,
+                            format_text_async=format_text_async, cfg=cfg)
+    if result is None:
         return None
 
     # Write markdown to output_dir

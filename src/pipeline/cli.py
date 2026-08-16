@@ -40,11 +40,13 @@ def main():
     process_parser.add_argument("--doc-id", default="doc_0", help="Document ID for storage")
     process_parser.add_argument("--output-dir", default="./output/", help="Output directory for .md files")
     process_parser.add_argument("--chunk-size", type=int, default=1024)
+    process_parser.add_argument("--no-llm", action="store_true", help="Skip LLM formatting; write parser output directly")
 
     # md command (generate markdown output)
     md_parser = subparsers.add_parser("md", help="Generate structured markdown output only")
     md_parser.add_argument("input", help="file to process")
     md_parser.add_argument("--output-dir", default="./output/", help="Output directory for .md files")
+    md_parser.add_argument("--no-llm", action="store_true", help="Skip LLM formatting; write parser output directly")
 
     # hybrid command
     hybrid_parser = subparsers.add_parser("hybrid", help="Process file with hybrid indexing")
@@ -125,7 +127,8 @@ def main():
     elif args.command == "process":
         from pipeline.core import process_file_with_md
         # Step 1: generate .md
-        md_path = process_file_with_md(args.input, output_dir=args.output_dir)
+        md_path = process_file_with_md(args.input, output_dir=args.output_dir,
+                                        use_llm=not args.no_llm)
         if not md_path:
             print("Failed to generate markdown")
             return
@@ -141,7 +144,8 @@ def main():
 
     elif args.command == "md":
         from pipeline.core import process_file_with_md
-        path = process_file_with_md(args.input, output_dir=args.output_dir)
+        path = process_file_with_md(args.input, output_dir=args.output_dir,
+                                     use_llm=not args.no_llm)
         if path:
             print(f"Written to: {path}")
 
