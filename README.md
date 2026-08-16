@@ -56,6 +56,8 @@ cleaned = TextCleaner().clean(raw_text)
 
 LLM-powered: extracts title, tags, section hierarchy. **Auto-chunks large texts** (>20K chars) at paragraph boundaries — each chunk gets the last 10 lines of previous markdown output + cumulative summary as context for continuity.
 
+**Offline mode** (`use_llm=False`): skips the LLM formatter entirely and writes the parser's raw cleaned output as the .md body (title from the first `# ` heading, or "Untitled"). No model call, no network — deterministic. Useful for inspection, or when the LLM endpoint is down. CLI: `myrag md input.pdf --no-llm`.
+
 **JSON Schema enforcement**: `call_llm()` accepts a `schema=` parameter to send JSON Schema via `response_format`, letting llama.cpp / OpenAI servers enforce output structure natively (schemas in [constants.py](src/formatters/constants.py)).
 
 **Tag quality**: Extracts proper nouns and domain-specific multi-word phrases; filters generic single words ("banking", "system").
@@ -94,6 +96,8 @@ bge-m3 embeddings → sqlite-vec database with FTS5 full-text index + entity_nam
 **Dual embedding mode** — set `embedding.mode` in config to switch:
 - `"remote"` (default): calls HTTP API at `embedding.base_url` (vLLM / Ollama compatible)
 - `"local"`: uses sentence-transformers (`uv sync --extra local-embeddings`), CPU inference, no network dependency
+
+**Hash fallback** (`embedding.hash_fallback: true`): when the endpoint is unreachable, embedders fall back to a deterministic SHA-256 → 1024-d vector. Same text → same vector, so retrieval is stable across runs, but vectors carry no semantic signal. Offline/dev only — not a replacement for a real model.
 
 **Dimension validation**: Both remote and local backends validate embedding dimension on every call. Mismatched dimensions raise `EmbeddingError` with context about expected vs actual size.
 
@@ -139,11 +143,17 @@ cp conf/config.example.yaml conf/config.yaml
 # 1. Generate .md only (inspect or edit before storage)
 python -m pipeline md input.pdf --output-dir output/
 
+# 1b. Generate .md WITHOUT calling the LLM (offline / parser output only)
+python -m pipeline md input.pdf --output-dir output/ --no-llm
+
 # 2. Ingest an existing .md into sqlite-vec (no LLM call)
 python -m pipeline ingest output/doc.md --store data/doc.db
 
 # 3. Generate .md and auto-ingest (two-step, transparent)
 python -m pipeline process input.pdf --store data/doc.db
+
+# 3b. Same, but skip the LLM formatter
+python -m pipeline process input.pdf --store data/doc.db --no-llm
 
 # Hybrid mode: generate .md + ingest in one command with LLM formatting
 python -m pipeline hybrid input.pdf --store data/doc.db

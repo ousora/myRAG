@@ -6,6 +6,8 @@
 
 - **`process_file_with_md` / `process_file_hybrid` `use_llm=False` mode**: skips the LLM formatting step and writes the parser's raw cleaned output as the .md body (title from the first `# ` heading, or "Untitled"). Fully deterministic, no model call — offline fallback for inspection or when the LLM endpoint is down. CLI: `myrag md input.pdf --no-llm` / `myrag process input.pdf --store data.db --no-llm`.
 
+- **Hash fallback** (`embedding.hash_fallback: true`): when the endpoint is unreachable, embedders fall back to a deterministic SHA-256 → 1024-d vector. Same text → same vector, so retrieval is stable across runs, but vectors carry no semantic signal. Offline/dev only — not a replacement for a real model.
+
 ## [0.6.4] — 2026-08-16
 
 ### Fixed
