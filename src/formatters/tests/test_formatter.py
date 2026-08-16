@@ -55,7 +55,7 @@ class TestFormatText:
         """Normal text should return a dict with expected keys."""
         raw_text = "This is a sample article about Python programming."
 
-        with patch("formatters.call_llm.httpx.post", _mock_response(VALID_RESPONSE)):
+        with patch("formatters.httpx.post", _mock_response(VALID_RESPONSE)):
             result = format_text(raw_text, source_type="web")
 
         assert isinstance(result, dict)
@@ -81,7 +81,7 @@ class TestFormatText:
         }
         bad_response.raise_for_status = Mock()
 
-        with patch("formatters.call_llm.httpx.post", return_value=bad_response):
+        with patch("formatters.httpx.post", return_value=bad_response):
             with pytest.raises(ValueError, match="no JSON-like content"):
                 format_text("some text")
 
@@ -91,7 +91,7 @@ class TestFormatText:
         bad_response.json.return_value = {}  # No choices key
         bad_response.raise_for_status = Mock()
 
-        with patch("formatters.call_llm.httpx.post", return_value=bad_response):
+        with patch("formatters.httpx.post", return_value=bad_response):
             with pytest.raises(ValueError, match="LLM returned invalid format"):
                 format_text("some text")
 
@@ -104,7 +104,7 @@ class TestFormatTextAsync:
 
     def test_format_text_async_result_matches_sync(self):
         """async result should match sync call when mocked."""
-        with patch("formatters.call_llm.httpx.post", _mock_response(VALID_RESPONSE)):
+        with patch("formatters.httpx.post", _mock_response(VALID_RESPONSE)):
             future = format_text_async("test text", source_type="web")
             result = future.result(timeout=10)
 
