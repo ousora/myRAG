@@ -21,6 +21,7 @@ import httpx
 
 # Trigger parser registration at module load time
 import parsers  # noqa: F401 — loads dispatcher (MarkItDown + Trafilatura)
+import parsers.markdown_normalizer  # noqa: F401 — registers normalize_markdown
 from chunkers import Chunker
 from config import get_config_lazy as _get_config
 from parsers.text_cleaner import TextCleaner
@@ -46,9 +47,7 @@ def _format_result(cleaned: str, filepath: str, *, use_llm: bool = True,
         # Run the deterministic normalizer first so the body is structured
         # markdown (promoted headings, normalized lists, formatted links,
         # repaired bold/italic, aligned tables) without any model call.
-        from parsers.markdown_normalizer import normalize_markdown
-
-        normalized = normalize_markdown(cleaned)
+        normalized = parsers.markdown_normalizer.normalize_markdown(cleaned)
         title_match = re.search(r"^#\s+(.+)$", normalized, re.MULTILINE)
         title = title_match.group(1).strip() if title_match else "Untitled"
         return {

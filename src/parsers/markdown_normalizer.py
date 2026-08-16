@@ -27,13 +27,6 @@ _URL_RE = re.compile(
 # ATX heading already present
 _ATX_HEADING_RE = re.compile(r"^#{1,6}\s+", re.MULTILINE)
 
-# Standalone short line that looks like a section title:
-#   - ≤ 80 chars, no sentence-ending punctuation, not already a heading
-#   - not a list item, not a table row, not a URL
-_HEADING_CANDIDATE_RE = re.compile(
-    r"^(?![#>\d\*\-\+•·\|])(?![A-Za-z]+:)([^\n]{1,80})$",
-)
-
 # List markers: 1), 1., a), a., •, *, -
 _LIST_ITEM_RE = re.compile(
     r"^\s*(?:"
@@ -42,11 +35,6 @@ _LIST_ITEM_RE = re.compile(
     r"[•·\*\-+]"            # bullet chars
     r")\s+",
 )
-
-# Unclosed bold: odd number of ** pairs
-_BOLD_RE = re.compile(r"\*\*")
-# Unclosed single asterisk (not part of **)
-_ITALIC_RE = re.compile(r"(?<!\*)\*(?!\*)")
 
 # Table row: starts and ends with |
 _TABLE_ROW_RE = re.compile(r"^\s*\|.*\|\s*$")
@@ -59,7 +47,7 @@ def normalize_markdown(text: str) -> str:
     formatted links, repaired bold/italic, and aligned tables.
     """
     if not text or not text.strip():
-        return text or ""
+        return ""
 
     lines = text.split("\n")
 
@@ -77,9 +65,7 @@ def normalize_markdown(text: str) -> str:
     result = _repair_bold_italic(result)
 
     # Phase 5: Table alignment
-    result = _align_tables(result)
-
-    return result
+    return _align_tables(result)
 
 
 # ── Heading promotion ──────────────────────────────────────────────────
@@ -96,7 +82,6 @@ def _promote_headings(lines: list[str]) -> list[str]:
       - Is surrounded by blank lines (or at document start/end)
     """
     result: list[str] = []
-    n = len(lines)
 
     for i, line in enumerate(lines):
         stripped = line.strip()
@@ -168,20 +153,19 @@ def _normalize_lists(lines: list[str]) -> list[str]:
 
         # Normalize the marker
         marker = m.group(0).strip()
-        if re.match(r"^\d+[\).]$", marker):
+        num_match = re.match(r"^(\d+)[\).]$", marker)
+        if num_match:
             # Numbered: keep number, use dot
-            num = re.match(r"^(\d+)[\).]$", marker).group(1)  # type: ignore[union-attr]
-            new_marker = f"{num}."
-        elif re.match(r"^[a-zA-Z][\).]$", marker):
-            # Letter: keep letter, use paren
-            letter = re.match(r"^([a-zA-Z])[\).]$", marker).group(1)  # type: ignore[union-attr]
-            new_marker = f"{letter})"
-        elif marker in ("•", "·"):
-            new_marker = "-"
-        elif marker in ("*", "+"):
-            new_marker = "-"
+            new_marker = f"{num_match.group(1)}."
         else:
-            new_marker = marker
+            letter_match = re.match(r"^([a-zA-Z])[\).]$", marker)
+            if letter_match:
+                # Letter: keep letter, use paren
+                new_marker = f"{letter_match.group(1)})"
+            elif marker in ("•", "·", "*", "+"):
+                new_marker = "-"
+            else:
+                new_marker = marker
 
         result.append(f"{indent}{new_marker} {content}")
 
@@ -197,13 +181,11 @@ def _format_links(line: str) -> str:
     Skips lines inside code spans (single backtick pairs).
     """
     if "```" in line:
-        return line  # skip code blocks entirely
+        return line  # skip fenced code blocks entirely
     if line.count("`") >= 2:
         # Inline code — protect the span
         parts = line.split("`")
-        for i in range(1, len(parts) - 1, 2):
-            parts[i] = parts[i]  # leave code untouched
-        # Only format odd-indexed parts (outside code)
+        # Only format even-indexed parts (outside code spans)
         for i in range(0, len(parts), 2):
             if i < len(parts):
                 parts[i] = _URL_RE.sub(r"[\1](\1)", parts[i])

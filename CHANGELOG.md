@@ -13,6 +13,16 @@
 
   Self-check: `src/parsers/tests/test_normalizer.py`.
 
+### Fixed
+
+- **Dead code removal**: removed unused compiled patterns (`_HEADING_CANDIDATE_RE`, `_BOLD_RE`, `_ITALIC_RE`) and unused variable `n` from `markdown_normalizer.py`.
+- **Merged duplicate elif branches** in list normalization (`•`, `·`, `*`, `+` all map to `-`).
+- **Refactored regex matching** to reuse match objects instead of double-matching.
+- **Improved backtick handling** in link formatting: simplified inline code protection, only formats non-code parts.
+- **Fixed whitespace-only input**: `normalize_markdown("   ")` now returns `""` consistently.
+- **Moved import to module level** in `pipeline/hybrid.py` — `parsers.markdown_normalizer` imported at top, used via qualified name.
+- **Converted tests to pytest style**: `test_normalizer.py` now has 16 `test_*` functions covering edge cases (empty input, already valid markdown, mixed content, lettered lists, inline code URLs, fenced code blocks).
+
 ## [0.6.5] — 2026-08-16
 
 ### Added
