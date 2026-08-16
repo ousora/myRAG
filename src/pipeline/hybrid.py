@@ -43,13 +43,19 @@ def _format_result(cleaned: str, filepath: str, *, use_llm: bool = True,
     if not use_llm:
         # ponytail: skip LLM — build a minimal result dict from parsed text.
         # Title from first H1, or "Untitled"; tags/sections empty.
-        title_match = re.search(r"^#\s+(.+)$", cleaned, re.MULTILINE)
+        # Run the deterministic normalizer first so the body is structured
+        # markdown (promoted headings, normalized lists, formatted links,
+        # repaired bold/italic, aligned tables) without any model call.
+        from parsers.markdown_normalizer import normalize_markdown
+
+        normalized = normalize_markdown(cleaned)
+        title_match = re.search(r"^#\s+(.+)$", normalized, re.MULTILINE)
         title = title_match.group(1).strip() if title_match else "Untitled"
         return {
             "title": title,
             "tags": [],
             "metadata": {"sections": [], "entities": []},
-            "body": cleaned,
+            "body": normalized,
         }
 
     future = format_text_async(cleaned, source_type=utils.source_type_for(filepath))

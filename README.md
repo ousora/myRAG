@@ -56,7 +56,7 @@ cleaned = TextCleaner().clean(raw_text)
 
 LLM-powered: extracts title, tags, section hierarchy. **Auto-chunks large texts** (>20K chars) at paragraph boundaries — each chunk gets the last 10 lines of previous markdown output + cumulative summary as context for continuity.
 
-**Offline mode** (`use_llm=False`): skips the LLM formatter entirely and writes the parser's raw cleaned output as the .md body (title from the first `# ` heading, or "Untitled"). No model call, no network — deterministic. Useful for inspection, or when the LLM endpoint is down. CLI: `myrag md input.pdf --no-llm`.
+**Offline mode** (`use_llm=False`): skips the LLM formatter entirely and writes the parser's raw cleaned output as the .md body (title from the first `# ` heading, or "Untitled"). A deterministic normalizer ([`src/parsers/markdown_normalizer.py`](src/parsers/markdown_normalizer.py)) runs first to structure the output: promotes standalone short lines to `##` headings, normalizes list markers, formats bare URLs as `[url](url)`, repairs unclosed bold/italic, and aligns table columns. No model call, no network — deterministic. CLI: `myrag md input.pdf --no-llm`.
 
 **JSON Schema enforcement**: `call_llm()` accepts a `schema=` parameter to send JSON Schema via `response_format`, letting llama.cpp / OpenAI servers enforce output structure natively (schemas in [constants.py](src/formatters/constants.py)).
 

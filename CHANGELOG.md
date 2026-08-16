@@ -1,5 +1,18 @@
 # Changelog — myRAG Pipeline
 
+## [0.6.6] — 2026-08-16
+
+### Added
+
+- **Deterministic markdown normalizer** (`src/parsers/markdown_normalizer.py`): runs in the `use_llm=False` path to structure raw parser output without any model call. Five transformations, all regex/line-based:
+  1. **Heading promotion** — standalone short lines preceded by a blank line → `##` headings
+  2. **List normalization** — `1)`/`1.` → `1.`, `a)`/`a.` → `a)`, `•`/`·`/`*`/`+` → `-`
+  3. **Link formatting** — bare URLs → `[url](url)` (skips code spans)
+  4. **Bold/italic repair** — closes unclosed `**`/`*` markers
+  5. **Table alignment** — normalizes pipe spacing (`| a | b |`)
+
+  Self-check: `src/parsers/tests/test_normalizer.py`.
+
 ## [0.6.5] — 2026-08-16
 
 ### Added
