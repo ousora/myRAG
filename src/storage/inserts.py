@@ -107,17 +107,19 @@ class _InsertOps:
         text = chunk_data.get("text", "")
         word_count = _count_words(text)
 
-        cursor = self.conn.execute(
+        self.conn.execute(
             """INSERT OR REPLACE INTO chunks (text, embedding, source_doc_id, chunk_index, section_path, word_count, entity_names)
                VALUES (?, ?, ?, ?, ?, ?, ?)""",
             (text, _SQLITE_VEC.serialize_float32(embedding), doc_id,
              chunk_index, json.dumps(section_path), word_count, json.dumps(entity_names))
         )
 
+        # INSERT OR REPLACE may DELETE+INSERT (new rowid) or UPDATE (same rowid).
+        # Use last_insert_rowid() to reliably get the current row's id.
+        rowid = self.conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+
         return {
-            "id": cursor.lastrowid or self.conn.execute(
-                "SELECT id FROM chunks WHERE source_doc_id=? AND chunk_index=?", (doc_id, chunk_index)
-            ).fetchone()[0],
+            "id": rowid,
             "text": chunk_data["text"],
             "section_path": section_path,
             "source_doc_id": doc_id,

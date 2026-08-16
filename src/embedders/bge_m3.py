@@ -33,6 +33,7 @@ Schema:
         - vector: float[]  # bge-m3 → 1024-d
 """
 
+import hashlib
 import logging
 import threading
 import time
@@ -93,8 +94,6 @@ def _hash_embed(text: str) -> list[float]:
     byte-pattern based, not meaning based. Upgrade: real model when
     endpoint is reachable; this only covers offline/dev mode.
     """
-    import hashlib
-
     digest = hashlib.sha256(text.encode("utf-8")).digest()
     # Convert 32 bytes → 1024 floats in [-1, 1) via byte→float mapping.
     out: list[float] = []

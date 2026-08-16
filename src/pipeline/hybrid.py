@@ -101,6 +101,7 @@ def process_file_hybrid(filepath: str, *, doc_id="doc_0", remove_page_breaks=Tru
         title = title_match.group(1).strip() if title_match else "Untitled"
         result = {"title": title, "body": content, "tags": [], "metadata": {"entities": []}}
         md_out_path = md_path
+        cleaned = content  # Provide cleaned text for summary fallback (B index)
     else:
         # 1. Parse & Clean
         parser = utils.resolve_parser(filepath)

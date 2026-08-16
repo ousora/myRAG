@@ -14,8 +14,9 @@ logger = logging.getLogger(__name__)
 # query string they are parsed as operators (e.g. "-" → AND NOT) and can raise
 # "no such column" errors. We strip them before querying.
 # Characters with special meaning in FTS5 MATCH query syntax that must be stripped:
-#   "..." phrase match, ()  grouping, - AND NOT, [] {} <> / ~ ? ! .
-_FTS_SPECIAL = re.compile(r"""["*^:()\\[\]{}<>/~?!.]+""")
+#   "..." phrase match, ()  grouping, - AND NOT (via *^), [] {} <> / ~ ? ! .
+#   ' single quote (term delimiter), \ backslash (escape char)
+_FTS_SPECIAL = re.compile(r"""["'*^:()\\[\]{}<>/~?!.']+""")
 
 
 def _deserialize_embedding(raw) -> list[float]:

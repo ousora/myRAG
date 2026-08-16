@@ -89,7 +89,6 @@ def process_file(filepath: str, *, remove_page_breaks=True, collapse_whitespace=
 
 def process_directory(dirpath: str, *, extensions=None, chunk_size=1024, **kwargs) -> list[dict]:
     """Walk a directory and process all supported files (traditional RAG)."""
-    """Walk a directory and process all supported files (traditional RAG)."""
     from pathlib import Path
 
     from parsers.dispatcher import PARSERS

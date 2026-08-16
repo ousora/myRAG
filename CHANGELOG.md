@@ -1,5 +1,15 @@
 # Changelog — myRAG Pipeline
 
+## [0.6.7] — 2026-08-16
+
+### Fixed
+
+- **Duplicate docstring in `process_directory()`**: `pipeline/core.py` had a duplicated docstring line (first line repeated twice). Removed the duplicate. (src/pipeline/core.py)
+- **`cleaned` variable undefined when reusing `.md` file**: `process_file_hybrid()` in `pipeline/hybrid.py` did not set `cleaned` when reusing an existing `.md` file via `md_path` param, causing `NameError` on the `body_for_summary = result.get("body", "") or cleaned` fallback path. Now sets `cleaned = content` to provide cleaned text for B-index summary generation. (src/pipeline/hybrid.py)
+- **`import hashlib` inside function body**: `_hash_embed()` in `embedders/bge_m3.py` imported `hashlib` inside the function body instead of at module level. Moved import to module level for consistency and performance. (src/embedders/bge_m3.py)
+- **FTS5 single-quote not stripped from queries**: `_FTS_SPECIAL` regex in `storage/search.py` missed the single-quote `'` character which is a term delimiter in FTS5. User queries containing apostrophes (e.g., "what's new") could crash with FTS5 parse errors. Added `'` to the special characters pattern. (src/storage/search.py)
+- **`cursor.lastrowid` unreliable after `INSERT OR REPLACE`**: `upsert_chunk()` in `storage/inserts.py` used `cursor.lastrowid` which may return the OLD row id when `INSERT OR REPLACE` triggers an UPDATE (same rowid), or a NEW rowid when it triggers DELETE+INSERT. Replaced with `SELECT last_insert_rowid()` which always returns the current row's id reliably. (src/storage/inserts.py)
+
 ## [0.6.6] — 2026-08-16
 
 ### Added
