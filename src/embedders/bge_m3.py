@@ -84,6 +84,26 @@ def _validate_embedding_dimension(embedding: list[float]) -> None:
         )
 
 
+def _hash_embed(text: str) -> list[float]:
+    """Deterministic pseudo-embedding from SHA-256.
+
+    ponytail: global fallback for when the embedding endpoint is down.
+    Vectors are deterministic (same text → same vector) so retrieval is
+    stable across runs, but they carry no semantic signal — similarity is
+    byte-pattern based, not meaning based. Upgrade: real model when
+    endpoint is reachable; this only covers offline/dev mode.
+    """
+    import hashlib
+
+    digest = hashlib.sha256(text.encode("utf-8")).digest()
+    # Convert 32 bytes → 1024 floats in [-1, 1) via byte→float mapping.
+    out: list[float] = []
+    for i in range(EXPECTED_EMBEDDING_DIMENSION):
+        b = digest[i % len(digest)]
+        out.append((b / 255.0) * 2 - 1)
+    return out
+
+
 class Embedder:
     """Unified embedder — delegates to remote (HTTP) or local (sentence-transformers).
 
@@ -207,9 +227,20 @@ class Embedder:
         else:
             payload = {"model": self.model, "input": text}
 
-        resp = self._post_with_retry("/v1/embeddings", payload)
-        resp.raise_for_status()
-        data = resp.json()
+        try:
+            resp = self._post_with_retry("/v1/embeddings", payload)
+            resp.raise_for_status()
+            data = resp.json()
+        except Exception as exc:
+            if getattr(get_config(), "embedding_hash_fallback", False):
+                logger.warning("Embedding API failed (%s); using hash fallback", exc)
+                if isinstance(text, str):
+                    emb = _hash_embed(text)
+                    _embed_cache_put(text, emb)
+                    return emb
+                embeddings = [_hash_embed(t) for t in text]
+                return embeddings
+            raise
 
         if isinstance(text, str):
             emb = data["data"][0]["embedding"]

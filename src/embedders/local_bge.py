@@ -11,7 +11,8 @@ from __future__ import annotations
 
 import logging
 
-from .bge_m3 import _embed_cache_get, _embed_cache_put, _validate_embedding_dimension
+from config import get_config
+from .bge_m3 import _embed_cache_get, _embed_cache_put, _hash_embed, _validate_embedding_dimension
 
 logger = logging.getLogger(__name__)
 
@@ -90,7 +91,14 @@ class LocalEmbedder:
             cached = _embed_cache_get(text)
             if cached is not None:
                 return cached
-            emb = self._model.encode(text).tolist()
+            try:
+                emb = self._model.encode(text).tolist()
+            except Exception as exc:
+                if getattr(get_config(), "embedding_hash_fallback", False):
+                    logger.warning("Local embed failed (%s); using hash fallback", exc)
+                    emb = _hash_embed(text)
+                else:
+                    raise
             _validate_embedding_dimension(emb)
             _embed_cache_put(text, emb)
             return emb
@@ -99,40 +107,46 @@ class LocalEmbedder:
         all_embeddings: list[list[float]] = []
         effective_bs = self._adaptive_batch_size(text)
 
-        for i in range(0, len(text), effective_bs):
-            batch = text[i:i + effective_bs]
-            try:
-                embeddings = self._model.encode(batch)  # (batch_n, EXPECTED_EMBEDDING_DIMENSION) numpy
-            except RuntimeError as e:
-                if "out of memory" in str(e).lower():
-                    logger.warning(
-                        "OOM on batch %d–%d (%d items), progressively reducing to single-item encoding",
-                        i, i + effective_bs, len(batch),
-                    )
-                    # Retry with smaller batches; fall back to single-item on persistent OOM.
-                    sub_batch_size = max(1, len(batch) // 2)
-                    if sub_batch_size == 0:
-                        sub_batch_size = 1
-                    for j in range(i, i + len(batch), sub_batch_size):
-                        sub_batch = text[j:j + sub_batch_size]
-                        try:
-                            sub_emb = self._model.encode(sub_batch).tolist()
-                            all_embeddings.extend(sub_emb)
-                        except RuntimeError as e2:
-                            if "out of memory" in str(e2).lower():
-                                # Absolute fallback: encode one item at a time.
-                                logger.warning("OOM persists; encoding remaining items individually")
-                                for single_item in text[j:j + sub_batch_size]:
-                                    emb = self._model.encode(single_item).tolist()
-                                    _validate_embedding_dimension(emb)
-                                    all_embeddings.append(emb)
-                            else:
-                                raise
-                    continue
-                raise
-            for e in embeddings.tolist():
-                _validate_embedding_dimension(e)
-            all_embeddings.extend(embeddings.tolist())
+        try:
+            for i in range(0, len(text), effective_bs):
+                batch = text[i:i + effective_bs]
+                try:
+                    embeddings = self._model.encode(batch)  # (batch_n, EXPECTED_EMBEDDING_DIMENSION) numpy
+                except RuntimeError as e:
+                    if "out of memory" in str(e).lower():
+                        logger.warning(
+                            "OOM on batch %d–%d (%d items), progressively reducing to single-item encoding",
+                            i, i + effective_bs, len(batch),
+                        )
+                        # Retry with smaller batches; fall back to single-item on persistent OOM.
+                        sub_batch_size = max(1, len(batch) // 2)
+                        if sub_batch_size == 0:
+                            sub_batch_size = 1
+                        for j in range(i, i + len(batch), sub_batch_size):
+                            sub_batch = text[j:j + sub_batch_size]
+                            try:
+                                sub_emb = self._model.encode(sub_batch).tolist()
+                                all_embeddings.extend(sub_emb)
+                            except RuntimeError as e2:
+                                if "out of memory" in str(e2).lower():
+                                    # Absolute fallback: encode one item at a time.
+                                    logger.warning("OOM persists; encoding remaining items individually")
+                                    for single_item in text[j:j + sub_batch_size]:
+                                        emb = self._model.encode(single_item).tolist()
+                                        _validate_embedding_dimension(emb)
+                                        all_embeddings.append(emb)
+                                else:
+                                    raise
+                        continue
+                    raise
+                for e in embeddings.tolist():
+                    _validate_embedding_dimension(e)
+                all_embeddings.extend(embeddings.tolist())
+        except Exception as exc:
+            if getattr(get_config(), "embedding_hash_fallback", False):
+                logger.warning("Local batch embed failed (%s); using hash fallback", exc)
+                return [_hash_embed(t) for t in text]
+            raise
 
         return all_embeddings
 

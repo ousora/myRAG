@@ -30,6 +30,12 @@ embedding:
   # When mode == "local":
   # local_model: "BAAI/bge-m3"   # HF model name, auto-downloads on first use
 
+  # When the configured endpoint is unreachable, fall back to a deterministic
+  # hash-based pseudo-embedding (1024-d). Same text → same vector, so retrieval
+  # is stable across runs, but vectors carry no semantic signal. Useful for
+  # offline development or when no embedding service is reachable.
+  # hash_fallback: false
+
 # ── Formatter Settings ───────────────────────────────────────────────
 formatter:
   chunk_threshold_chars: 28000   # texts above this trigger chunked processing (~7000 tokens)
