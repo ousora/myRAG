@@ -1,5 +1,25 @@
 # Changelog — myRAG Pipeline
 
+## [0.6.4] — 2026-08-16
+
+### Fixed
+
+- **Test patch target drift after merge**: `formatters/call_llm.py` was merged into `formatters/__init__.py` by an upstream monolith rewrite, but 4 tests still patched `formatters.call_llm.httpx.post` — which resolves to `getattr(call_llm_function, 'httpx')` and raises `AttributeError`. Repointed to `formatters.httpx.post` (module-level import). This matches the upstream fix in `2f7fd5a`.
+
+- **Embedder mode override lost**: `Embedder(base_url=..., model=...)` ignored explicit args when `embedding.mode=local`, returning a `LocalEmbedder` that lacks `model`/`store_chunk`. `__new__` now forces `remote` mode when either arg is supplied.
+
+- **LocalEmbedder API gap**: Added `model` class attr and `store_chunk()` method so the local backend mirrors `Embedder`'s public surface (tests and `rag_query` callers don't need to branch on backend).
+
+### Added
+
+- **Hash-based pseudo-embedding fallback**: `config.embedding.hash_fallback` (bool, default `false`). When the remote/local endpoint is unreachable, `Embedder.embed()` and `LocalEmbedder.embed()` fall back to a deterministic SHA-256 → 1024-d float vector. Same text → same vector, so retrieval is stable across runs, but vectors carry no semantic signal. See `src/embedders/tests/test_hash_fallback.py` for a runnable self-check.
+
+- **End-to-end test**: `src/tests/test_e2e_pipeline.py` — real `.txt` file → parse → clean → mock LLM formatter → chunker → hash embeddings → sqlite-vec → `rag_query` → answer. No external services required; runs in ~1.2s.
+
+### Changed
+
+- **Test count**: 254 passing (was 253).
+
 ## [0.6.3] — 2026-08-15
 
 ### Fixed
