@@ -1,11 +1,8 @@
 """Tests for configuration loading and validation."""
 
-from pathlib import Path
-from unittest.mock import patch
-
+import os
 
 from config import Config, get_config
-
 
 # ---------------------------------------------------------------------------
 # Config defaults — each new field must have a sensible default
@@ -78,26 +75,48 @@ class TestConfigValidation:
 class TestGetConfig:
     """Verify that get_config() loads from the correct file."""
 
+    def _temp_config(self, content: str):
+        """Create a temporary config file and set MYRAG_CONFIG env var."""
+        import tempfile
+        fd, path = tempfile.mkstemp(suffix=".yaml")
+        os.close(fd)
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(content)
+        old_env = os.environ.get("MYRAG_CONFIG")
+        os.environ["MYRAG_CONFIG"] = path
+        get_config.cache_clear()
+        return path, old_env
+
+    def _restore_env(self, path: str, old_env: str | None):
+        os.unlink(path)
+        if old_env is None:
+            os.environ.pop("MYRAG_CONFIG", None)
+        else:
+            os.environ["MYRAG_CONFIG"] = old_env
+        get_config.cache_clear()
+
     def test_get_config_returns_instance(self):
-        get_config.cache_clear()  # clear lru_cache so mock takes effect
-        with patch.object(Path, "exists", return_value=True), \
-             patch.object(Path, "read_text") as mock_read:
-            mock_read.return_value = (
-                "llm:\n  endpoint: http://example.com\n"
-                "formatter:\n  chunk_threshold_chars: 30000\n"
-            )
+        cfg_content = (
+            "llm:\n  endpoint: http://example.com\n"
+            "formatter:\n  chunk_threshold_chars: 30000\n"
+        )
+        path, old_env = self._temp_config(cfg_content)
+        try:
             cfg = get_config()
+        finally:
+            self._restore_env(path, old_env)
         assert isinstance(cfg, Config)
         assert cfg.chunk_threshold_chars == 30000
 
     def test_get_config_caches(self):
-        get_config.cache_clear()  # clear lru_cache so mock takes effect
-        with patch.object(Path, "exists", return_value=True), \
-             patch.object(Path, "read_text") as mock_read:
-            mock_read.return_value = (
-                "llm:\n  endpoint: http://example.com\n"
-                "formatter:\n  chunk_threshold_chars: 30000\n"
-            )
+        cfg_content = (
+            "llm:\n  endpoint: http://example.com\n"
+            "formatter:\n  chunk_threshold_chars: 30000\n"
+        )
+        path, old_env = self._temp_config(cfg_content)
+        try:
             cfg1 = get_config()
             cfg2 = get_config()
-        assert cfg1 is cfg2
+            assert cfg1 is cfg2
+        finally:
+            self._restore_env(path, old_env)

@@ -1,7 +1,7 @@
 """System prompts for the text formatter module."""
 
 
-SYSTEM_PROMPT = '''\
+SYSTEM_PROMPT = """\
 You are a document structure extractor. The user provides raw text from a {source_type} that may contain content mixed with navigation chrome, UI labels, footers, and other non-content artifacts.
 
 Your job is to extract a clean structured representation. Do NOT summarize — preserve ALL substantive content.
@@ -111,10 +111,10 @@ Rules:
 - The entity name must match exactly how it appears in the original text. Do NOT normalize, shorten, or paraphrase.
 - Only include entities that are substantively discussed in the document, not just mentioned in passing.
 - Do NOT include the document title, tags, or generic terms as entities.
-- If no notable entities are found, return an empty list (never null/missing).'''
+- If no notable entities are found, return an empty list (never null/missing)."""
 
 
-CHUNKED_SYSTEM_PROMPT = '''\
+CHUNKED_SYSTEM_PROMPT = """\
 You are a document structure extractor processing part {chunk_label} of a large document split into chunks.
 
 CRITICAL: Do NOT summarize. Preserve ALL substantive content — every sentence, every paragraph, every data point, every table. The output is what gets embedded for search — missing content means failed retrieval.
@@ -178,10 +178,10 @@ Code blocks, tables, lists, key technical terms, dates, names, numbers, statisti
 ONE clear sentence per chunk (e.g., "Covers the database schema design and indexing strategy.").
 
 {first_chunk_extra}
-{title_block}'''
+{title_block}"""
 
 
-FEW_SHOT_EXAMPLES = '''\
+FEW_SHOT_EXAMPLES = """\
 ─── FEW-SHOT EXAMPLES ───
 
 Example 1: Python Tutorial PDF →
@@ -223,7 +223,7 @@ Input preview: "Deep learning has transformed computer vision... Introduction to
   "body": "# Transformer Architecture Review\\n\\n## Introduction\\n\\nDeep learning has transformed computer vision...\\n\\n## Architecture\\n\\nThe transformer model uses attention mechanisms..."
 }}
 
-Follow these examples for formatting consistency.'''
+Follow these examples for formatting consistency."""
 
 
 def get_system_prompt(source_type: str = "web") -> str:
@@ -238,6 +238,7 @@ def get_chunked_system_prompt(chunk_index: int, total_chunks: int, title: str = 
         chunk_index: 0-based index of the current chunk.
         total_chunks: Total number of chunks.
         title: The document title (for non-first chunks to avoid repeating).
+
     """
     chunk_label = f"{chunk_index + 1}/{total_chunks}"
 
@@ -252,7 +253,7 @@ def get_chunked_system_prompt(chunk_index: int, total_chunks: int, title: str = 
     title_block = ""
     if chunk_index > 0 and title:
         title_block = (
-            f"\n## Document Title\nThe full document title is \"{title}\".\n"
+            f'\n## Document Title\nThe full document title is "{title}".\n'
             "Do NOT write this as a `# Heading` in your output — it's already on line 1 of the final file."
         )
 
@@ -335,8 +336,9 @@ def validate_format_output(result: dict) -> list[str]:
 
 def try_fix_common_issues(result: dict) -> dict:
     """Attempt to fix common formatting issues without re-calling the LLM."""
-    fixed = dict(result)
-    
+    import copy
+    fixed = copy.deepcopy(result)
+
     # Ensure tags is a list of strings
     if isinstance(fixed.get("tags"), str):
         fixed["tags"] = [fixed["tags"]]
@@ -362,7 +364,7 @@ def try_fix_common_issues(result: dict) -> dict:
         if any(lower.endswith(e) for e in ("ing", "tion", "ment", "ness")):
             return True
         return False
-    
+
     if isinstance(fixed.get("tags"), list):
         fixed["tags"] = [t for t in fixed["tags"] if not _is_generic_single_word(t)]
 

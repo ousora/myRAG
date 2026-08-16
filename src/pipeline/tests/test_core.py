@@ -1,10 +1,7 @@
 """Tests for pipeline.core reference-section stripping."""
 
-from pipeline.core import (
-    _build_doc_summary,
-    _is_reference_title,
-    _strip_reference_sections,
-)
+from pipeline.core import _build_doc_summary
+from pipeline.markdown_utils import is_reference_title, strip_reference_sections
 
 
 def test_build_doc_summary_short_body():
@@ -28,19 +25,19 @@ def test_build_doc_summary_empty():
 
 
 def test_is_reference_title_english():
-    assert _is_reference_title("References")
-    assert _is_reference_title("Further reading")
-    assert _is_reference_title("Bibliography")
-    assert not _is_reference_title("Introduction")
-    assert not _is_reference_title("Architecture")
+    assert is_reference_title("References")
+    assert is_reference_title("Further reading")
+    assert is_reference_title("Bibliography")
+    assert not is_reference_title("Introduction")
+    assert not is_reference_title("Architecture")
 
 
 def test_is_reference_title_cjk():
-    assert _is_reference_title("参考文献")
-    assert _is_reference_title("參考")
-    assert _is_reference_title("引用文献")
-    assert not _is_reference_title("架构")
-    assert not _is_reference_title("检索增強生成")
+    assert is_reference_title("参考文献")
+    assert is_reference_title("參考")
+    assert is_reference_title("引用文献")
+    assert not is_reference_title("架构")
+    assert not is_reference_title("检索增強生成")
 
 
 def test_strip_reference_sections_removes_block():
@@ -52,7 +49,7 @@ def test_strip_reference_sections_removes_block():
         "[2] Another. Work. 2021.\n\n"
         "## Conclusion\n\nFinal words."
     )
-    out = _strip_reference_sections(md)
+    out = strip_reference_sections(md)
     assert "References" not in out
     assert "[1] Author" not in out
     assert "## Intro" in out
@@ -68,7 +65,7 @@ def test_strip_reference_sections_cjk():
         "## 參考\n\n[1] 作者. 文献. \n\n"
         "## 總結\n\n总结文字。"
     )
-    out = _strip_reference_sections(md)
+    out = strip_reference_sections(md)
     assert "參考" not in out
     assert "[1] 作者" not in out
     assert "总结文字。" in out
@@ -76,12 +73,12 @@ def test_strip_reference_sections_cjk():
 
 def test_strip_reference_sections_no_refs_unchanged():
     md = "# Doc\n\n## A\n\nalpha.\n\n## B\n\nbeta."
-    assert _strip_reference_sections(md) == md
+    assert strip_reference_sections(md) == md
 
 
 def test_strip_reference_sections_last_section():
     md = "# Doc\n\n## Body\n\ncontent.\n\n## References\n\n[1] ref one.\n[2] ref two."
-    out = _strip_reference_sections(md)
+    out = strip_reference_sections(md)
     assert "ref one" not in out
     assert "ref two" not in out
     assert "content." in out

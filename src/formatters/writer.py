@@ -52,19 +52,19 @@ def _extract_protected_ranges(text: str) -> list[tuple[int, int]]:
     protected = []
 
     # Fenced code blocks: ``` ... ``` (including language tag)
-    for m in re.finditer(r'```[\s\S]*?```', text):
+    for m in re.finditer(r"```[\s\S]*?```", text):
         protected.append((m.start(), m.end()))
 
     # Inline code: `...` (single backtick pairs, not nested)
-    for m in re.finditer(r'(?<!`)`(?!`)([^`]*)`(?!`)', text):
+    for m in re.finditer(r"(?<!`)`(?!`)([^`]*)`(?!`)", text):
         protected.append((m.start(), m.end()))
 
     # Existing wikilinks: [[...]]
-    for m in re.finditer(r'\[\[.*?\]\]', text):
+    for m in re.finditer(r"\[\[.*?\]\]", text):
         protected.append((m.start(), m.end()))
 
     # Existing markdown links: [text](url)
-    for m in re.finditer(r'\[[^\]]*\]\([^)]*\)', text):
+    for m in re.finditer(r"\[[^\]]*\]\([^)]*\)", text):
         protected.append((m.start(), m.end()))
 
     return sorted(protected)
@@ -72,10 +72,7 @@ def _extract_protected_ranges(text: str) -> list[tuple[int, int]]:
 
 def _is_inside_protected(position: int, protected_ranges: list[tuple[int, int]]) -> bool:
     """Check if a character position falls within any protected range."""
-    for start, end in protected_ranges:
-        if start <= position < end:
-            return True
-    return False
+    return any(start <= position < end for start, end in protected_ranges)
 
 
 def write_to_md(result, output_dir):
@@ -87,12 +84,14 @@ def write_to_md(result, output_dir):
 
     Returns:
         Absolute path of the written file.
+
     """
     output_path = Path(output_dir).resolve()
     os.makedirs(output_path, exist_ok=True)
 
     if not result.get("title"):
-        raise ValueError("Missing 'title' in formatter output")
+        _msg = "Missing 'title' in formatter output"
+        raise ValueError(_msg)
 
     title = result["title"]
     safe_name = _safe_filename(title)
@@ -120,7 +119,7 @@ def write_to_md(result, output_dir):
         sections = metadata.get("sections", [])
         # Remove the first H1 heading (e.g., "# China National Clearing Center")
         # since we already render it above as the document title.
-        stripped_body = re.sub(r'^#\s+.*\n', '', body, count=1).strip()
+        stripped_body = re.sub(r"^#\s+.*\n", "", body, count=1).strip()
 
         # Apply wikilinks for .md display only (entities extracted by formatter)
         entities = metadata.get("entities", [])
@@ -135,7 +134,8 @@ def write_to_md(result, output_dir):
         with open(file_path, "w", encoding="utf-8") as f:
             f.write(md_content)
     except (OSError, PermissionError) as exc:  # noqa: BLE001 — log and re-raise with context
-        raise OSError(f"Failed to write markdown file to {file_path}: {exc}") from exc
+        _err_msg = f"Failed to write markdown file to {file_path}: {exc}"
+        raise OSError(_err_msg) from exc
 
     return file_path
 
@@ -151,9 +151,10 @@ def _safe_filename(title):
 
     Returns:
         Safe filename without extension, never empty.
+
     """
     # Remove only characters that cause issues across all filesystems
-    safe = re.sub(r'[/\\:*?"<>|]', '_', title)
+    safe = re.sub(r'[/\\:*?"<>|]', "_", title)
     safe = safe.strip() or "untitled"
     if len(safe) > 200:
         safe = safe[:200]
@@ -178,7 +179,7 @@ def _write_yaml_frontmatter(lines, result):
 
     lines.append("---")
     if title := result.get("title"):
-        lines.append(f"title: {repr(title)}")  # use repr for safe YAML string quoting
+        lines.append(f"title: {repr(title)}")
     if source_file:
         lines.append(f"source: {repr(source_file)}")
     if created_at:
@@ -246,7 +247,7 @@ def format_md(result):
     tmp_dir = Path(tempfile.mkdtemp(prefix="myrag_md_"))
     path = write_to_md(result, str(tmp_dir))
     try:
-        with open(path, "r", encoding="utf-8") as f:
+        with open(path, encoding="utf-8") as f:
             return f.read()
     finally:
         # Clean up the temp directory and its file.

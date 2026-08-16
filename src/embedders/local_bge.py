@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import logging
 
-from .bge_m3 import _validate_embedding_dimension, _embed_cache_get, _embed_cache_put
+from .bge_m3 import _embed_cache_get, _embed_cache_put, _validate_embedding_dimension
 
 logger = logging.getLogger(__name__)
 
@@ -47,14 +47,44 @@ class LocalEmbedder:
         # sentence-transformers holds no open network/file handles to close.
         return False
 
+    # ── Attributes that tests and callers expect on both backends ────────
+    # ``model`` mirrors Embedder.model so Embedder.__new__ can return a
+    # LocalEmbedder in local mode without callers needing to branch.
+    model: str = "BAAI/bge-m3"
+
+    def store_chunk(
+        self,
+        chunk_text: str,
+        *,
+        section_path=None,
+        doc_id="doc_0",
+        chunk_idx=0,
+    ) -> dict:
+        """Embed a single chunk and return metadata for storage.
+
+        Mirrors ``embedders.bge_m3.Embedder.store_chunk`` so the same
+        store code works for both remote and local backends.
+        """
+        embedding = self.embed(chunk_text)
+
+        return {
+            "text": chunk_text.strip(),
+            "section_path": section_path or ["General"],
+            "source_doc_id": doc_id,
+            "chunk_index": chunk_idx,
+            "word_count": len(chunk_text.split()),
+            "embedding": embedding,
+        }
+
     # ── Public API (mirrors embedders.bge_m3.Embedder) ────────────────────
 
-    def embed(self, text: str | list[str]) -> list[list[float]]:
+    def embed(self, text: str | list[str]) -> list[float] | list[list[float]]:
         """Get embeddings for one or multiple texts.
 
         Returns:
-            - str input: list[float] (single embedding) — matches remote Embedder behavior
+            - str input: list[float] (single embedding)
             - list[str] input: list[list[float]] (batch embeddings)
+
         """
         if isinstance(text, str):
             cached = _embed_cache_get(text)
@@ -121,11 +151,11 @@ class LocalEmbedder:
             return f"{instruction}{text}"
         return [f"{instruction}{t}" for t in text]
 
-    def embed_query(self, text: str | list[str]) -> list[list[float]]:
-        """Embed a user *query* with the retrieval instruction prefix.
+    def embed_query(self, text: str | list[str]) -> list[float] | list[list[float]]:
+        """Embed a user *query with the retrieval instruction prefix.
 
-        Returns ``list[list[float]]`` (one inner list per input) to stay
-        consistent with LocalEmbedder.embed's return shape.
+        Returns the same shape as ``embed``: ``list[float]`` for str input,
+        ``list[list[float]]`` for list[str] input.
         """
         return self.embed(self._maybe_prepend_instruction(text))
 

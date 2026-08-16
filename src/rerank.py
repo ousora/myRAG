@@ -29,7 +29,7 @@ def _tokenize(text: str) -> list[str]:
 
 
 def _lexical_score(query: str, text: str) -> float:
-    """Normalized lexical overlap (query-token recall) in [0, 1]."""
+    """Compute normalized lexical overlap (query-token recall) in [0, 1]."""
     q_tokens = _tokenize(query)
     if not q_tokens:
         return 0.0
@@ -44,7 +44,7 @@ def _cosine(a: list[float], b: list[float]) -> float:
     """Cosine similarity with on-the-fly L2 normalization."""
     if not a or not b:
         return 0.0
-    dot = sum(x * y for x, y in zip(a, b))
+    dot = sum(x * y for x, y in zip(a, b, strict=True))
     na = sum(x * x for x in a) ** 0.5
     nb = sum(y * y for y in b) ** 0.5
     if na == 0 or nb == 0:
@@ -74,17 +74,17 @@ def mmr_rerank(
 
     Returns:
         Re-ordered list of *candidates* (a subset of length <= k).
+
     """
     if not candidates:
         return []
     if len(candidates) <= k:
         # Nothing to drop — order by relevance only.
-        scored = sorted(
+        return sorted(
             candidates,
             key=lambda c: _lexical_score(query_text, c.get("text", "")),
             reverse=True,
         )
-        return scored
 
     relevance = [_lexical_score(query_text, c.get("text", "")) for c in candidates]
     selected: list[int] = []

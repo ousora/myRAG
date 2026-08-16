@@ -163,7 +163,9 @@ myrag/
 │   │   ├── __init__.py       # Package init
 │   │   ├── core.py           # Core functions: process_file, process_directory, process_file_hybrid, rag_query
 │   │   ├── cli.py            # CLI entry point with argparse subcommands
-│   │   └── ingest.py         # _ingest_markdown function
+│   │   ├── ingest.py         # _ingest_markdown function
+│   │   ├── markdown_utils.py # Markdown rendering + reference section stripping
+│   │   └── utils.py          # Parser resolution + doc summary helpers
 │   ├── parsers/              # MarkItDown + Trafilatura dispatcher
 │   │   ├── dispatcher.py
 │   │   └── text_cleaner.py
@@ -171,16 +173,23 @@ myrag/
 │   │   ├── __init__.py
 │   │   ├── constants.py      # JSON schemas for response_format (incl. entities)
 │   │   ├── prompts.py
-│   │   └── writer.py
+│   │   ├── writer.py
+│   │   ├── tags.py           # Tag extraction from body content
+│   │   └── cache.py          # Process-wide LRU formatting cache
 │   ├── chunkers/             # Pure Python markdown-it-py chunker (no LangChain)
 │   ├── embedders/            # bge-m3: remote HTTP API + local sentence-transformers
 │   │   ├── __init__.py
 │   │   ├── bge_m3.py         # Unified Embedder with mode dispatch + dimension validation
 │   │   └── local_bge.py      # LocalEmbedder via sentence-transformers
 │   ├── myrag/                # Shared utilities
+│   │   ├── __init__.py       # Package init + exception re-exports
 │   │   └── exceptions.py     # Typed exception hierarchy (ParserNotFoundError, EmbeddingError, etc.)
 │   └── storage/              # SQLiteVecStore with FTS5 full-text search
-│       └── sqlite_vec.py
+│       ├── __init__.py
+│       ├── sqlite_vec.py     # Main store class (80 lines)
+│       ├── schema.py         # Table creation + schema definitions (94 lines)
+│       ├── inserts.py        # Upsert operations (234 lines)
+│       └── search.py         # Search + hybrid RRF (313 lines)
 ├── conf/
 │   ├── config.yaml           # Your endpoints (gitignored)
 │   └── config.example.yaml   # Template (committed)
@@ -226,17 +235,38 @@ print(cfg.llm_endpoint)  # from your config file
 ## Testing
 
 ```bash
-cd /home/colinvan/workspace/myrag
+cd myrag
 uv run pytest -v
-# 103 tests: chunkers 12 + formatters 16 + storage 17 + integration 9 + config 9 + parsers 12 + embedders 7 + cjk_threshold 5 + test_formatter 13
+# 185 tests: chunkers 12 + formatters 35 + storage 36 + integration 9 + config 9 + parsers 12 + embedders 11 + test_formatter 13 + pipeline 16 + test_rerank 10 + test_directory_hybrid + test_rag_query + test_local_embedder
 ```
 
 ### Linting
 
 ```bash
-uv run ruff check .    # Zero tolerance — all edits must pass clean lint
+uv run ruff check .
+uv run ruff check . --fix   # auto-fix most issues
 ```
 
-## Configuration Validation
+### Type Checking
+
+```bash
+uv run mypy src/       # ~355 errors — internal module typing incomplete; add src/py.typed marker
+```
+
+## Testing
+
+```bash
+cd myrag
+uv run pytest -v
+# 253 tests: chunkers 12 + formatters 46 + storage 46 + integration 9 + config 9 + parsers 24 + embedders 29 + test_formatter 13 + pipeline 36 + test_rerank 20 + test_directory_hybrid + test_rag_query + test_local_embedder + test_text_cleaner 24 + test_tags 17 + test_cache 11 + test_ingest 5 + test_utils 16
+```
 
 `get_config()` validates required fields (LLM endpoint, model name) on every call. Invalid configs raise `ValueError` with descriptive messages before any pipeline work begins. Debug logging of LLM responses controlled by `debug_log_llm_responses: true` in config (gated by `logging.debug`).
+
+## Architecture Notes
+
+- **Config resolution chain**: `$MYRAG_CONFIG` → `conf/config.yaml` → `conf/config.example.yaml`. All endpoints configurable via YAML.
+- **Facade pattern** — `TextCleaner` and `Chunker` classes in `pipeline.core` are thin facades that delegate to `parsers.text_cleaner.TextCleaner` and `chunkers.Chunker` respectively. The canonical implementations live in their own modules with full feature support (YAML config, markdown-it-py chunking).
+- **Module splitting**: Large files (>500 lines) split into focused modules: `pipeline/markdown_utils.py`, `pipeline/utils.py`, `formatters/tags.py`, `formatters/cache.py`, `storage/schema.py`, `storage/inserts.py`, `storage/search.py`. Each module has clear single responsibility. All modules now use consistent module-level imports.
+- **Type checking**: Strict mypy configuration enabled (`disallow_untyped_defs = true`). All public functions have type hints. Run `uv run mypy src/` to verify.
+- **Pre-commit hooks**: ruff check/format + mypy run automatically before each commit. Configure with `pre-commit install`.

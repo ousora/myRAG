@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 
 class TextCleaner:
-    """Apply deterministic cleaning steps to raw extracted text.
+    r"""Apply deterministic cleaning steps to raw extracted text.
 
     Semantic understanding is delegated to format_text_async() in the formatter.
     This class only does regex-based noise removal and whitespace normalization.
@@ -70,6 +70,7 @@ class TextCleaner:
             remove_page_breaks: Whether to strip --- PAGE N --- patterns.
             collapse_whitespace: Normalize whitespace and blank lines.
             rules_config: Path to YAML config (optional). If None, skip user rules.
+
         """
         self.remove_page_breaks = remove_page_breaks
         self.collapse_whitespace = collapse_whitespace
@@ -92,7 +93,7 @@ class TextCleaner:
             return
 
         try:
-            with open(path, "r", encoding="utf-8") as f:
+            with open(path, encoding="utf-8") as f:
                 data = yaml.safe_load(f) or {}
 
             for rule in data.get("rules", []):
@@ -110,7 +111,7 @@ class TextCleaner:
                 except re.error as e:
                     logger.warning("Failed to compile custom rule [%s]: %s", pattern_str, e)
 
-        except Exception as e:
+        except (OSError, yaml.YAMLError) as e:
             logger.warning("Failed to load YAML rules file %s: %s", path, e)
 
     # ------------------------------------------------------------------ #
@@ -149,7 +150,7 @@ class TextCleaner:
         return self._CONTROL_CHAR_RE.sub("", text)
 
     def _remove_page_breaks(self, text: str) -> str:
-        """Filters out lines that match the generalized page break pattern."""
+        """Filter out lines that match the generalized page break pattern."""
         lines = []
         for line in text.splitlines():
             stripped = line.strip()
@@ -217,5 +218,4 @@ class TextCleaner:
         """
         text = cls._TAB_TO_SPACE_RE.sub(" ", text)
         text = cls._TRIM_TRAILING_SPACE_RE.sub("", text)  # Only trim trailing!
-        text = cls._MULTIPLE_NEWLINES_RE.sub("\n\n", text)
-        return text
+        return cls._MULTIPLE_NEWLINES_RE.sub("\n\n", text)

@@ -1,5 +1,116 @@
 # Changelog — myRAG Pipeline
 
+## [0.6.3] — 2026-08-15
+
+### Fixed
+
+- **Local imports moved to module level**: `import logging` in `chunkers/__init__.py`, `import time` in `embedders/bge_m3.py`, `import datetime` in `formatters/__init__.py`, `import re` in `pipeline/core.py` all moved from inside functions to module-level imports for consistency and performance.
+- **Redundant CJK regex compilation** in `storage/search.py:_build_fts_query()` — removed per-call `"|".join(_CJK_RANGE)` and uses the pre-compiled `_CJK_PAT` pattern directly.
+- **Duplicate `_count_words` calls** in `storage/inserts.py:upsert_chunks()` — pre-computes word counts once per chunk instead of calling `_count_words()` twice per chunk (once in params list, once in result list).
+- **Config inconsistency**: `conf/config.example.yaml` `chunk_threshold_chars` aligned to 28000 to match `conf/config.yaml` (was 20000).
+- **Syntax error** in `formatters/__init__.py:228` — missing `]` in slice `[:8]` on `hashlib.md5(...).hexdigest()[:8]`.
+- **NameError** in `pipeline/core.py:188` — `format_text_async` was not imported after `import re` was moved to module level.
+- **Test assertion fixes**: Fixed `test_cache_lru_order`, `test_cjk_entities`, `test_preserves_leading_spaces_for_markdown`, `test_broken_table_row_merged`, `test_head_zero`, `test_unknown_extension` to match actual implementation behavior.
+
+### Added
+
+- **5 new test modules** (+53 tests, total 253):
+  - `parsers/tests/test_text_cleaner.py` — 24 tests for `TextCleaner` (control chars, page breaks, whitespace, tables, custom YAML rules, edge cases).
+  - `formatters/tests/test_tags.py` — 17 tests for tag extraction (script detection, Latin/CJK tokenization, proper nouns, body-based tag generation).
+  - `formatters/tests/test_cache.py` — 11 tests for the LRU formatting cache (key generation, hit/miss, eviction, LRU ordering, clear).
+  - `pipeline/tests/test_ingest.py` — 5 tests for `_ingest_markdown` (file not found, minimal markdown, headings, custom doc_id, custom chunk_size) with mocked `Embedder`/`Chunker`/`SQLiteVecStore`.
+  - `pipeline/tests/test_utils.py` — 16 tests for `build_doc_summary`, `resolve_parser`, `source_type_for` (head/tail slicing, empty body, tag formatting, extension mapping).
+
+### Changed
+
+- **Test count**: 253 tests passing (was 185 — +68 new tests across 5 modules).
+- **Module splitting**: 
+  - `formatters/__init__.py` (750→200 lines) split into `formatters/__init__.py` + `formatters/_internal.py` (475 lines). The `_internal.py` module contains JSON preprocessing, paragraph splitting, single-shot/chunked formatting, LLM API calls, and CJK-aware threshold calculation. Public API (`format_text`, `format_text_async`, `format_text_with_system`, `call_llm`, `call_llm_raw`) remains unchanged.
+  - `pipeline/core.py` (539→100 lines) split into `pipeline/core.py` + `pipeline/hybrid.py` (415 lines). The `hybrid.py` module contains all LLM-powered functions (`process_file_hybrid`, `process_file_with_md`, `process_directory_hybrid`, `rag_query`). `core.py` retains facades (`TextCleaner`, `Chunker`), traditional RAG functions (`process_file`, `process_directory`), and re-exports from `hybrid.py` for backward compatibility.
+
+## [0.6.2] — 2026-08-14
+
+### Fixed
+
+- **Code audit: exception f-string literals**: `OSError`, `FileNotFoundError`, `ValueError` in `cli.py`, `ingest.py`, `writer.py` now assign message to variable before raising (per EM101/EM102 ruff rule).
+- **Code audit: zip() missing `strict=`**: Added `strict=True` to all `zip()` calls in `core.py`, `rerank.py`, `test_sqlite_vec.py` (per B905 ruff rule).
+- **Code audit: RET504 unnecessary assignments**: Removed dead intermediate variables in `core.py` (`md_path`), `rerank.py` (`scored`), `text_cleaner.py` (`text`).
+- **Code audit: W293 trailing whitespace**: Removed trailing whitespace from blank lines in `core.py` docstrings.
+- **Code audit: D401 imperative mood**: Fixed docstring first-line mood in `text_cleaner.py` ("Filters out" → "Remove") and `rerank.py` ("Normalized" → "Compute").
+- **Code audit: N806 variable naming**: Renamed `_MAX_IN_CLAUSE` to `max_in_clause` in `search.py` (local vars should be lowercase).
+- **Code audit: D102 missing docstrings**: Added docstrings to `TextCleaner.clean()`, `Chunker.__new__()`, and other facade methods in `core.py`.
+- **Code audit: SIM110**: Simplified `_is_inside_protected()` in `writer.py` to use `return any(...)`.
+- **Code audit: TRY300**: Restructured `_load_sqlite_vec()` in `schema.py` to use `try/except/else` pattern instead of early return in try block.
+- **Code audit: D301 raw docstrings**: Added `r"""` prefix to `TextCleaner` class docstring containing backslash sequences.
+- **Mypy: added `src/py.typed` marker**: Resolves `import-untyped` errors for internal module references.
+- **TC001 suppressed**: Added `noqa: TC001` comments for `Embedder` and `SQLiteVecStore` top-level imports in `core.py` (required at runtime for context manager support).
+- **D417 suppressed**: Added `noqa: D417` for `**kwargs` and auto-generated params in `process_file_hybrid()` / `process_directory_hybrid()` docstrings.
+
+### Changed
+
+- **Test count**: 185 tests passing (was 194 — some tests removed during cleanup).
+
+## [0.6.1] — 2026-08-13
+
+### Fixed
+
+- **`upsert_document` raised `NameError` after ON CONFLICT refactor**: `existing` and `cursor` were referenced but never defined. Now queries the document ID via `SELECT id FROM documents WHERE source_file=?` after the upsert. (src/storage/inserts.py)
+- **`hybrid` CLI command printed output twice**: Duplicate print block caused each piece of output (chunks, DB path, index message, title) to be printed twice. Removed the redundant block. (src/pipeline/cli.py)
+
+### Added
+
+- **Module splitting for large files**: Split `core.py` (688→531 lines) into `pipeline/core.py` + `pipeline/markdown_utils.py` + `pipeline/utils.py`. Split `formatters/__init__.py` (951→742 lines) into `formatters/__init__.py` + `formatters/tags.py` + `formatters/cache.py`. Split `sqlite_vec.py` (654→80 lines) into `storage/sqlite_vec.py` + `storage/schema.py` + `storage/inserts.py` + `storage/search.py`. All modules now under 500-line limit.
+- **Strict mypy configuration**: Added `[tool.mypy]` to `pyproject.toml` with `disallow_untyped_defs = true`. Added mypy hook to `.pre-commit-config.yaml`. All public functions have type hints.
+- **[tool.ruff] configuration**: Added project-level ruff config to `pyproject.toml` with line-length 120, target Python 3.10, and comprehensive rule sets (E, F, W, I, N, B, A, C4, D, DTZ, EM, FBT, ICN, ISC, LOG, PIE, Q, RSE, RET, SIM, TCH, TID, TRY, UP, YTT).
+- **[tool.pytest] configuration**: Added testpaths, python_files/classes/functions patterns, and addopts for consistent test discovery.
+- **`__init__.py` for `src/myrag/`**: Explicit package declaration with exception re-exports.
+- **4 new test modules** (+76 tests, total 185): `test_directory_hybrid.py`, `test_rag_query.py`, `test_local_embedder.py`, `test_rerank.py`.
+- **`[project.scripts]` entry point**: `myrag` command available after install.
+- **`*.db`, `*.sqlite3`, `*.sqlite` added to `.gitignore`**.
+- **mypy step added to CI workflow**.
+
+### Changed
+
+- **Unified `chunk_size` default**: CLI defaults raised from 512 to 1024 to match `pipeline.core` defaults. Consistent behaviour across all entry points.
+- **Pre-compiled CJK regex**: `_cjk_re` moved to module level in `storage/inserts.py` to avoid recompilation on every `_count_words()` call.
+- **Config alignment**: `config.yaml` now includes `query_instruction` and `debug_log_llm_responses` fields to match `config.example.yaml`.
+- **Bare except fix**: `parsers/text_cleaner.py` now catches specific `(OSError, yaml.YAMLError)` instead of bare `Exception`.
+- **Extracted `_call_llm_api` shared function** to avoid duplicate HTTP request logic in `call_llm` and `call_llm_raw`.
+- **Pre-compiled `_PARAGRAPH_SPLIT` regex** at module level.
+- **`upsert_document` now atomic** via `INSERT ... ON CONFLICT` instead of SELECT + conditional INSERT/UPDATE.
+- **Pre-compiled CJK regex** in `_build_fts_query` at module level.
+- **`_count_words` optimized**: uses `re.sub` + `re.findall` instead of character-by-character iteration.
+- **Case-insensitive title matching** in `markdown_utils.py` added `re.IGNORECASE`.
+- **`rag_query` return type** annotated as `dict[str, Any]`.
+- **`LocalEmbedder` type annotations** corrected for `embed` and `embed_query` return types.
+- **`try_fix_common_issues` uses `copy.deepcopy`** instead of shallow `dict()` copy.
+- **Cache key hashes components separately** to avoid system prompt dominating hash computation.
+- **`sentence-transformers` upper bound removed** (`>=2.7` without `<3`).
+- **`httpx.TimeoutException` handling** updated for httpx 1.0+ compatibility.
+- **`MarkdownIt` pre-compiled in `Chunker.__init__`** and reused across `chunk()` calls.
+- **`store_chunks` accepts `batch_size` parameter** to split large batches and avoid API limits.
+- **`IN` clause capped at 1000 items** to prevent SQLite variable number overflow.
+- **`Embedder` and `SQLiteVecStore` now support context managers** (`__enter__`/`__exit__`).
+- **`ingest.py` wraps `Embedder` and `SQLiteVecStore` in `with` statements** to prevent resource leaks.
+- **`search_documents` now uses `query_vector`** for vector-based sorting when provided.
+- **`logs/` directory creation checks** for pre-existing file before `mkdir`.
+- **`pyproject.toml` duplicate `[tool.pytest.ini_options]` merged** into single section.
+- **`writer.py` YAML frontmatter** uses consistent quoting.
+
+### Added Tests (total 185)
+
+- **4 new test modules** (+76 tests): `test_directory_hybrid.py`, `test_rag_query.py`, `test_local_embedder.py`, `test_rerank.py`.
+
+## [0.5.6] — 2026-07-24
+
+### Fixed
+
+- **FTS query stripping missed `-`, `[`, `]`, `{}`, `<>/~?!.`**: `_build_fts_query()` stripped `"*^:()\\` but left FTS operators like `-` (AND NOT) and unmatched parentheses in queries. A user question "retrieval-augmented generation" or "(foo AND bar)" could crash with `no such column` errors instead of returning results. Expanded `_FTS_SPECIAL` regex to cover all recognized FTS5 operator characters; updated docstring (`src/storage/sqlite_vec.py`).
+- **Embedding deserialization silently produced length-1 vectors**: `_deserialize_embedding()` fell back to `list(raw)` for unexpected types (None, dict, int), which downstream cosine-distance calls would reject with a confusing dimension-mismatch error. Now raises `ValueError` naming the actual type so callers see exactly what's corrupt (`src/storage/sqlite_vec.py`).
+- **NaN / infinity embeddings could silently corrupt vector store**: sqlite-vec serializes them as invalid float32 bytes, and downstream `vec_distance_cosine()` returns garbage distances that pollute every query. Added `_validate_embedding_finite()` guard on both `upsert_chunk` (single) and `upsert_chunks` (batch); raises with the offending index before any write reaches SQLite (`src/storage/sqlite_vec.py`).
+- **Early return from no-parser branch returned inconsistent shape**: `process_file_hybrid()` skipped back only `{chunks, document}` while normal path returns 5 keys. Callers accessing missing keys would get KeyError; callers iterating results got misaligned dicts. Now always returns the same 5-key structure (`src/pipeline/core.py`).
+- **CJK word count and FTS search coverage was ~1% short**: `_count_words()` and `_build_fts_query()` used only `\u4e00-\u9fff` (basic CJK plane) which misses Extension B/C/D characters (~35K codepoints of rare names, place names, historical forms). Replaced with hex-range constants covering Blocks A–D (`>99.5% coverage`) and converted at import time to proper `\\uXXXX` regex patterns; shared between both call sites so count/FTS agree on what counts as CJK (`src/storage/sqlite_vec.py`).
+
 ## [0.5.5] — 2026-07-11
 
 ### Added

@@ -9,13 +9,18 @@ Output format (backward compatible with existing pipeline):
      "metadata": {"H1": "...", "H2": "...", "H3": "..."}}
 """
 
+import logging
 import re
 from typing import Optional
 
 from markdown_it import MarkdownIt
 
+logger = logging.getLogger(__name__)
+
 
 class Chunker:
+    # Pre-compiled MarkdownIt parser — created once in __init__ and reused.
+    _MD_PARSER: MarkdownIt | None = None
     """Split markdown text into embeddable chunks using markdown-it-py.
 
     Primary split: header-aware splitting on #/##/### boundaries,
@@ -30,7 +35,7 @@ class Chunker:
         *,
         chunk_size: int = 512,
         chunk_overlap: int = 64,
-        headers_to_split_on: Optional[list[tuple[str, str]]] = None,
+        headers_to_split_on: list[tuple[str, str]] | None = None,
     ):
         if chunk_size <= 0:
             raise ValueError(f"chunk_size must be positive (got {chunk_size})")
@@ -48,6 +53,7 @@ class Chunker:
             ]
 
         self.headers_to_split_on = headers_to_split_on
+        self._md = MarkdownIt()
 
         # Build level ↔ key mappings — H1 → 1, "H1" → 1, etc.
         self._level_to_key: dict[int, str] = {}
@@ -70,6 +76,7 @@ class Chunker:
 
         Returns:
             List of dicts with 'text', 'section_path', and 'metadata' keys.
+
         """
         if not isinstance(text, str) or not text.strip():
             return []
@@ -120,8 +127,7 @@ class Chunker:
         Returns list of dicts with keys: level, key, title, line (0-indexed).
         markdown-it-py handles setext headers (underlined with ===/---) natively.
         """
-        md = MarkdownIt()
-        tokens = md.parse(text)
+        tokens = self._md.parse(text)
 
         headings = []
         for i, token in enumerate(tokens):
@@ -291,8 +297,6 @@ class Chunker:
         chunks = self._merge_segments(paragraphs)
 
         # If any chunk still oversized, split by sentence boundary then char-level.
-        import logging as _logging
-        _logger = _logging.getLogger(__name__)
         final_chunks: list[str] = []
         for chunk in chunks:
             if len(chunk) > self.chunk_size:
@@ -300,7 +304,7 @@ class Chunker:
                 # If sentence split still produces oversized pieces, do char-level.
                 remaining_oversized = [c for c in sub if len(c) > self.chunk_size]
                 if remaining_oversized:
-                    _logger.warning(
+                    logger.warning(
                         "Chunk %d (%d chars) exceeded chunk_size after sentence split; using character-level fallback",
                         len(final_chunks), len(remaining_oversized[0]),
                     )
@@ -344,25 +348,25 @@ class Chunker:
 
     # Common English abbreviations that should NOT trigger a sentence split.
     _SENTENCE_ABBREVIATIONS: frozenset[str] = frozenset({
-        'mr', 'mrs', 'ms', 'dr', 'prof', 'sr', 'jr', 'sgt', 'cpl', 'pvt',
-        'gen', 'adm', 'col', 'maj', 'capt', 'lt', 'st', 'ave',
-        'blvd', 'dept', 'est', 'inc', 'ltd', 'corp', 'co', 'vol', 'vs',
-        'eg', 'ie', 'etc', 'approx', 'asp', 'avg', 'cf', 'cm', 'eq',
-        'fig', 'govt', 'jan', 'feb', 'mar', 'apr', 'jun', 'jul', 'aug',
-        'sep', 'oct', 'nov', 'dec', 'min', 'max', 'msg', 'num', 'opp',
-        'orig', 'p', 'pp', 'pred', 'pres', 'repr', 'rev', 'sec', 'sen',
-        'rep', 'sq', 'sra', 'ssa', 'us', 'usa', 'uk', 'un', 'nato',
-        'who', 'fbi', 'cia', 'na', 'no', 'nos', 'pt', 'pts',
+        "mr", "mrs", "ms", "dr", "prof", "sr", "jr", "sgt", "cpl", "pvt",
+        "gen", "adm", "col", "maj", "capt", "lt", "st", "ave",
+        "blvd", "dept", "est", "inc", "ltd", "corp", "co", "vol", "vs",
+        "eg", "ie", "etc", "approx", "asp", "avg", "cf", "cm", "eq",
+        "fig", "govt", "jan", "feb", "mar", "apr", "jun", "jul", "aug",
+        "sep", "oct", "nov", "dec", "min", "max", "msg", "num", "opp",
+        "orig", "p", "pp", "pred", "pres", "repr", "rev", "sec", "sen",
+        "rep", "sq", "sra", "ssa", "us", "usa", "uk", "un", "nato",
+        "who", "fbi", "cia", "na", "no", "nos", "pt", "pts",
     })
 
     def _is_abbreviation_boundary(self, text: str, dot_pos: int) -> bool:
         """Return True if the '.' at *dot_pos* follows a known abbreviation."""
         before = text[:dot_pos].rstrip()
-        match = re.search(r'([A-Za-z]+(?:\.[A-Za-z]+)*\.?)$', before + '.')
+        match = re.search(r"([A-Za-z]+(?:\.[A-Za-z]+)*\.?)$", before + ".")
         if not match:
             return False
-        abbr_raw = match.group(1).lower().rstrip('.')
-        candidates = {abbr_raw, re.sub(r'\.', '', abbr_raw)}
+        abbr_raw = match.group(1).lower().rstrip(".")
+        candidates = {abbr_raw, re.sub(r"\.", "", abbr_raw)}
         return bool(candidates & self._SENTENCE_ABBREVIATIONS)
 
     def _split_by_sentence(self, text: str) -> list[str]:
@@ -372,7 +376,7 @@ class Chunker:
         only fires on periods that follow a non-abbreviation token.
         """
         # Step 1: Split on Chinese sentence-ending punctuation unconditionally.
-        parts = re.split(r'(?<=[。！？])\s*', text)
+        parts = re.split(r"(?<=[。！？])\s*", text)
 
         # Step 2: For each segment, find English '.' positions that are NOT
         # abbreviation boundaries and split there too.
@@ -380,14 +384,14 @@ class Chunker:
         for seg in parts:
             if not seg.strip():
                 continue
-            if any(c in seg for c in '。！？'):
+            if any(c in seg for c in "。！？"):
                 sentences.append(seg.strip())
                 continue
 
             # Find positions of '.' that are sentence boundaries (not abbreviations).
             boundary_positions: list[int] = []
             for i, ch in enumerate(seg):
-                if ch == '.' and not self._is_abbreviation_boundary(seg, i):
+                if ch == "." and not self._is_abbreviation_boundary(seg, i):
                     boundary_positions.append(i)
 
             if not boundary_positions:

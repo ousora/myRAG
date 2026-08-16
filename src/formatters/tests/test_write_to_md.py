@@ -1,5 +1,7 @@
 import os
+
 from formatters.writer import write_to_md
+
 
 def test_write_to_md_from_doc():
     # Mock result from format_text()
@@ -24,15 +26,15 @@ def test_write_to_md_from_doc():
     }
 
     output_dir = "output/test_audit"
-    
+
     # Run the writer
     path = write_to_md(result, output_dir)
-    
+
     # Assertions
     assert os.path.exists(path)
-    assert "项目审核报告" in open(path).read()
-    assert "审核结论" in open(path).read()
-    assert "修复清单" in open(path).read()
+    assert "项目审核报告" in open(path, encoding="utf-8").read()
+    assert "审核结论" in open(path, encoding="utf-8").read()
+    assert "修复清单" in open(path, encoding="utf-8").read()
 
 if __name__ == "__main__":
     test_write_to_md_from_doc()

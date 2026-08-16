@@ -7,7 +7,6 @@ from pathlib import Path
 
 import pytest
 
-
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
@@ -17,14 +16,14 @@ def store():
     """Create a temp-file SQLiteVecStore for each test."""
     fd, path = tempfile.mkstemp(suffix=".db")
     os.close(fd)
+    from storage.sqlite_vec import SQLiteVecStore
+    db = SQLiteVecStore(path)
+    yield db
     try:
-        from storage.sqlite_vec import SQLiteVecStore
-        db = SQLiteVecStore(path)
-        yield db
-        # Don't call db.close() — the test_close_closes_connection test already
-        # closes the connection, and calling close() twice raises an error.
-    finally:
-        Path(path).unlink(missing_ok=True)
+        db.close()
+    except Exception:
+        pass
+    Path(path).unlink(missing_ok=True)
 
 
 # ---------------------------------------------------------------------------
@@ -114,9 +113,9 @@ class TestUpsertChunk:
 
         out = store.get_embeddings_by_ids([r0["id"], r1["id"]])
         assert len(out) == 2
-        for orig, got in zip(embs, out):
+        for orig, got in zip(embs, out, strict=True):
             assert len(got) == 1024
-            assert all(abs(o - g) < 0.001 for o, g in zip(orig, got))
+            assert all(abs(o - g) < 0.001 for o, g in zip(orig, got, strict=True))
 
     def test_get_embeddings_by_ids_unknown_is_empty(self, store):
         """Unknown ids yield an empty list kept in the requested position."""
@@ -203,7 +202,7 @@ class TestGetChunksByDoc:
         assert isinstance(retrieved_emb, list), f"Expected list, got {type(retrieved_emb)}"
         assert len(retrieved_emb) == 1024, f"Expected 1024 dims, got {len(retrieved_emb)}"
         # Values should be close (float32 precision loss is expected)
-        for orig, retrieved in zip(emb, retrieved_emb):
+        for orig, retrieved in zip(emb, retrieved_emb, strict=True):
             assert abs(orig - retrieved) < 0.001, \
                 f"Embedding mismatch: orig={orig}, retrieved={retrieved}"
 

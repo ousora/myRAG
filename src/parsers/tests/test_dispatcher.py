@@ -56,37 +56,37 @@ class TestResolveParser:
     """Test resolve_parser routing logic."""
 
     def test_resolve_pdf(self):
-        from parsers.dispatcher import resolve_parser, MarkItDownParser
+        from parsers.dispatcher import MarkItDownParser, resolve_parser
 
         parser = resolve_parser("report.pdf")
         assert isinstance(parser, MarkItDownParser)
 
     def test_resolve_docx(self):
-        from parsers.dispatcher import resolve_parser, MarkItDownParser
+        from parsers.dispatcher import MarkItDownParser, resolve_parser
 
         parser = resolve_parser("document.docx")
         assert isinstance(parser, MarkItDownParser)
 
     def test_resolve_markdown(self):
-        from parsers.dispatcher import resolve_parser, MarkItDownParser
+        from parsers.dispatcher import MarkItDownParser, resolve_parser
 
         parser = resolve_parser("readme.md")
         assert isinstance(parser, MarkItDownParser)
 
     def test_resolve_txt(self):
-        from parsers.dispatcher import resolve_parser, MarkItDownParser
+        from parsers.dispatcher import MarkItDownParser, resolve_parser
 
         parser = resolve_parser("notes.txt")
         assert isinstance(parser, MarkItDownParser)
 
     def test_resolve_html(self):
-        from parsers.dispatcher import resolve_parser, TrafilaturaParser
+        from parsers.dispatcher import TrafilaturaParser, resolve_parser
 
         parser = resolve_parser("page.html")
         assert isinstance(parser, TrafilaturaParser)
 
     def test_resolve_htm_alias(self):
-        from parsers.dispatcher import resolve_parser, TrafilaturaParser
+        from parsers.dispatcher import TrafilaturaParser, resolve_parser
 
         parser = resolve_parser("page.htm")
         assert isinstance(parser, TrafilaturaParser)
@@ -106,13 +106,13 @@ class TestResolveParser:
             PARSERS.update(original)
 
     def test_fallback_to_markitdown_for_pptx(self):
-        from parsers.dispatcher import resolve_parser, MarkItDownParser
+        from parsers.dispatcher import MarkItDownParser, resolve_parser
 
         parser = resolve_parser("presentation.pptx")
         assert isinstance(parser, MarkItDownParser)
 
     def test_fallback_to_markitdown_for_xlsx(self):
-        from parsers.dispatcher import resolve_parser, MarkItDownParser
+        from parsers.dispatcher import MarkItDownParser, resolve_parser
 
         parser = resolve_parser("spreadsheet.xlsx")
         assert isinstance(parser, MarkItDownParser)

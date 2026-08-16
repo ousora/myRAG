@@ -8,13 +8,12 @@ from unittest.mock import Mock, patch
 import pytest
 
 from formatters import (
+    _fix_bare_quotes_in_body_field,
+    _preprocess_json,
     format_text,
     format_text_async,
-    _preprocess_json,
-    _fix_bare_quotes_in_body_field,
 )
 from formatters.prompts import get_system_prompt
-
 
 VALID_RESPONSE = {
     "title": "Test Article",
@@ -44,7 +43,6 @@ class MockResponse:
 
 def _mock_response(json_data: dict) -> Mock:
     """Create a mock httpx.post that returns our test response."""
-    
     resp = MockResponse({"choices": [{"message": {"content": json.dumps(json_data)}}]})
     post_mock = Mock(return_value=resp)
     return post_mock
@@ -103,7 +101,7 @@ class TestFormatTextAsync:
         assert isinstance(future, Future)
 
     def test_format_text_async_result_matches_sync(self):
-        """async result should match sync call when mocked."""
+        """Async result should match sync call when mocked."""
         with patch("formatters.httpx.post", _mock_response(VALID_RESPONSE)):
             future = format_text_async("test text", source_type="web")
             result = future.result(timeout=10)
@@ -133,7 +131,7 @@ class TestPreprocessJson:
         assert json.loads(result) == {"x": [1, 2, 3]}
 
     def test_no_fence_but_wrapped_with_text(self):
-        raw = "Here is the answer:\n{ \"hello\": \"world\" }"
+        raw = 'Here is the answer:\n{ "hello": "world" }'
         result = _preprocess_json(raw)
         assert '"hello"' in result and '"world"' in result
 
@@ -188,7 +186,7 @@ class TestFixBareQuotes:
     def test_bare_quote_inside_value_gets_escaped(self):
         """Bare quotes inside body value get escaped so JSON becomes parseable."""
         q = chr(34)  # literal double-quote character
-        content = '{"title": "Test", "body": "She said ' + q + 'hello' + q + ' world"}'
+        content = '{"title": "Test", "body": "She said ' + q + "hello" + q + ' world"}'
         result = _fix_bare_quotes_in_body_field(content)
         assert result is not None
         parsed = json.loads(result)
