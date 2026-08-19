@@ -19,7 +19,13 @@ Raw file (.pdf/.docx/.html/.md/.txt)
     ├→ write_to_md(result)        # .md file with [[Entity]] wikilinks
     │                              # (entities extracted by LLM, matched to text)
     │
-    └→ _render_markdown_with_sections(result)
+    └→ pipeline.hybrid functions (LLM-powered):
+        - process_file_hybrid() — parse → LLM format → chunk → embed (Hybrid A+B)
+        - process_file_with_md() — parse → LLM format → write structured .md
+        - process_directory_hybrid() — batch directory processing with concurrency
+        - rag_query() — retrieve chunks + generate LLM answer
+
+    Internal pipeline steps:
         ↓ chunker.chunk(body)     # markdown-it-py (pure Python, no LangChain)
         ↓ _match_entities()       # tag chunks with entity_names from text match
         ↓ embedder.store_chunks() # bge-m3 → 1024-d (remote API or local CPU)
@@ -141,25 +147,25 @@ cp conf/config.example.yaml conf/config.yaml
 
 ```bash
 # 1. Generate .md only (inspect or edit before storage)
-python -m pipeline md input.pdf --output-dir output/
+python -m src md input.pdf --output-dir output/
 
 # 1b. Generate .md WITHOUT calling the LLM (offline / parser output only)
-python -m pipeline md input.pdf --output-dir output/ --no-llm
+python -m src md input.pdf --output-dir output/ --no-llm
 
 # 2. Ingest an existing .md into sqlite-vec (no LLM call)
-python -m pipeline ingest output/doc.md --store data/doc.db
+python -m src ingest output/doc.md --store data/doc.db
 
 # 3. Generate .md and auto-ingest (two-step, transparent)
-python -m pipeline process input.pdf --store data/doc.db
+python -m src process input.pdf --store data/doc.db
 
 # 3b. Same, but skip the LLM formatter
-python -m pipeline process input.pdf --store data/doc.db --no-llm
+python -m src process input.pdf --store data/doc.db --no-llm
 
 # Hybrid mode: generate .md + ingest in one command with LLM formatting
-python -m pipeline hybrid input.pdf --store data/doc.db
+python -m src hybrid input.pdf --store data/doc.db
 
-# Traditional (no LLM, no storage)
-python -m pipeline process-file input.txt --chunk-size 512
+# Traditional CLI (no LLM, no sqlite-vec)
+python -m src process-file input.txt --chunk-size 512
 ```
 
 ## Directory Structure
