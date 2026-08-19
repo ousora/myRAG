@@ -23,11 +23,11 @@ import httpx
 import parsers  # noqa: F401 — loads dispatcher (MarkItDown + Trafilatura)
 import parsers.markdown_normalizer  # noqa: F401 — registers normalize_markdown
 from chunkers import Chunker
-from config import get_config_lazy as _get_config
+from config import CLEAN_RULES_PATH, get_config_lazy as _get_config
 from parsers.text_cleaner import TextCleaner
 
-from . import markdown_utils, utils
-from .utils import build_doc_summary as _build_doc_summary
+from . import markdown_utils, utils  # noqa: F401,TC001 — re-exported for test patching
+from .utils import build_doc_summary as _build_doc_summary  # noqa: F401,TC001 — re-exported for test import
 
 logger = logging.getLogger(__name__)
 
@@ -66,7 +66,7 @@ def _format_result(cleaned: str, filepath: str, *, use_llm: bool = True,
 
 
 def process_file_hybrid(filepath: str, *, doc_id="doc_0", remove_page_breaks=True,
-                        collapse_whitespace=True, rules_config="conf/clean_rules.yaml", chunk_size=1024, store_path=None, md_output_dir=None, md_path=None, use_llm=True):
+                        collapse_whitespace=True, rules_config: str | None = None, chunk_size=1024, store_path=None, md_output_dir=None, md_path=None, use_llm=True):
     """Parse file with LLM formatter → chunker → embedder → sqlite-vec (Hybrid A+B).
 
     Args:  # noqa: D417
@@ -116,6 +116,8 @@ def process_file_hybrid(filepath: str, *, doc_id="doc_0", remove_page_breaks=Tru
             }
 
         raw_text = parser.parse(filepath)
+        if rules_config is None:
+            rules_config = str(CLEAN_RULES_PATH)
         cleaned = TextCleaner(remove_page_breaks=remove_page_breaks, collapse_whitespace=collapse_whitespace, rules_config=rules_config).clean(raw_text)
 
         # 2. LLM Format (async) — skip when use_llm=False
@@ -312,6 +314,8 @@ def process_directory_hybrid(dirpath: str, *, store_path=None, md_output_dir=Non
                 md_output_dir=md_output_dir,
                 **kwargs,
             )
+        except (KeyboardInterrupt, SystemExit):
+            raise
         except Exception as exc:  # noqa: BLE001 — one bad file shouldn't abort the batch
             logger.warning("Failed to process %s: %s", fp, exc)
             return fp, {"chunks": [], "document": {}}

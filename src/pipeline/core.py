@@ -55,13 +55,15 @@ from . import (
     markdown_utils,  # noqa: F401,TC001 — re-exported so tests can patch pipeline.core.markdown_utils
     utils,
 )
+from config import CLEAN_RULES_PATH
+
 from .hybrid import Chunker, TextCleaner, _get_config  # noqa: F401,TC001 — re-exported for test patching
 from .utils import build_doc_summary as _build_doc_summary  # noqa: F401,TC001 — re-exported for test import
 
 logger = logging.getLogger(__name__)
 
 
-def process_file(filepath: str, *, remove_page_breaks=True, collapse_whitespace=True, rules_config="conf/clean_rules.yaml", chunk_size=1024) -> list[dict]:
+def process_file(filepath: str, *, remove_page_breaks=True, collapse_whitespace=True, rules_config: str | None = None, chunk_size=1024) -> list[dict]:
     """Parse a single file and return structured chunks (traditional RAG).
 
     Pipeline: parser → cleaner → chunker → output dict list.
@@ -76,6 +78,8 @@ def process_file(filepath: str, *, remove_page_breaks=True, collapse_whitespace=
         return []
 
     raw_text = parser.parse(filepath)
+    if rules_config is None:
+        rules_config = str(CLEAN_RULES_PATH)
     cleaned = TextCleaner(remove_page_breaks=remove_page_breaks, collapse_whitespace=collapse_whitespace, rules_config=rules_config).clean(raw_text)
     chunks = Chunker(chunk_size=chunk_size).chunk(cleaned)
 

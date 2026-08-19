@@ -84,7 +84,7 @@ class TestGetConfig:
             f.write(content)
         old_env = os.environ.get("MYRAG_CONFIG")
         os.environ["MYRAG_CONFIG"] = path
-        get_config.cache_clear()
+        get_config(reset=True)
         return path, old_env
 
     def _restore_env(self, path: str, old_env: str | None):
@@ -93,7 +93,7 @@ class TestGetConfig:
             os.environ.pop("MYRAG_CONFIG", None)
         else:
             os.environ["MYRAG_CONFIG"] = old_env
-        get_config.cache_clear()
+        get_config(reset=True)
 
     def test_get_config_returns_instance(self):
         cfg_content = (

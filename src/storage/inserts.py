@@ -145,7 +145,7 @@ class _InsertOps:
         params = [
             (
                 chunk["text"],
-                _SQLITE_VEC.serialize_float32(chunk.get("embedding", [0.0])),
+                _SQLITE_VEC.serialize_float32(chunk.get("embedding") or [0.0] * 1024),
                 doc_id,
                 i,
                 json.dumps(chunk.get("section_path", ["General"])),

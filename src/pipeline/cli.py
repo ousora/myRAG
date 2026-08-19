@@ -4,11 +4,17 @@ import argparse
 import json
 import logging
 import logging.handlers
+import sys
 from pathlib import Path
 
 from config import get_config_lazy as _get_config
 
 logger = logging.getLogger(__name__)
+
+
+def _cli_print(*args, **kwargs):
+    """Print to stdout so it's separated from logging (which goes to stderr)."""
+    print(*args, **kwargs)
 
 
 def main():
@@ -69,7 +75,7 @@ def main():
     root_logger.handlers.clear()
 
     # Console handler
-    console = logging.StreamHandler()
+    console = logging.StreamHandler(sys.stderr)
     console.setLevel(logging.INFO)
     console.setFormatter(logging.Formatter("%(levelname)s: %(message)s"))
     root_logger.addHandler(console)
@@ -99,22 +105,22 @@ def main():
     if args.command == "process-file":
         from pipeline.core import process_file
         chunks = process_file(args.input, chunk_size=args.chunk_size)
-        print(json.dumps(chunks, indent=2, ensure_ascii=False))
+        _cli_print(json.dumps(chunks, indent=2, ensure_ascii=False))
 
     elif args.command == "process-directory":
         from pipeline.core import process_directory
         chunks = process_directory(args.input, chunk_size=args.chunk_size)
-        print(json.dumps(chunks, indent=2, ensure_ascii=False))
+        _cli_print(json.dumps(chunks, indent=2, ensure_ascii=False))
 
     elif args.command == "hybrid":
         from pipeline.core import process_file_hybrid
         result = process_file_hybrid(args.input, doc_id=args.doc_id, store_path=args.store)
-        print(f"Chunks: {len(result['chunks'])}")
+        _cli_print(f"Chunks: {len(result['chunks'])}")
         if result.get("db_path"):
-            print(f"DB:     {result['db_path']}")
-        print("Document index created")
+            _cli_print(f"DB:     {result['db_path']}")
+        _cli_print("Document index created")
         if result.get("format_result"):
-            print(f"Title: {result['format_result'].get('title', 'N/A')}")
+            _cli_print(f"Title: {result['format_result'].get('title', 'N/A')}")
 
     elif args.command == "ingest":
         from pipeline.ingest import _ingest_markdown
@@ -122,15 +128,15 @@ def main():
             args.input, store_path=args.store,
             doc_id=args.doc_id, chunk_size=args.chunk_size,
         )
-        print(f"DB:     {db_path}")
+        _cli_print(f"DB:     {db_path}")
 
     elif args.command == "process":
         from pipeline.core import process_file_with_md
         # Step 1: generate .md
         md_path = process_file_with_md(args.input, output_dir=args.output_dir,
-                                        use_llm=not args.no_llm)
+                                         use_llm=not args.no_llm)
         if not md_path:
-            print("Failed to generate markdown")
+            _cli_print("Failed to generate markdown")
             return
 
         # Step 2: ingest from .md
@@ -139,15 +145,15 @@ def main():
             md_path, store_path=args.store,
             doc_id=args.doc_id, chunk_size=args.chunk_size,
         )
-        print(f"Written to: {md_path}")
-        print(f"DB:         {db_path}")
+        _cli_print(f"Written to: {md_path}")
+        _cli_print(f"DB:         {db_path}")
 
     elif args.command == "md":
         from pipeline.core import process_file_with_md
         path = process_file_with_md(args.input, output_dir=args.output_dir,
-                                     use_llm=not args.no_llm)
+                                      use_llm=not args.no_llm)
         if path:
-            print(f"Written to: {path}")
+            _cli_print(f"Written to: {path}")
 
 
 if __name__ == "__main__":

@@ -14,7 +14,6 @@ Usage:
 """
 
 import os
-from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -25,6 +24,9 @@ _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 # Config directory where YAML files live
 _CONF_DIR = _PROJECT_ROOT / "conf"
+
+# Absolute path to the clean rules YAML so callers don't need to worry about CWD.
+CLEAN_RULES_PATH: Path = _CONF_DIR / "clean_rules.yaml"
 
 
 def _resolve_config_path() -> Path | None:
@@ -101,6 +103,12 @@ class Config:
         """Return a list of validation error messages, or [] if valid."""
         errors: list[str] = []
 
+        # LLM settings
+        if not self.llm_endpoint:
+            errors.append("llm.endpoint is required")
+        if not self.llm_model:
+            errors.append("llm.model is required")
+
         # Embedding mode validation
         if self.embedding_mode not in ("remote", "local"):
             errors.append(f"embedding.mode must be 'remote' or 'local' (got {self.embedding_mode!r})")
@@ -132,9 +140,24 @@ class Config:
         )
 
 
-@lru_cache(maxsize=1)
-def get_config() -> Config:
-    """Load and cache configuration. Safe to call repeatedly from any module."""
+_config_cache: Config | None = None
+
+
+def get_config(reset: bool = False) -> Config:
+    """Load and cache configuration. Safe to call repeatedly from any module.
+
+    Args:
+        reset: If True, clear the cached instance and reload from disk.
+
+               Use this after modifying *conf/config.yaml* without restarting
+               the process. Defaults to False (return cached instance).
+    """
+    global _config_cache
+    if reset:
+        _config_cache = None
+    if _config_cache is not None:
+        return _config_cache
+
     path = _resolve_config_path()
     if path is None:
         cfg = Config({})
@@ -149,6 +172,7 @@ def get_config() -> Config:
             "Configuration validation failed:\n  - " + "\n  - ".join(errors)
         )
 
+    _config_cache = cfg
     return cfg
 
 
