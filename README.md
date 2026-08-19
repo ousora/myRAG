@@ -240,6 +240,9 @@ Resolution chain: `$MYRAG_CONFIG` → `conf/config.yaml` → `conf/config.exampl
 from config import get_config
 cfg = get_config()
 print(cfg.llm_endpoint)  # from your config file
+
+# Hot-reload config after modifying conf/config.yaml without restart:
+# get_config(reset=True)  # clears cache and reloads
 ```
 
 ## Testing

@@ -1,5 +1,20 @@
 # Changelog — myRAG Pipeline
 
+## [0.6.8] — 2026-08-19
+
+### Fixed
+
+- **Config hot reload**: `get_config()` no longer uses `@lru_cache` which cached invalid configs forever. Replaced with manual cache + `get_config(reset=True)` parameter so config changes on disk are picked up without restart. (src/config.py)
+- **LLM field validation**: `Config._validate()` now checks that `llm.endpoint` and `llm.model` are non-empty. Previously only `embedding` fields were validated. (src/config.py)
+- **CWD-dependent clean_rules path**: `process_file()` and `process_file_hybrid()` no longer use relative `"conf/clean_rules.yaml"` which broke when run from a different working directory. `rules_config` defaults to `None` and resolves to an absolute path via `CLEAN_RULES_PATH` constant. (src/config.py, src/pipeline/core.py, src/pipeline/hybrid.py)
+- **Fallback embedding dimension in inserts.py**: `upsert_chunks()` used `[0.0]` (1-d) as fallback when a chunk had no embedding. Now uses `[0.0] * 1024` to match the expected bge-m3 dimensionality. (src/storage/inserts.py)
+- **`process_directory_hybrid` swallowed `KeyboardInterrupt`**: `except Exception` in the batch processing loop now re-raises `KeyboardInterrupt` and `SystemExit` so `Ctrl+C` and exit signals propagate correctly. (src/pipeline/hybrid.py)
+- **CLI output mixed with logging**: Console logging handler now writes to `sys.stderr`; all CLI output uses `_cli_print()` to `sys.stdout`. Programmatic output is now cleanly separable from log messages. (src/pipeline/cli.py)
+
+### Changed
+
+- **Test count**: 270 tests passing (was 264 — +6 config test updates for new cache API).
+
 ## [0.6.7] — 2026-08-16
 
 ### Fixed
