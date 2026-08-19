@@ -10,12 +10,13 @@ myRAG is a RAG (Retrieval-Augmented Generation) data pipeline that converts raw 
 
 | Path | Purpose |
 |------|---------|
-| `src/pipeline/core.py` | Core pipeline: `process_file()`, `process_directory()`, `process_file_hybrid()`, `process_file_with_md()` |
+| `src/pipeline/core.py` | Core pipeline: `process_file()`, `process_directory()` (traditional RAG); facades `TextCleaner`, `Chunker` |
+| `src/pipeline/hybrid.py` | LLM-powered functions: `process_file_hybrid()`, `process_file_with_md()`, `process_directory_hybrid()`, `rag_query()` |
 | `src/config.py` | Config loader with resolution chain: env var → config.yaml → config.example.yaml |
 | `src/parsers/` | MarkItDown (pdf/docx/md/txt) + Trafilatura (html) dispatcher |
 | `src/cleaners/` — removed; canonical impl in `parsers/text_cleaner.py` |
 | `src/formatters/` | LLM-powered structuring: `prompts.py`, `writer.py`, async formatting |
-| `src/chunkers/` | LangChain MarkdownHeaderTextSplitter wrapper with RecursiveCharacterTextSplitter fallback |
+| `src/chunkers/` | Pure Python markdown-it-py chunker (no LangChain); header-aware splitting with RecursiveCharacterTextSplitter fallback |
 | `src/embedders/bge_m3.py` | bge-m3 embedding client (OpenAI-compatible API) |
 | `src/storage/sqlite_vec.py` | SQLiteVecStore with FTS5 full-text search |
 | `conf/config.yaml` | User endpoints (gitignored); template at `conf/config.example.yaml` |
@@ -88,5 +89,6 @@ Run `git status` to verify no unintended files are committed (tmp/ should be git
 
 - The `cleaners/` module is a facade — canonical implementation is in `parsers/text_cleaner.py` with YAML config support
 - `format_text_async()` returns a Future, call `.result(timeout=3600)` to get the dict
-- Chunker's `section_path` strips H1 (document title) — sections start at H2 level
+- Chunker's `section_path` strips H1 (document title — sections start at H2 level
 - sqlite-vec requires `sqlite-vec` extra: `uv sync --extra sqlite-vec`
+- `pipeline/core.py` is thin — all LLM-powered functions are in `pipeline/hybrid.py`; facades (`TextCleaner`, `Chunker`), traditional RAG (`process_file`, `process_directory`) and re-exports live in `core.py`
