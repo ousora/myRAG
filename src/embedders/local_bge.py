@@ -12,6 +12,7 @@ from __future__ import annotations
 import logging
 
 from config import get_config
+
 from .bge_m3 import _embed_cache_get, _embed_cache_put, _hash_embed, _validate_embedding_dimension
 
 logger = logging.getLogger(__name__)

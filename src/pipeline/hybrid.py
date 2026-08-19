@@ -23,7 +23,8 @@ import httpx
 import parsers  # noqa: F401 — loads dispatcher (MarkItDown + Trafilatura)
 import parsers.markdown_normalizer  # noqa: F401 — registers normalize_markdown
 from chunkers import Chunker
-from config import CLEAN_RULES_PATH, get_config_lazy as _get_config
+from config import CLEAN_RULES_PATH
+from config import get_config_lazy as _get_config
 from parsers.text_cleaner import TextCleaner
 
 from . import markdown_utils, utils  # noqa: F401,TC001 — re-exported for test patching

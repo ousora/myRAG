@@ -7,21 +7,22 @@ Auto-detects which path to use based on input size.
 from __future__ import annotations
 
 import atexit
-import httpx
 import logging
 from concurrent.futures import Future, ThreadPoolExecutor
 from typing import Any
 
+import httpx
+
 from ._internal import (
-    effective_chunk_threshold,
     _detect_cjk_ratio,
+    _fix_bare_quotes_in_body_field,
+    _format_text_async_impl,
     _format_text_chunked,
     _format_text_single,
-    _format_text_async_impl,
+    _preprocess_json,
     call_llm,
     call_llm_raw,
-    _preprocess_json,
-    _fix_bare_quotes_in_body_field,
+    effective_chunk_threshold,
     format_cached,
 )
 from .writer import format_md, write_to_md

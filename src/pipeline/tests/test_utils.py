@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import pytest
-
 from pipeline.utils import build_doc_summary, resolve_parser, source_type_for
 
 

@@ -3,7 +3,7 @@
 Run directly:  uv run python src/embedders/tests/test_hash_fallback.py
 """
 
-from embedders.bge_m3 import _hash_embed, EXPECTED_EMBEDDING_DIMENSION
+from embedders.bge_m3 import EXPECTED_EMBEDDING_DIMENSION, _hash_embed
 
 
 def main() -> None:

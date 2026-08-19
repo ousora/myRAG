@@ -48,6 +48,7 @@ import logging
 
 # Trigger parser registration at module load time
 import parsers  # noqa: F401 — loads dispatcher (MarkItDown + Trafilatura)
+from config import CLEAN_RULES_PATH
 from embedders import Embedder  # noqa: F401,TC001 — used in rag_query type hints and runtime
 from storage.sqlite_vec import SQLiteVecStore  # noqa: F401,TC001 — used in rag_query type hints and runtime
 
@@ -55,8 +56,6 @@ from . import (
     markdown_utils,  # noqa: F401,TC001 — re-exported so tests can patch pipeline.core.markdown_utils
     utils,
 )
-from config import CLEAN_RULES_PATH
-
 from .hybrid import Chunker, TextCleaner, _get_config  # noqa: F401,TC001 — re-exported for test patching
 from .utils import build_doc_summary as _build_doc_summary  # noqa: F401,TC001 — re-exported for test import
 

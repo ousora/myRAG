@@ -2,11 +2,8 @@
 
 from __future__ import annotations
 
-import re
 import tempfile
 from pathlib import Path
-
-import pytest
 
 from parsers.text_cleaner import TextCleaner
 
@@ -24,7 +21,7 @@ class TestTextCleanerBasic:
         assert "\x00" not in result
         assert "\x07" not in result
         assert "\x1f" not in result
-        assert "helloworldtestend" == result
+        assert result == "helloworldtestend"
 
     def test_page_breaks_removed(self) -> None:
         cleaner = TextCleaner()
@@ -50,7 +47,7 @@ class TestTextCleanerBasic:
     def test_tabs_to_spaces(self) -> None:
         cleaner = TextCleaner()
         result = cleaner.clean("hello\tworld")
-        assert "hello world" == result
+        assert result == "hello world"
 
     def test_trailing_spaces_removed(self) -> None:
         cleaner = TextCleaner()
@@ -61,7 +58,7 @@ class TestTextCleanerBasic:
     def test_multiple_newlines_collapsed(self) -> None:
         cleaner = TextCleaner()
         result = cleaner.clean("line1\n\n\n\n\nline2")
-        assert "line1\n\nline2" == result
+        assert result == "line1\n\nline2"
 
     def test_leading_trailing_whitespace_stripped(self) -> None:
         cleaner = TextCleaner()
@@ -102,7 +99,7 @@ class TestTextCleanerTables:
 class TestTextCleanerCustomRules:
     def test_custom_rules_loaded(self) -> None:
         with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
-            f.write("rules:\n  - pattern: \"REMOVE_ME\"\n    replace: \"REPLACED\"\n")
+            f.write('rules:\n  - pattern: "REMOVE_ME"\n    replace: "REPLACED"\n')
             f.flush()
             cleaner = TextCleaner(rules_config=f.name)
             result = cleaner.clean("hello REMOVE_ME world")
@@ -117,7 +114,7 @@ class TestTextCleanerCustomRules:
 
     def test_invalid_regex_rule_skipped(self) -> None:
         with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
-            f.write("rules:\n  - pattern: \"[invalid\"\n    replace: \"X\"\n")
+            f.write('rules:\n  - pattern: "[invalid"\n    replace: "X"\n')
             f.flush()
             cleaner = TextCleaner(rules_config=f.name)
             assert len(cleaner.custom_rules) == 0

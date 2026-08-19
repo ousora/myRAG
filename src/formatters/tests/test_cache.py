@@ -2,14 +2,12 @@
 
 from __future__ import annotations
 
-import pytest
-
 from formatters.cache import (
-    format_cache_key,
-    format_cached,
-    clear_format_cache,
     _FORMAT_CACHE,
     _FORMAT_CACHE_LOCK,
+    clear_format_cache,
+    format_cache_key,
+    format_cached,
 )
 
 

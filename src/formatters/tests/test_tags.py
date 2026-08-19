@@ -2,15 +2,13 @@
 
 from __future__ import annotations
 
-import pytest
-
 from formatters.tags import (
-    extract_tags_from_body,
     _detect_body_script,
-    _tokenize_latin,
-    _tokenize_cjk,
-    _extract_latin_proper_nouns,
     _extract_cjk_entities,
+    _extract_latin_proper_nouns,
+    _tokenize_cjk,
+    _tokenize_latin,
+    extract_tags_from_body,
 )
 
 

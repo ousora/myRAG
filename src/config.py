@@ -151,6 +151,7 @@ def get_config(reset: bool = False) -> Config:
 
                Use this after modifying *conf/config.yaml* without restarting
                the process. Defaults to False (return cached instance).
+
     """
     global _config_cache
     if reset:
