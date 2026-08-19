@@ -58,6 +58,16 @@ def get_executor() -> ThreadPoolExecutor:
     return _executor
 
 
+def shutdown() -> None:
+    """Shutdown the shared thread pool executor.
+
+    Call this when the formatter module is no longer needed (e.g. at the end
+    of a long-running session or in test teardown) to release worker threads
+    immediately instead of waiting for ``atexit``.
+    """
+    _shutdown_executor()
+
+
 # ── Public API ──────────────────────────────────────────────────────────
 
 
@@ -158,4 +168,5 @@ __all__ = [
     "format_text_with_system",
     "format_md",
     "write_to_md",
+    "shutdown",
 ]

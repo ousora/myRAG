@@ -92,9 +92,8 @@
 - [x] **Fix `search_documents` missing vector search**
   - Added `ORDER BY vec_distance_cosine` when vector is provided
 
-- [ ] **Fix ThreadPoolExecutor leak** (`formatters/__init__.py`)
-  - Global `_executor` is never shut down
-  - Add `shutdown()` method or context manager pattern
+- [x] **Fix ThreadPoolExecutor leak** (`formatters/__init__.py`)
+  - Added `shutdown()` function and `atexit` registration for immediate cleanup
 
 - [ ] **CLI search subcommand**
   - `python -m pipeline search "question" --db data/doc.db`
@@ -111,11 +110,11 @@
 
 ### P3 — Nice to Have
 
-- [ ] **Fix hardcoded path in `format_md()`** (`/tmp/md_format_output`)
-  - Accept configurable `output_dir` parameter
+- [x] **Fix hardcoded path in `format_md()`** (`/tmp/md_format_output`)
+  - Now uses `tempfile.mkdtemp()` for temporary directory
 
-- [ ] **Cache parser instances** in `resolve_parser()`
-  - Avoid re-initializing MarkItDown converter on every call
+- [x] **Cache parser instances** in `resolve_parser()`
+  - Added `_PARSER_CACHE` dict to reuse parser instances per class
 
 - [x] **Add mypy configuration** to `pyproject.toml` per project rules
   - Added `mypy>=1.0` and `types-PyYAML` to dev extras

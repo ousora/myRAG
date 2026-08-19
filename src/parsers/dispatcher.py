@@ -26,6 +26,8 @@ class TextParser(Protocol):
 PARSERS: dict[str, type[TextParser]] = {}
 # Thread safety: reads (resolve_parser) are safe from multiple threads.
 # Writes (register_parser) require external synchronization.
+# Parser instance cache — each parser class is instantiated once and reused.
+_PARSER_CACHE: dict[type[TextParser], TextParser] = {}
 
 # Common extension aliases — map primary name to its variants
 _ALIASES: dict[str, list[str]] = {
@@ -134,20 +136,29 @@ logger.debug(
 # ---------------------------------------------------------------------------
 
 def resolve_parser(filepath: str | Path) -> TextParser | None:
-    """Look up and return a parser instance, or None if unsupported."""
+    """Look up and return a parser instance, or None if unsupported.
+
+    Parser instances are cached per-class so subsequent calls for the same
+    file type reuse the same object instead of re-initializing MarkItDown /
+    Trafilatura on every invocation.
+    """
     path = Path(filepath)
     ext = path.suffix.lstrip(".")
     cls = PARSERS.get(ext.lower())
     if cls is not None:
-        instance = cls()  # type: ignore[call-arg]
+        if cls not in _PARSER_CACHE:
+            _PARSER_CACHE[cls] = cls()  # type: ignore[call-arg]
+        instance = _PARSER_CACHE[cls]
         logger.info("Using %s to parse %s (.%s)", cls.__name__, path.name, ext)
         return instance
 
     # Fallback: MarkItDown also supports these formats but they're not explicitly
     # registered (to keep PARSERS dict clean — only primary types are registered).
     if ext.lower() in ("pptx", "xls", "xlsx", "epub"):
+        if MarkItDownParser not in _PARSER_CACHE:
+            _PARSER_CACHE[MarkItDownParser] = MarkItDownParser()
         logger.info("Falling back to MarkItDownParser for %s (.%s)", path.name, ext)
-        return MarkItDownParser()
+        return _PARSER_CACHE[MarkItDownParser]
 
     logger.warning("No parser registered for .%s — skipping %s", ext, filepath)
     return None
