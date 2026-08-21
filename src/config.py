@@ -21,7 +21,8 @@ from typing import Any
 # ---------------------------------------------------------------------------
 # Resolve project root — parent of the myrag package directory (i.e., the repo root)
 # ---------------------------------------------------------------------------
-_PROJECT_ROOT = Path(__file__).resolve().parent.parent
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+_PROJECT_ROOT = PROJECT_ROOT  # legacy private alias
 
 # Config directory where YAML files live
 _CONF_DIR = _PROJECT_ROOT / "conf"

@@ -114,6 +114,23 @@ class TestFormatCached:
             keys = list(_FORMAT_CACHE.keys())
             assert len(keys) <= _FORMAT_CACHE_MAX
 
+    def test_mutation_does_not_poison_cache(self) -> None:
+        """Mutating a returned result must never affect later lookups."""
+        calls = {"n": 0}
+
+        def compute():
+            calls["n"] += 1
+            return {"metadata": {"entities": ["X"]}, "n": calls["n"]}
+
+        first = format_cached("raw", "web", None, compute)
+        first["metadata"]["entities"].append("MUTATED")
+        first["n"] = 999
+
+        second = format_cached("raw", "web", None, compute)
+        assert second["metadata"]["entities"] == ["X"]
+        assert second["n"] == 1
+        assert calls["n"] == 1  # still a cache hit, uncompromised
+
 
 class TestClearFormatCache:
     def test_clear_cache(self) -> None:

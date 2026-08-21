@@ -122,6 +122,29 @@ Nested content here.
         assert len(sentences) < 6, \
             f"Too many splits ({len(sentences)}) — abbreviations not preserved: {sentences}"
 
+    def test_decimal_numbers_not_split(self):
+        """Decimal numbers and versions must survive sentence splitting."""
+        c = Chunker(chunk_size=100)
+        text = "The value of pi is approximately 3.14159 in mathematics. It is used everywhere."
+        sentences = c._split_by_sentence(text)
+        joined = " ".join(sentences)
+        assert "3.14159" in joined, f"Decimal split apart: {sentences}"
+        assert not any(s.strip() == "3." for s in sentences)
+
+    def test_version_strings_not_split(self):
+        c = Chunker(chunk_size=100)
+        text = "Upgrade to version 2.0 for best results. Older releases lack the feature."
+        sentences = c._split_by_sentence(text)
+        joined = " ".join(sentences)
+        assert "version 2.0" in joined, f"Version number split apart: {sentences}"
+
+    def test_ip_address_not_split(self):
+        c = Chunker(chunk_size=100)
+        text = "The server listens at 192.168.1.1 by default. Change it in the config file."
+        sentences = c._split_by_sentence(text)
+        joined = " ".join(sentences)
+        assert "192.168.1.1" in joined, f"IP address split apart: {sentences}"
+
     def test_cjk_text_chunking(self):
         """CJK text should be chunked using character-level fallback."""
         cjk_text = "这是一个中文测试文档。它包含多个段落。每个段落都应该被独立分块。\n\n" * 10

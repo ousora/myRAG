@@ -160,7 +160,7 @@ def process_file_hybrid(filepath: str, *, doc_id: str = "doc_0",
             logger.info("  → Markdown written to %s", md_out_path)
 
     # 3. Render markdown with headers from metadata.sections, then chunk
-    formatted_md = markdown_utils.render_markdown_with_sections(result)
+    formatted_md = markdown_utils.render_markdown(result)
     # Drop reference/bibliography sections so they don't pollute retrieval.
     formatted_md = markdown_utils.strip_reference_sections(formatted_md)
     chunker = Chunker(chunk_size=chunk_size)

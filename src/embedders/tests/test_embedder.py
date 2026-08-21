@@ -77,6 +77,33 @@ class TestStoreChunks:
         assert len(results) == 2
         assert all("embedding" in r for r in results)
 
+    def test_embed_batch_count_mismatch_raises(self, monkeypatch):
+        """A server returning fewer vectors than inputs must raise, not IndexError."""
+        import pytest
+
+        from embedders.bge_m3 import Embedder, EmbeddingError
+
+        class FakeConfig:
+            embedding_hash_fallback = False
+            embedding_timeout = 5
+
+        monkeypatch.setattr("embedders.bge_m3.get_config", lambda: FakeConfig())
+
+        e = Embedder(base_url="http://example.com", model="test-model")
+
+        class FakeResp:
+            def raise_for_status(self):
+                pass
+
+            def json(self):
+                # Server "dropped" one of the two inputs.
+                return {"data": [{"embedding": [0.5] * 1024}]}
+
+        monkeypatch.setattr(e, "_post_with_retry", lambda path, payload: FakeResp())
+
+        with pytest.raises(EmbeddingError, match="count mismatch"):
+            e.embed(["text one", "text two"])
+
 
 class TestStoreDocument:
     """Test store_document metadata construction."""

@@ -33,19 +33,36 @@ def parse_frontmatter(md: str) -> dict[str, Any]:
         return {}
     return data if isinstance(data, dict) else {}
 
-# English (word-boundary) + CJK (substring) reference-section titles to drop.
-_REFERENCE_PATTERNS = [
-    re.compile(r"^(references?|reference list|bibliography|further reading|"
-               r"works cited|sources?|footnotes?|endnotes?|citations?|"
-               r"see also|external links)\b", re.IGNORECASE),
-]
-_REFERENCE_CJK = (
-    "参考文献", "参考资料", "參考文献", "參考資料", "參考", "引用文献", "引用",
-    "延伸閱讀", "延伸阅读", "脚注", "注脚", "文獻",
+# Reference-section keywords. The keyword must anchor the START of the
+# heading; anything after it may only be decoration (see _TAIL_DECORATION_RE).
+# English keywords are word-boundary anchored; CJK keywords use prefix match.
+_REFERENCE_HEAD_RE = re.compile(
+    r"(?:references?|reference list|bibliography|further reading|"
+    r"works cited|sources?|footnotes?|endnotes?|citations?|"
+    r"see also|external links)\b",
+    re.IGNORECASE,
+)
+_REFERENCE_CJK_HEADS = (
+    "参考文献", "参考资料", "參考文獻", "參考資料",
+    "引用文献", "引用文獻", "延伸閱讀", "延伸阅读",
+    "脚注", "注脚", "註腳", "文獻", "注释", "註釋",
+    "参考", "參考", "引用", "外部链接", "外部連結",
 )
 
+# Decoration that may follow a reference keyword without disqualifying the
+# heading: whitespace, digits, CJK numerals (for numbering like 参考文献（三）),
+# and punctuation (brackets, colons, CJK marks…). Ordinary words after the
+# keyword mean it is a real section title, e.g. "Reference Architecture" or
+# "系统引用说明" — those must NOT be stripped.
+_TAIL_DECORATION_RE = re.compile(
+    r"""[\s\d一二三四五六七八九十百千零〇两.,;:!?)('"“”'’\-—–·。、；：！？（）【】《》\[\]]*"""
+)
+# Leading numbering/decoration stripped before matching ("3. References",
+# "三、参考文献").
+_LEADING_DECORATION_RE = re.compile(r"^[\s(（\[【]*[\d一二三四五六七八九十]+[.、.)）】\]]*\s*")
 
-def render_markdown_with_sections(result: dict[str, Any]) -> str:
+
+def render_markdown(result: dict[str, Any]) -> str:
     """Render a clean markdown document from the LLM formatter output.
 
     The formatter's ``body`` is non-deterministic: it usually already contains
@@ -73,6 +90,12 @@ def render_markdown_with_sections(result: dict[str, Any]) -> str:
 
     # No headings in body — prepend title only; let the chunker handle structure.
     return f"# {title}\n\n{body.strip()}\n"
+
+
+#: Backward-compatibility alias. The function no longer renders headers from
+#: ``metadata.sections`` (the body's own headings are kept instead), so the
+#: old "with_sections" name was misleading.
+render_markdown_with_sections = render_markdown
 
 
 def strip_reference_sections(md: str) -> str:
@@ -113,10 +136,24 @@ def strip_reference_sections(md: str) -> str:
 
 
 def is_reference_title(title: str) -> bool:
-    """Return True if a section heading looks like a references/bibliography block."""
-    if any(c in title for c in _REFERENCE_CJK):
+    """Return True if a section heading looks like a references/bibliography block.
+
+    The reference keyword must anchor the *start* of the heading; trailing text
+    may only be digits/punctuation decoration ("References (2024)",
+    "参考文献（三）", "參考"). A keyword followed by ordinary words is a
+    legitimate section title ("Reference Architecture", "系统引用说明",
+    "引用格式說明") and is kept — substring matching here used to silently
+    delete content sections.
+    """
+    t = _LEADING_DECORATION_RE.sub("", title.strip(), count=1)
+
+    m = _REFERENCE_HEAD_RE.match(t)
+    if m and _TAIL_DECORATION_RE.fullmatch(t[m.end():]):
         return True
-    return any(p.search(title) for p in _REFERENCE_PATTERNS)
+    return any(
+        t.startswith(kw) and _TAIL_DECORATION_RE.fullmatch(t[len(kw):])
+        for kw in _REFERENCE_CJK_HEADS
+    )
 
 
 def match_entities_to_chunks(chunks: list[dict[str, Any]], entities: list[dict[str, Any]]) -> list[dict[str, Any]]:

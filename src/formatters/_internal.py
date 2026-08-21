@@ -89,26 +89,30 @@ def effective_chunk_threshold(text: str) -> int:
     """Return a CJK-aware chunk threshold adjusted for the input text's language mix.
 
     The base ``chunk_threshold_chars`` (default 20000) is calibrated for English
-    at ~4 chars/token.  For predominantly CJK text (~1 char/token), we lower the
-    threshold proportionally so that token budgets stay roughly constant across
-    languages.
+    at ~4 chars/token, i.e. a token budget of ``base / ENGLISH_CHARS_PER_TOKEN``.
+    The threshold scales with the *harmonic mean* chars-per-token of the mix so
+    that this token budget stays exactly constant across all language ratios:
+
+        threshold(r) = (base / EN_CPT) / (r / CJK_CPT + (1 - r) / EN_CPT)
+
+    The curve is continuous and monotonically decreasing: r=0 → base,
+    r=1 → base/4, with no discontinuity at any ratio (the previous piecewise
+    interpolation jumped 3.7x at r=0.5 and underestimated mixed-text tokens).
     """
     cfg = _get_config()
     base = cfg.chunk_threshold_chars  # ≈5000 tokens for English
 
-    ratio = _detect_cjk_ratio(text)
-    if ratio >= 0.5:
-        # Mostly CJK — scale down so we don't exceed ~7000 tokens.
-        return int(base * (_CJK_CHARS_PER_TOKEN / _ENGLISH_CHARS_PER_TOKEN))
-    if ratio > 0.1:
-        # Mixed — linear interpolation between the two extremes.
-        mix = (ratio - 0.1) / 0.4  # 0 at 10% CJK, 1 at 50% CJK
-        chars_per_token = _ENGLISH_CHARS_PER_TOKEN - mix * (
-            _ENGLISH_CHARS_PER_TOKEN - _CJK_CHARS_PER_TOKEN
-        )
-        return int(base * (_CJK_CHARS_PER_TOKEN / chars_per_token))
-    # Mostly English — use base threshold unchanged.
-    return base
+    ratio = min(max(_detect_cjk_ratio(text), 0.0), 1.0)
+    if ratio <= 0.0:
+        return base
+
+    token_budget = base / _ENGLISH_CHARS_PER_TOKEN
+    inv_cpt = (
+        ratio / _CJK_CHARS_PER_TOKEN
+        + (1.0 - ratio) / _ENGLISH_CHARS_PER_TOKEN
+    )
+    threshold = int(token_budget / inv_cpt)
+    return max(threshold, 1)
 
 
 def _get_last_n_lines(md_parts: list[str], n: int = 10) -> str:

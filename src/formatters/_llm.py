@@ -228,10 +228,15 @@ def call_llm(
     output_chars = len(raw_content)
     logger.info("LLM call: %d chars in -> %d chars out", input_chars, output_chars)
     if getattr(cfg, "debug_log_llm_responses", False):
+        # Anchor to the repo root (not CWD) so debug output lands in the same
+        # tmp/raw/ regardless of where the pipeline was invoked from.
+        from config import PROJECT_ROOT
+
         timestamp = datetime.datetime.now(tz=datetime.timezone.utc).strftime("%Y%m%d_%H%M%S")
         input_hash = hashlib.md5(user_message.encode()).hexdigest()[:8]
-        output_path = f"tmp/raw/resp_{timestamp}_{input_hash}.txt"
-        os.makedirs(os.path.dirname(output_path), exist_ok=True)
+        output_dir = PROJECT_ROOT / "tmp" / "raw"
+        os.makedirs(output_dir, exist_ok=True)
+        output_path = output_dir / f"resp_{timestamp}_{input_hash}.txt"
         with open(output_path, "w", encoding="utf-8") as f:
             f.write(raw_content)
     max_retries = 3

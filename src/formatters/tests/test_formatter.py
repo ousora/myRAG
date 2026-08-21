@@ -264,3 +264,51 @@ class TestCallLlmSchemaRetry:
                 call_llm("system prompt", "user text", schema={"type": "object"})
 
         assert len(seen) == 1
+
+
+class TestEffectiveChunkThreshold:
+    """Token budget must stay constant across language mixes.
+
+    Harmonic-mean scaling with no discontinuities.
+    """
+
+    def _threshold(self, ratio: float, base: int = 20000) -> int:
+        from unittest.mock import patch as _patch
+
+        from formatters._internal import effective_chunk_threshold
+
+        cfg = Mock(chunk_threshold_chars=base)
+        with _patch("formatters._internal._get_config", return_value=cfg):
+            # Synthesize a text whose CJK/latin char ratio ≈ *ratio*.
+            n_cjk = int(1000 * ratio)
+            n_latin = 1000 - n_cjk
+            text = "汉" * n_cjk + "a" * n_latin
+            return effective_chunk_threshold(text)
+
+    def test_english_unchanged(self):
+        assert self._threshold(0.0) == 20000
+
+    def test_pure_cjk_quarter(self):
+        assert self._threshold(1.0) == 5000
+
+    def test_monotonic_decreasing(self):
+        import itertools
+
+        ratios = [0.0, 0.2, 0.4, 0.5, 0.6, 0.8, 1.0]
+        values = [self._threshold(r) for r in ratios]
+        assert all(a >= b for a, b in itertools.pairwise(values))
+
+    def test_no_cliff_at_half(self):
+        """Old piecewise formula jumped ~3.7x at r=0.5; new one is smooth."""
+        below = self._threshold(0.49)
+        at = self._threshold(0.50)
+        assert at > 0  # sanity
+        assert below / at < 1.3  # gentle step, not a cliff
+
+    def test_token_budget_constant(self):
+        """chars/threshold ≈ constant token budget across mixes."""
+        en_cpt, cjk_cpt = 4.0, 1.0
+        for ratio in (0.25, 0.5, 0.75):
+            t = self._threshold(ratio)
+            budget = t * (ratio / cjk_cpt + (1 - ratio) / en_cpt)
+            assert budget == pytest.approx(5000, rel=0.05)

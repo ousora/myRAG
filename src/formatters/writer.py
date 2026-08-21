@@ -3,12 +3,18 @@
 import logging
 import os
 import re
+import threading
 from pathlib import Path
 from typing import Any
 
 import yaml
 
 logger = logging.getLogger(__name__)
+
+# Serializes the collision-check → file-write pair across threads. Without it,
+# two threads processing same-titled documents could both observe the target
+# path as free (TOCTOU) and overwrite each other's output.
+_MD_WRITE_LOCK = threading.Lock()
 
 
 def _insert_wikilinks(body: str, entities: list[dict[str, Any]]) -> str:
@@ -141,14 +147,14 @@ def write_to_md(result: dict[str, Any], output_dir: str | Path) -> str:
 
     md_content = "\n".join(lines).rstrip() + "\n"
 
-    file_path = _resolve_output_path(base_path, md_content)
-
-    try:
-        with open(file_path, "w", encoding="utf-8") as f:
-            f.write(md_content)
-    except (OSError, PermissionError) as exc:  # noqa: BLE001 — log and re-raise with context
-        _err_msg = f"Failed to write markdown file to {file_path}: {exc}"
-        raise OSError(_err_msg) from exc
+    with _MD_WRITE_LOCK:
+        file_path = _resolve_output_path(base_path, md_content)
+        try:
+            with open(file_path, "w", encoding="utf-8") as f:
+                f.write(md_content)
+        except (OSError, PermissionError) as exc:  # noqa: BLE001 — log and re-raise with context
+            _err_msg = f"Failed to write markdown file to {file_path}: {exc}"
+            raise OSError(_err_msg) from exc
 
     return file_path
 

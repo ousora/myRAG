@@ -67,7 +67,7 @@ class TestProcessDirectoryHybrid:
              patch("pipeline.core.utils.resolve_parser") as resolve_mock, \
              patch("formatters.format_text_async") as fmt_mock, \
              patch("pipeline.core.Chunker") as chunker_cls, \
-             patch("pipeline.core.markdown_utils.render_markdown_with_sections") as render_mock, \
+             patch("pipeline.core.markdown_utils.render_markdown") as render_mock, \
              patch("pipeline.core.markdown_utils.strip_reference_sections") as strip_mock, \
              patch("pipeline.core.markdown_utils.match_entities_to_chunks") as match_mock:
 
@@ -96,7 +96,7 @@ class TestProcessDirectoryHybrid:
              patch("pipeline.core.utils.resolve_parser") as resolve_mock, \
              patch("formatters.format_text_async") as fmt_mock, \
              patch("pipeline.core.Chunker") as chunker_cls, \
-             patch("pipeline.core.markdown_utils.render_markdown_with_sections") as render_mock, \
+             patch("pipeline.core.markdown_utils.render_markdown") as render_mock, \
              patch("pipeline.core.markdown_utils.strip_reference_sections") as strip_mock, \
              patch("pipeline.core.markdown_utils.match_entities_to_chunks") as match_mock:
 
@@ -123,7 +123,7 @@ class TestProcessDirectoryHybrid:
              patch("pipeline.core.utils.resolve_parser") as resolve_mock, \
              patch("formatters.format_text_async") as fmt_mock, \
              patch("pipeline.core.Chunker") as chunker_cls, \
-             patch("pipeline.core.markdown_utils.render_markdown_with_sections") as render_mock, \
+             patch("pipeline.core.markdown_utils.render_markdown") as render_mock, \
              patch("pipeline.core.markdown_utils.strip_reference_sections") as strip_mock, \
              patch("pipeline.core.markdown_utils.match_entities_to_chunks") as match_mock:
 
@@ -150,7 +150,7 @@ class TestProcessDirectoryHybrid:
              patch("pipeline.core.utils.resolve_parser") as resolve_mock, \
              patch("formatters.format_text_async") as fmt_mock, \
              patch("pipeline.core.Chunker") as chunker_cls, \
-             patch("pipeline.core.markdown_utils.render_markdown_with_sections") as render_mock, \
+             patch("pipeline.core.markdown_utils.render_markdown") as render_mock, \
              patch("pipeline.core.markdown_utils.strip_reference_sections") as strip_mock, \
              patch("pipeline.core.markdown_utils.match_entities_to_chunks") as match_mock:
 
@@ -176,7 +176,7 @@ class TestProcessDirectoryHybrid:
              patch("pipeline.core.utils.resolve_parser") as resolve_mock, \
              patch("formatters.format_text_async") as fmt_mock, \
              patch("pipeline.core.Chunker") as chunker_cls, \
-             patch("pipeline.core.markdown_utils.render_markdown_with_sections") as render_mock, \
+             patch("pipeline.core.markdown_utils.render_markdown") as render_mock, \
              patch("pipeline.core.markdown_utils.strip_reference_sections") as strip_mock, \
              patch("pipeline.core.markdown_utils.match_entities_to_chunks") as match_mock:
 
@@ -204,7 +204,7 @@ class TestProcessDirectoryHybrid:
              patch("pipeline.core.utils.resolve_parser") as resolve_mock, \
              patch("formatters.format_text_async") as fmt_mock, \
              patch("pipeline.core.Chunker") as chunker_cls, \
-             patch("pipeline.core.markdown_utils.render_markdown_with_sections") as render_mock, \
+             patch("pipeline.core.markdown_utils.render_markdown") as render_mock, \
              patch("pipeline.core.markdown_utils.strip_reference_sections") as strip_mock, \
              patch("pipeline.core.markdown_utils.match_entities_to_chunks") as match_mock, \
               patch("pipeline.hybrid.process_file_hybrid") as hybrid_mock:
@@ -242,7 +242,7 @@ class TestProcessDirectoryHybrid:
              patch("pipeline.core.utils.resolve_parser") as resolve_mock, \
              patch("formatters.format_text_async") as fmt_mock, \
              patch("pipeline.core.Chunker") as chunker_cls, \
-             patch("pipeline.core.markdown_utils.render_markdown_with_sections") as render_mock, \
+             patch("pipeline.core.markdown_utils.render_markdown") as render_mock, \
              patch("pipeline.core.markdown_utils.strip_reference_sections") as strip_mock, \
              patch("pipeline.core.markdown_utils.match_entities_to_chunks") as match_mock, \
               patch("pipeline.hybrid.process_file_hybrid") as hybrid_mock:
@@ -272,7 +272,7 @@ class TestProcessDirectoryHybrid:
              patch("pipeline.core.utils.resolve_parser") as resolve_mock, \
              patch("formatters.format_text_async") as fmt_mock, \
              patch("pipeline.core.Chunker") as chunker_cls, \
-             patch("pipeline.core.markdown_utils.render_markdown_with_sections") as render_mock, \
+             patch("pipeline.core.markdown_utils.render_markdown") as render_mock, \
              patch("pipeline.core.markdown_utils.strip_reference_sections") as strip_mock, \
              patch("pipeline.core.markdown_utils.match_entities_to_chunks") as match_mock, \
               patch("pipeline.hybrid.process_file_hybrid") as hybrid_mock:
@@ -302,7 +302,7 @@ class TestProcessDirectoryHybrid:
              patch("pipeline.core.utils.resolve_parser") as resolve_mock, \
              patch("formatters.format_text_async") as fmt_mock, \
              patch("pipeline.core.Chunker") as chunker_cls, \
-             patch("pipeline.core.markdown_utils.render_markdown_with_sections") as render_mock, \
+             patch("pipeline.core.markdown_utils.render_markdown") as render_mock, \
              patch("pipeline.core.markdown_utils.strip_reference_sections") as strip_mock, \
              patch("pipeline.core.markdown_utils.match_entities_to_chunks") as match_mock, \
              patch("concurrent.futures.ThreadPoolExecutor") as tpe_cls:
@@ -347,7 +347,7 @@ class TestProcessDirectoryHybrid:
              patch("pipeline.core.utils.resolve_parser") as resolve_mock, \
              patch("formatters.format_text_async") as fmt_mock, \
              patch("pipeline.core.Chunker") as chunker_cls, \
-             patch("pipeline.core.markdown_utils.render_markdown_with_sections") as render_mock, \
+             patch("pipeline.core.markdown_utils.render_markdown") as render_mock, \
              patch("pipeline.core.markdown_utils.strip_reference_sections") as strip_mock, \
              patch("pipeline.core.markdown_utils.match_entities_to_chunks") as match_mock, \
               patch("pipeline.hybrid.process_file_hybrid") as hybrid_mock:
@@ -377,7 +377,7 @@ class TestProcessDirectoryHybrid:
              patch("pipeline.core.utils.resolve_parser") as resolve_mock, \
              patch("formatters.format_text_async") as fmt_mock, \
              patch("pipeline.core.Chunker") as chunker_cls, \
-             patch("pipeline.core.markdown_utils.render_markdown_with_sections") as render_mock, \
+             patch("pipeline.core.markdown_utils.render_markdown") as render_mock, \
              patch("pipeline.core.markdown_utils.strip_reference_sections") as strip_mock, \
              patch("pipeline.core.markdown_utils.match_entities_to_chunks") as match_mock:
 

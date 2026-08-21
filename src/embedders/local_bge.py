@@ -233,17 +233,20 @@ class LocalEmbedder:
         """Token estimate for bge-m3's SentencePiece tokenizer.
 
         Uses a multi-language-aware heuristic: CJK characters count as ~1 token,
-        ASCII words average ~4 chars/token (with whitespace). This is more accurate
-        than the naive ``len // 2`` which underestimates Chinese text by ~50%.
+        ASCII alphanumerics average ~4 chars/token (with whitespace). This is
+        more accurate than the naive ``len // 2`` which underestimates Chinese
+        text by ~50%.
         """
         cjk = sum(1 for ch in text if "\u4e00" <= ch <= "\u9fff")
-        ascii_chars = sum(1 for ch in text if ("\u0041" <= ch <= "\u005a") or ("a" <= ch <= "z"))
-        other_ascii = len(text) - cjk - ascii_chars
+        ascii_alnum = sum(1 for ch in text if ch.isascii() and ch.isalnum())
+        other_ascii = len(text) - cjk - ascii_alnum
 
         # CJK: ~1 char/token (SentencePiece byte-level).
-        # ASCII letters/digits: ~4 chars/token.
+        # ASCII letters/digits: ~4 chars/token (digits included — numeric-heavy
+        # text previously landed in the 0.5-token "other" bucket, skewing the
+        # adaptive batch size).
         # Punctuation/whitespace: counted as 0.5 token each.
-        return cjk + (ascii_chars // 4) + (other_ascii // 2)
+        return cjk + (ascii_alnum // 4) + (other_ascii // 2)
 
     def _adaptive_batch_size(self, texts: list[str]) -> int:
         """Dynamically reduce batch size if total tokens exceed limit."""

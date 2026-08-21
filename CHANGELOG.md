@@ -1,5 +1,26 @@
 # Changelog — myRAG Pipeline
 
+## [Unreleased]
+
+### Fixed
+
+- **Mixed-language chunk threshold had a 3.7x cliff and underestimated tokens**: `effective_chunk_threshold()` used piecewise linear interpolation that jumped from ~18.6K chars to exactly `base/4` at the 50% CJK boundary, and its mixed-ratio formula ignored that a half-CJK/half-English document consumes ~1.6x more tokens per char than pure English. Replaced with harmonic-mean scaling — `threshold(r) = (base/EN_CPT) / (r/CJK_CPT + (1−r)/EN_CPT)` — which is continuous, monotonically decreasing, and keeps the underlying token budget (`base/4` tokens) exactly constant at every ratio. (src/formatters/_internal.py)
+- **CJK reference-title matching silently deleted content sections**: `is_reference_title()` used raw substring matching, so headings like 參考架構設計 / 系统引用说明 / 引用格式說明 were stripped before chunking. The keyword must now anchor the *start* of the heading and trailing text may only be digits/punctuation decoration ("References (2024)", "参考文献（三）"); keyword followed by ordinary words is kept. Leading numbering ("3. References", "三、参考文献") is tolerated via decoration stripping. (src/pipeline/markdown_utils.py)
+- **Sentence splitter cut decimal numbers apart**: `Chunker._split_by_sentence()` treated every non-abbreviation '.' as a boundary, splitting "3.14159" → "3." + "14159…", and likewise version strings ("v2.0") and IP addresses. Dots flanked by digits are no longer boundaries. (src/chunkers/__init__.py)
+- **Markdown writes raced under concurrent ingestion**: `write_to_md()`'s collision-check → file-write pair was TOCTOU-vulnerable when `process_directory_hybrid()` processed same-titled documents in parallel threads — both could pick the same path and clobber each other. Resolve+write now happen under a module-level lock; regression-tested with 8 concurrent writers. (src/formatters/writer.py)
+- **Batch embedding count mismatch surfaced as IndexError**: `Embedder.embed()` validated vector dimensions but not count; a server returning fewer vectors than inputs crashed later in `store_chunks()` with a confusing `IndexError`. Now raises a descriptive `EmbeddingError("count mismatch")`. (src/embedders/bge_m3.py)
+
+### Changed
+
+- **Embedding retries cover connection failures**: `_post_with_retry()` caught only timeout subclasses, so `ConnectError`/`ReadError` failed on first attempt. It now catches `httpx.TransportError` (the common parent of timeouts and network-level errors). Redundant subclass tuple removed. (src/embedders/bge_m3.py)
+- **RRF smoothing constant parameterized**: `hybrid_search(rrf_k=60)` exposes the Reciprocal-Rank-Fusion constant instead of hardcoding it inline (project convention: no magic values). (src/storage/search.py)
+- **`search_documents()` where-clause assembled once**: the duplicated `where = ...` computation (dead in the vector branch, live in the tag-only branch) is restructured to build clauses then render once. (src/storage/search.py)
+- **Format cache deep-copies on put/get**: cached formatter results are mutable dicts; callers can now mutate their returned copy without poisoning subsequent lookups. Regression-tested. (src/formatters/cache.py)
+- **`render_markdown_with_sections()` renamed to `render_markdown()`**: the function has not rendered headers from `metadata.sections` for several versions; old name kept as a deprecated alias for backward compatibility. Call sites and tests updated. (src/pipeline/markdown_utils.py, src/pipeline/hybrid.py)
+- **LLM debug responses anchor to repo root**: `debug_log_llm_responses` output goes to `<PROJECT_ROOT>/tmp/raw/` instead of CWD-relative `tmp/raw/`, matching the config loader's path strategy; exposed `config.PROJECT_ROOT`. (src/formatters/_llm.py, src/config.py)
+- **Local token estimator counts digits**: `LocalEmbedder._estimate_tokens()` previously bucketed digits into the 0.5-token "other" class, underestimating numeric-heavy texts and skewing adaptive batch sizes. Digits now count as ASCII alphanumerics (~4 chars/token). (src/embedders/local_bge.py)
+- **Test count**: 299 tests passing.
+
 ## [0.7.1] — 2026-08-21
 
 ### Fixed

@@ -166,8 +166,10 @@ class Embedder:
     def _post_with_retry(self, url: str, payload: dict[str, Any], *, max_retries: int = 3) -> httpx.Response:
         """POST to the embedding API with exponential backoff on transient errors.
 
-        Retries on HTTP 429 (rate limit), 502/503/504 (server errors). Exponential
-        backoff starts at 1s, capped at 8s. Non-transient errors raise immediately.
+        Retries on HTTP 429 (rate limit), 5xx (server errors), and any
+        ``httpx.TransportError`` (timeouts, connection failures, reset
+        connections). Exponential backoff starts at 1s, capped at 8s.
+        Non-transient errors raise immediately.
         """
         last_exc: Exception | None = None
         client = self.client
@@ -185,10 +187,12 @@ class Embedder:
                 )
                 last_exc = RuntimeError(f"HTTP {resp.status_code}: {resp.text[:200]}")  # noqa: EM102
                 time.sleep(wait)
-            except (httpx.TimeoutException, httpx.ReadTimeout, httpx.WriteTimeout) as exc:
+            except httpx.TransportError as exc:
+                # Covers TimeoutException and network-level errors (ConnectError,
+                # ReadError, RemoteProtocolError) — all potentially transient.
                 logger.warning(
-                    "Embedding API timed out (attempt %d/%d), retrying in %ds",
-                    attempt + 1, max_retries + 1, min(2 ** attempt, 8),
+                    "Embedding API transport error (%s) (attempt %d/%d), retrying in %ds",
+                    type(exc).__name__, attempt + 1, max_retries + 1, min(2 ** attempt, 8),
                 )
                 last_exc = exc
                 time.sleep(min(2 ** attempt, 8))
@@ -232,6 +236,16 @@ class Embedder:
             _embed_cache_put(text, emb)
             return emb
         embeddings: list[list[float]] = [d["embedding"] for d in data["data"]]
+        # Count check: a misbehaving server returning fewer vectors than inputs
+        # would otherwise surface as a confusing IndexError in store_chunks.
+        if len(embeddings) != len(text):
+            raise EmbeddingError(
+                message=(
+                    f"Embedding count mismatch: sent {len(text)} texts, "
+                    f"got {len(embeddings)} vectors."
+                ),
+                context={"sent": len(text), "received": len(embeddings)},
+            )
         for e in embeddings:
             _validate_embedding_dimension(e)
         return embeddings

@@ -390,11 +390,19 @@ class Chunker:
                 sentences.append(seg.strip())
                 continue
 
-            # Find positions of '.' that are sentence boundaries (not abbreviations).
+            # Find positions of '.' that are sentence boundaries (not
+            # abbreviations, not decimal points in numbers/versions).
             boundary_positions: list[int] = []
             for i, ch in enumerate(seg):
-                if ch == "." and not self._is_abbreviation_boundary(seg, i):
-                    boundary_positions.append(i)
+                if ch != ".":
+                    continue
+                if self._is_abbreviation_boundary(seg, i):
+                    continue
+                prev_digit = i > 0 and seg[i - 1].isdigit()
+                next_digit = i + 1 < len(seg) and seg[i + 1].isdigit()
+                if prev_digit and next_digit:
+                    continue  # decimal number / version string ("3.14", "v2.0")
+                boundary_positions.append(i)
 
             if not boundary_positions:
                 sentences.append(seg.strip())

@@ -40,6 +40,26 @@ def test_is_reference_title_cjk():
     assert not is_reference_title("检索增強生成")
 
 
+def test_is_reference_title_decorated():
+    """Keyword + digits/punctuation decoration still matches."""
+    assert is_reference_title("References (2024)")
+    assert is_reference_title("3. References")
+    assert is_reference_title("参考文献（三）")
+    assert is_reference_title("参考文献:")
+    assert not is_reference_title("Reference Architecture")
+    assert not is_reference_title("References updated")
+
+
+def test_is_reference_title_no_false_positives():
+    """CJK keyword substrings inside real titles must NOT be stripped."""
+    assert not is_reference_title("參考架構設計")
+    assert not is_reference_title("系统引用说明")
+    assert not is_reference_title("引用格式說明")
+    assert not is_reference_title("引用计数优化")
+    assert not is_reference_title("文献综述方法")
+    assert not is_reference_title("Source Code Analysis")
+
+
 def test_strip_reference_sections_removes_block():
     md = (
         "# Doc\n\n"

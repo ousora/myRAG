@@ -3,10 +3,14 @@
 Identical (raw, source_type, system_prompt) inputs are formatted only once
 per process — avoids re-running the (expensive) LLM call on re-ingest.
 Bounded LRU keyed by a content hash.
+
+Stored results are deep-copied on both put and get so callers can freely
+mutate their returned dict without poisoning the cache for future lookups.
 """
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import logging
 import threading
@@ -47,17 +51,19 @@ def format_cached(raw: str, source_type: str, system_prompt: str | None,
         compute: Function that computes the result if not cached.
 
     Returns:
-        The formatting result (from cache or computed).
+        A deep copy of the formatting result (from cache or computed). The
+        copy protects the cache: mutating the returned dict never affects
+        subsequent lookups.
 
     """
     key = format_cache_key(raw, source_type, system_prompt)
     with _FORMAT_CACHE_LOCK:
         if key in _FORMAT_CACHE:
             _FORMAT_CACHE.move_to_end(key)
-            return _FORMAT_CACHE[key]
+            return copy.deepcopy(_FORMAT_CACHE[key])
     result = compute()
     with _FORMAT_CACHE_LOCK:
-        _FORMAT_CACHE[key] = result
+        _FORMAT_CACHE[key] = copy.deepcopy(result)
         if len(_FORMAT_CACHE) > _FORMAT_CACHE_MAX:
             _FORMAT_CACHE.popitem(last=False)
     return result

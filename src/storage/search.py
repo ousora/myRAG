@@ -150,11 +150,13 @@ class _SearchOps(_StoreBase):
                 )
                 params.append(tag)
 
-        # Vector search requires a non-null embedding column.
-        where = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
+        # Vector ranking requires a non-null embedding column.
         if query_vector is not None:
             where_clauses.append("embedding IS NOT NULL")
-            where = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
+
+        where = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
+
+        if query_vector is not None:
             emb_str = _SQLITE_VEC.serialize_float32(query_vector)
             sql = (
                 f"""SELECT id, title, tags as raw_tags, text_summary,
@@ -188,8 +190,17 @@ class _SearchOps(_StoreBase):
         return results
 
     def hybrid_search(self, query_text: str, query_vector: list[float] | None = None,
-                      k: int = 10) -> list[dict]:
-        """Hybrid search: vector similarity + full-text (FTS5)."""
+                      k: int = 10, *, rrf_k: int = 60) -> list[dict]:
+        """Hybrid search: vector similarity + full-text (FTS5).
+
+        Args:
+            query_text: Free-text query (FTS5 side of the fusion).
+            query_vector: Embedded query (vector side). Either side may be None.
+            k: Number of fused results to return.
+            rrf_k: Reciprocal-Rank-Fusion smoothing constant (standard: 60).
+                   Larger values dampen the influence of top ranks.
+
+        """
         self._setup_schema()
 
         # Empty queries fall back to pure vector search if a vector is provided.
@@ -268,7 +279,6 @@ class _SearchOps(_StoreBase):
             # so rank 1 is simply the nearest neighbor.
             vec_rank_map = {v["id"]: i + 1 for i, v in enumerate(vec_results)}
 
-            rrf_k = 60
             total_results = max(len(fts_rank_map), len(vec_results), 1)
 
             result_list = []
