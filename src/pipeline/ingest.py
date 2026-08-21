@@ -4,6 +4,8 @@ import logging
 import re
 from pathlib import Path
 
+from pipeline.utils import build_doc_summary as _build_doc_summary
+
 logger = logging.getLogger(__name__)
 
 
@@ -38,11 +40,18 @@ def _ingest_markdown(md_path: str, store_path: str, *,
     md_content = md_file.read_text(encoding="utf-8")
     logger.info("Ingesting %s: %d chars", md_file.name, len(md_content))
 
-    # Extract title from first `# Title`
+    # Extract title from first `# Title`; tags from YAML front matter (if any)
     title = "Untitled Document"
     title_match = re.search(r"^#\s+(.+)$", md_content, re.MULTILINE)
     if title_match:
         title = title_match.group(1).strip()
+
+    from pipeline.markdown_utils import parse_frontmatter
+    frontmatter = parse_frontmatter(md_content)
+    raw_tags = frontmatter.get("tags", [])
+    if isinstance(raw_tags, str):
+        raw_tags = [raw_tags]
+    tags = [str(t) for t in raw_tags]
 
     # Chunk
     from chunkers import Chunker
@@ -51,17 +60,16 @@ def _ingest_markdown(md_path: str, store_path: str, *,
     logger.info("  → %d chunks from %s", len(all_chunks), md_file.name)
 
     # Embed + store
-    from embedders import Embedder
-    from pipeline.core import _build_doc_summary
+    from embedders import create_embedder
     from storage.sqlite_vec import SQLiteVecStore
 
-    with Embedder() as e:
+    with create_embedder() as e:
         stored_chunks = e.store_chunks(all_chunks, doc_id=doc_id)
 
-        summary_text = _build_doc_summary(title, [], md_content)
+        summary_text = _build_doc_summary(title, tags, md_content)
         stored_doc = e.store_document(
             title=title,
-            tags=[],
+            tags=tags,
             text_summary=summary_text,
             source_file=str(md_file.resolve()),
             total_chunks=len(stored_chunks),
@@ -73,7 +81,7 @@ def _ingest_markdown(md_path: str, store_path: str, *,
             doc_embedding = stored_doc.get("embedding")
             db.upsert_document(
                 title=title,
-                tags=[],
+                tags=tags,
                 text_summary=summary_text,
                 source_file=str(md_file.resolve()),
                 total_chunks=len(stored_chunks),

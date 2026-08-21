@@ -6,13 +6,14 @@ import logging
 import logging.handlers
 import sys
 from pathlib import Path
+from typing import Any
 
-from config import get_config_lazy as _get_config
+from config import get_config as _get_config
 
 logger = logging.getLogger(__name__)
 
 
-def _cli_print(*args, **kwargs):
+def _cli_print(*args: Any, **kwargs: Any) -> None:
     """Print to stdout so it's separated from logging (which goes to stderr)."""
     print(*args, **kwargs)
 
@@ -59,6 +60,12 @@ def main() -> int:
     hybrid_parser.add_argument("input", help="file to process")
     hybrid_parser.add_argument("--store", required=True, help="Path to sqlite-vec database")
     hybrid_parser.add_argument("--doc-id", default="doc_0", help="Document ID for storage")
+
+    # query command: ask the indexed knowledge base
+    query_parser = subparsers.add_parser("query", help="Query the index and generate an LLM answer")
+    query_parser.add_argument("input", help="Natural-language question")
+    query_parser.add_argument("--store", required=True, help="Path to sqlite-vec database")
+    query_parser.add_argument("-k", type=int, default=5, help="Number of context chunks to retrieve")
 
     args = parser.parse_args()
 
@@ -157,6 +164,14 @@ def main() -> int:
         else:
             logger.error("Failed to generate markdown for %s", args.input)
             return 1
+
+    elif args.command == "query":
+        from pipeline.core import rag_query
+        result = rag_query(args.input, db_path=args.store, k=args.k)
+        _cli_print(result["answer"])
+        sources = sorted({c.get("source_doc_id", "?") for c in result.get("context", [])})
+        if sources:
+            _cli_print(f"\nSources: {', '.join(sources)}")
 
     return 0
 

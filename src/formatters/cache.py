@@ -11,8 +11,10 @@ import hashlib
 import logging
 import threading
 from collections import OrderedDict
-from collections.abc import Callable
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 logger = logging.getLogger(__name__)
 
@@ -21,7 +23,7 @@ _FORMAT_CACHE_LOCK = threading.Lock()
 _FORMAT_CACHE_MAX = 256
 
 
-def format_cache_key(raw: str, source_type: str, system_prompt) -> str:
+def format_cache_key(raw: str, source_type: str, system_prompt: str | None) -> str:
     """Generate a cache key from the input parameters.
 
     Hashes each component separately to avoid the system prompt (several KB)
@@ -34,15 +36,16 @@ def format_cache_key(raw: str, source_type: str, system_prompt) -> str:
     ).hexdigest()
 
 
-def format_cached(raw: str, source_type: str, system_prompt, compute: Callable[[], dict[str, Any]]) -> dict[str, Any]:
+def format_cached(raw: str, source_type: str, system_prompt: str | None,
+                  compute: Callable[[], dict[str, Any]]) -> dict[str, Any]:
     """Compute and cache a formatting result using LRU cache.
-    
+
     Args:
         raw: The raw text to format.
         source_type: The source type hint.
         system_prompt: The system prompt used.
         compute: Function that computes the result if not cached.
-        
+
     Returns:
         The formatting result (from cache or computed).
 

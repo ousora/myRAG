@@ -67,11 +67,11 @@ uv run python -m pipeline process input.pdf --store data/myrag.db
 
 ```python
 from storage.sqlite_vec import SQLiteVecStore
-from embedders import Embedder
+from embedders import create_embedder
 
 db = SQLiteVecStore("data/myrag.db")
-e = Embedder()
-hits = db.search_chunks(e.embed("search query"), k=5)
+with create_embedder() as e:
+    hits = db.search_chunks(e.embed("search query"), k=5)
 ```
 
 ## Notes

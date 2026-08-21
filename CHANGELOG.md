@@ -1,5 +1,36 @@
 # Changelog — myRAG Pipeline
 
+## [0.7.1] — 2026-08-21
+
+### Fixed
+
+- **CJK regex ranges were silently inert**: `_CJK_RANGE` fragments were built as `\u4e00-9fff` (only the start escaped), which compiles to a *literal string* match — so Chinese FTS query building, CJK word counting, and MMR lexical scoring never actually matched CJK text. Ranges are now built from integer codepoints via `chr()` in the new shared module `src/myrag/cjk.py`, which also fixes astral-plane blocks (Ext B/C/D) that `\uXXXX` (4-digit) escapes could never represent. All four previously divergent CJK implementations (`storage/schema.py`, `storage/search.py`, `storage/inserts.py`, `rerank.py`, `pipeline/markdown_utils.py`) now share this single source of truth. (src/myrag/cjk.py, +call sites)
+- **Ghost chunks on re-ingest of a shrunken document**: `upsert_chunks()` used `ON CONFLICT ... DO UPDATE`, which left old rows beyond the new chunk count in the index forever — polluting vector and FTS retrieval after any document edit. Stale tail rows are now deleted in the same transaction; regression-tested. Added explicit `delete_doc_chunks(doc_id)` / `delete_document(source_file)` APIs. (src/storage/inserts.py)
+- **`Embedder.__new__` returned a different class based on config** (factory-in-constructor anti-pattern): backend selection now lives exclusively in `create_embedder()`. `Embedder` is a plain remote client class. Call sites updated; tests patch `embedders.create_embedder`. (src/embedders/bge_m3.py, src/pipeline/hybrid.py, src/pipeline/ingest.py)
+- **`rag_query()` called `e.__exit__(None, None, None)` directly**: owned embedders are now closed via `e.close()`; provided embedders/stores are still left untouched.
+- **Markdown title collisions silently overwrote files**: two distinct documents with the same title clobbered each other's `.md`. Identical content rewrites stay idempotent; different content now gets a `-1`, `-2`, … suffix with a warning. (src/formatters/writer.py)
+- **YAML front matter used Python `repr()` for quoting**: replaced with `yaml.safe_dump`, so titles containing quotes/backslashes serialize per spec. (src/formatters/writer.py)
+- **Reusing an existing `.md` dropped tags**: both `process_file_hybrid(md_path=...)` and `_ingest_markdown()` now read tags back from YAML front matter instead of hardcoding `[]`. (src/pipeline/hybrid.py, src/pipeline/ingest.py)
+- **Schema-rejection heuristic was undocumented and brittle**: `"peg" in err_body or "format" in err_body` is now a documented marker list (`peg` = llama.cpp PEG grammar errors; `schema`/`response_format` = vLLM/Ollama wording) in one place. (src/formatters/_llm.py)
+- **`_format_result()` had a booby-trapped signature**: `format_text_async=None` as a default crashed with `TypeError` when omitted under `use_llm=True`. The parameter is gone (imported at call time); `cfg` is required. (src/pipeline/hybrid.py)
+- **Parser cache race + discovery mismatch in dispatcher**: instance cache writes are locked; pptx/xls/xlsx/epub are registered explicitly so directory batch discovery matches `resolve_parser()` behavior (previously the fallback formats were unresolvable by extension scan). (src/parsers/dispatcher.py)
+- **`get_config()` race on first call**: double-checked locking added. The redundant `get_config_lazy()` wrapper was removed (identical to `get_config()`). (src/config.py)
+- **Naive `datetime.now()` timestamps**: created_at/debug-log timestamps now use UTC. (src/formatters/_llm.py)
+- sqlite-vec extension loading is disabled again immediately after load (hardening). Chunker dead code (`_MD_PARSER`) removed and its mispositioned docstring restored to the class. (src/storage/sqlite_vec.py, src/chunkers/__init__.py)
+- **`cjk.py` range comments contradicted the code**: the `(0x2A700, 0x2EBEF)` range actually covers Extensions C–F, but comments/docstrings claimed A–D with E/F "excluded". Comments corrected to A–F (G and later excluded). (src/myrag/cjk.py, src/storage/search.py)
+- **`call_llm()` JSON-parse diagnostics lost**: the per-attempt warning dropped the `JSONDecodeError` detail and the final `ValueError` was no longer chained from it; both restored. (src/formatters/_llm.py)
+- Stale `Embedder()` example in the ingest-doc skill replaced with `create_embedder()` (direct `Embedder()` no longer selects the local backend). (.github/skills/ingest-doc/SKILL.md)
+
+### Changed
+
+- **Vector search computes cosine distance once per query**: the ranking SELECT now returns `vec_distance_cosine(...) AS distance`; the second per-id distance pass in `hybrid_search()` is deleted (one full embedding scan saved per hybrid query). `search_chunks()` results include `distance`. (src/storage/search.py)
+- **`_detect_cjk_ratio()` uses compiled regex counting** instead of a per-character Python loop (order-of-magnitude faster on large documents). (src/formatters/_internal.py)
+- **Batch DB writes serialized across threads**: `process_directory_hybrid()` keeps concurrent LLM/embedding but takes a lock around the short sqlite write section to avoid writer contention. (src/pipeline/hybrid.py)
+- **`formatters/_internal.py` split**: LLM transport moved to `formatters/_llm.py`, bringing both modules back under the 500-line limit.
+- **CLI**: new `query` subcommand exposes `rag_query()` from the command line (`python -m src query "..." --store db`). (src/pipeline/cli.py)
+- **Quality gates restored**: ruff errors 329 → 0, mypy errors 427 → 0 (production code fully annotated; test modules exempt from def-level annotations via override). `mypy_path=src` resolves first-party imports; conflicting `TRY003` disabled in favor of EM101/EM102 style; test per-file ignores cover nested `**/tests/*`.
+- **Test count**: 286 tests passing.
+
 ## [0.7.0] — 2026-08-21
 
 ### Fixed

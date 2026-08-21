@@ -1,5 +1,6 @@
 """Tests for SQLiteVecStore — embedding serialization, CRUD, search."""
 
+import contextlib
 import os
 import sqlite3
 import tempfile
@@ -19,10 +20,8 @@ def store():
     from storage.sqlite_vec import SQLiteVecStore
     db = SQLiteVecStore(path)
     yield db
-    try:
+    with contextlib.suppress(Exception):
         db.close()
-    except Exception:
-        pass
     Path(path).unlink(missing_ok=True)
 
 
@@ -100,10 +99,61 @@ class TestUpsertChunk:
             c["embedding"] = embs[i]
 
         results = store.upsert_chunks(chunks, doc_id="doc_ids")
+        ids = [r["id"] for r in results]
+        assert all(i is not None for i in ids)
         assert [r["chunk_index"] for r in results] == [0, 1, 2]
-        assert all(r["id"] is not None for r in results)
         # Ids must be distinct per chunk_index within the same doc.
         assert len({r["id"] for r in results}) == 3
+
+    def test_upsert_chunks_removes_stale_tail(self, store):
+        """Re-ingesting a shrunken document must delete orphaned old chunks.
+
+        Regression: ON CONFLICT upserts left rows beyond the new chunk count
+        in the index forever, polluting retrieval with ghost content.
+        """
+        embs = [_make_embedding() for _ in range(3)]
+        chunks3 = [{"text": f"old {i}", "section_path": ["S"], "embedding": embs[i]} for i in range(3)]
+        store.upsert_chunks(chunks3, doc_id="doc_shrink")
+        assert len(store.get_chunks_by_doc("doc_shrink")) == 3
+
+        chunks1 = [{"text": "new shorter content", "section_path": ["S"], "embedding": embs[0]}]
+        store.upsert_chunks(chunks1, doc_id="doc_shrink")
+
+        remaining = store.get_chunks_by_doc("doc_shrink")
+        assert len(remaining) == 1
+        assert remaining[0]["text"] == "new shorter content"
+        # Ghost text must be gone from the FTS index too.
+        ghosts = store.conn.execute(
+            "SELECT rowid FROM chunks_fts WHERE chunks_fts MATCH 'old'"
+        ).fetchall()
+        assert len(ghosts) == 0
+
+    def test_delete_doc_chunks(self, store):
+        """delete_doc_chunks removes all rows for the doc and syncs FTS."""
+        emb = _make_embedding()
+        store.upsert_chunk({"text": "deletable content", "section_path": ["S"]},
+                           doc_id="doc_del_api", embedding=emb, chunk_index=0)
+        store.upsert_chunk({"text": "second chunk", "section_path": ["S"]},
+                           doc_id="doc_del_api", embedding=emb, chunk_index=1)
+
+        removed = store.delete_doc_chunks("doc_del_api")
+        assert removed == 2
+        assert store.get_chunks_by_doc("doc_del_api") == []
+        ghosts = store.conn.execute(
+            "SELECT rowid FROM chunks_fts WHERE chunks_fts MATCH 'deletable'"
+        ).fetchall()
+        assert len(ghosts) == 0
+        assert store.delete_doc_chunks("doc_del_api") == 0
+
+    def test_delete_document(self, store):
+        """delete_document removes the B-index row keyed by source_file."""
+        store.upsert_document(
+            title="Doomed", tags=[], text_summary="bye",
+            source_file="/gone.pdf", total_chunks=0,
+        )
+        assert store.delete_document("/gone.pdf") is True
+        assert store.delete_document("/gone.pdf") is False
+        assert store.search_documents(tags=[]) == []
 
     def test_get_embeddings_by_ids_round_trip(self, store):
         """Stored chunk embeddings are returned aligned to the requested ids."""
@@ -383,7 +433,9 @@ class TestHybridRRF:
         assert _build_fts_query("") is None
         assert _build_fts_query("   ") is None
         # Parentheses / quotes / colons are stripped, not treated as operators.
-        assert "OR" in _build_fts_query('RAG: "what is this" (explained)')
+        fts_query = _build_fts_query('RAG: "what is this" (explained)')
+        assert fts_query is not None
+        assert "OR" in fts_query
 
 
 

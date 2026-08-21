@@ -361,9 +361,7 @@ def try_fix_common_issues(result: dict) -> dict:
         lower = w.lower()
         if len(w) < 4:
             return True
-        if any(lower.endswith(e) for e in ("ing", "tion", "ment", "ness")):
-            return True
-        return False
+        return bool(any(lower.endswith(e) for e in ("ing", "tion", "ment", "ness")))
 
     if isinstance(fixed.get("tags"), list):
         fixed["tags"] = [t for t in fixed["tags"] if not _is_generic_single_word(t)]

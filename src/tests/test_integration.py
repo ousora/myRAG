@@ -61,7 +61,7 @@ def test_process_directory_nested(tmp_path: Path) -> None:
 
 
 def _mock_format_future(text, source_type="pdf", **kwargs):
-    future = Future()
+    future: Future = Future()
     future.set_result({
         "title": "Test",
         "tags": ["test"],
@@ -153,7 +153,7 @@ def test_process_file_hybrid_store_path_local_backend(tmp_path: Path, monkeypatc
     txt.write_text("Short test document.\n")
     db_path = tmp_path / "test.db"
 
-    with patch("embedders.Embedder", return_value=embedder), \
+    with patch("embedders.create_embedder", return_value=embedder), \
          patch("storage.sqlite_vec.SQLiteVecStore", StubStore):
         result = process_file_hybrid(filepath=str(txt), doc_id="test_doc",
                                      store_path=str(db_path))

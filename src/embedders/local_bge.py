@@ -42,12 +42,12 @@ class LocalEmbedder:
         self.batch_size = batch_size
         self.max_tokens_per_batch = max_tokens_per_batch or 512 * 32  # ~16K tokens
 
-    def __enter__(self):
+    def __enter__(self) -> LocalEmbedder:
+        """Return self so the model can be used in ``with`` blocks."""
         return self
 
-    def __exit__(self, *exc_info):
-        # sentence-transformers holds no open network/file handles to close.
-        return False
+    def __exit__(self, *exc_info: object) -> None:
+        """No-op — sentence-transformers holds no handles to release."""
 
     def close(self) -> None:
         """No-op: sentence-transformers holds no open handles to release.
@@ -57,17 +57,17 @@ class LocalEmbedder:
         """
 
     # ── Attributes that tests and callers expect on both backends ────────
-    # ``model`` mirrors Embedder.model so Embedder.__new__ can return a
-    # LocalEmbedder in local mode without callers needing to branch.
+    # ``model`` mirrors Embedder.model so create_embedder() can return either
+    # backend without callers needing to branch.
     model: str = "BAAI/bge-m3"
 
     def store_chunk(
         self,
         chunk_text: str,
         *,
-        section_path=None,
-        doc_id="doc_0",
-        chunk_idx=0,
+        section_path: list[str] | None = None,
+        doc_id: str = "doc_0",
+        chunk_idx: int = 0,
     ) -> dict:
         """Embed a single chunk and return metadata for storage.
 
@@ -100,15 +100,15 @@ class LocalEmbedder:
             if cached is not None:
                 return cached
             try:
-                emb = self._model.encode(text).tolist()
+                emb: list[float] = self._model.encode(text).tolist()
             except Exception as exc:
                 if getattr(get_config(), "embedding_hash_fallback", False):
                     logger.warning("Local embed failed (%s); using hash fallback", exc)
                     # Bypass the cache: fallback vectors are non-semantic and
                     # must not outlive the model failure.
-                    emb = _hash_embed(text)
-                    _validate_embedding_dimension(emb)
-                    return emb
+                    fallback = _hash_embed(text)
+                    _validate_embedding_dimension(fallback)
+                    return fallback
                 raise
             _validate_embedding_dimension(emb)
             _embed_cache_put(text, emb)
@@ -150,8 +150,8 @@ class LocalEmbedder:
                                     raise
                         continue
                     raise
-                for e in embeddings.tolist():
-                    _validate_embedding_dimension(e)
+                for vec in embeddings.tolist():
+                    _validate_embedding_dimension(vec)
                 all_embeddings.extend(embeddings.tolist())
         except Exception as exc:
             if getattr(get_config(), "embedding_hash_fallback", False):

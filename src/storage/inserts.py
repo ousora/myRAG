@@ -1,4 +1,4 @@
-"""Insert operations: upsert_chunk, upsert_chunks, upsert_document."""
+"""Insert operations: upsert_chunk, upsert_chunks, upsert_document, delete_*."""
 
 from __future__ import annotations
 
@@ -7,16 +7,15 @@ import logging
 import re
 from datetime import datetime, timezone
 
-from .schema import _CJK_RANGE, _SQLITE_VEC
+from myrag.cjk import CJK_CHAR_RE, count_cjk
+
+from .schema import _SQLITE_VEC, _StoreBase
 
 logger = logging.getLogger(__name__)
 
-# Pre-compile CJK regex once at module level for performance.
-_CJK_RE = re.compile("|".join(_CJK_RANGE))
-
 
 def _count_words(text: str) -> int:
-    """Count words, treating CJK characters as individual tokens.
+    r"""Count words, treating CJK characters as individual tokens.
 
     Uses ``re.sub`` to remove CJK in one pass, then counts Latin tokens
     via ``\\S+`` splitting. Each CJK character counts individually since
@@ -24,12 +23,12 @@ def _count_words(text: str) -> int:
     """
     if not text:
         return 0
-    cjk_count = len(_CJK_RE.findall(text))
-    non_cjk = re.sub(_CJK_RE, "", text)
+    cjk_count = count_cjk(text)
+    non_cjk = CJK_CHAR_RE.sub("", text)
     return cjk_count + len(re.findall(r"\S+", non_cjk))
 
 
-class _InsertOps:
+class _InsertOps(_StoreBase):
     """Handles all insert/upsert operations for chunks and documents."""
 
     def _setup_schema(self) -> None:
@@ -185,6 +184,13 @@ class _InsertOps:
                     entity_names=excluded.entity_names""",
             params,
         )
+        # Remove stale tail chunks: when a document is re-ingested with fewer
+        # chunks than the previous run (e.g. after editing), rows beyond the
+        # new chunk_count would otherwise linger forever and pollute retrieval.
+        self.conn.execute(
+            "DELETE FROM chunks WHERE source_doc_id = ? AND chunk_index >= ?",
+            (doc_id, len(chunks)),
+        )
         self.conn.commit()
 
         id_by_index = {
@@ -248,3 +254,34 @@ class _InsertOps:
             "embedding": embedding,
             "created_at": created_at,
         }
+
+    def delete_doc_chunks(self, doc_id: str) -> int:
+        """Delete all chunks belonging to *doc_id* (A index).
+
+        The AFTER DELETE trigger keeps the external-content FTS index in sync.
+
+        Returns:
+            Number of chunk rows removed.
+
+        """
+        self._setup_schema()
+        cur = self.conn.execute("DELETE FROM chunks WHERE source_doc_id = ?", (doc_id,))
+        self.conn.commit()
+        if cur.rowcount:
+            logger.info("Deleted %d chunks for doc_id=%s", cur.rowcount, doc_id)
+        return cur.rowcount
+
+    def delete_document(self, source_file: str) -> bool:
+        """Delete the document-level record (B index) keyed by *source_file*.
+
+        Returns:
+            True if a row was removed, False if no matching document existed.
+
+        """
+        self._setup_schema()
+        cur = self.conn.execute("DELETE FROM documents WHERE source_file = ?", (source_file,))
+        self.conn.commit()
+        deleted = bool(cur.rowcount)
+        if deleted:
+            logger.info("Deleted document record for source_file=%s", source_file)
+        return deleted

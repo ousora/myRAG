@@ -4,8 +4,13 @@
 
 ### P1 — Important
 
-- [ ] **CLI search subcommand**
-  - `python -m pipeline search "question" --db data/doc.db`
+- [ ] **Migrate chunks table to sqlite-vec `vec0` virtual table**
+  - Current searches are brute-force `ORDER BY vec_distance_cosine(...)` full scans; a `vec0` KNN virtual table (`WHERE embedding MATCH ? AND k = ?`) would give indexed ANN retrieval.
+  - Needs a migration path for existing DBs (user_version bump) and metadata-column filters for `source_doc_id`/section queries.
+
+### Done (2026-08-21)
+
+- [x] **CLI query subcommand** — `python -m src query "question" --store data/doc.db`
 
 ---
 

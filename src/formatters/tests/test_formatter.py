@@ -45,8 +45,7 @@ class MockResponse:
 def _mock_response(json_data: dict) -> Mock:
     """Create a mock httpx.post that returns our test response."""
     resp = MockResponse({"choices": [{"message": {"content": json.dumps(json_data)}}]})
-    post_mock = Mock(return_value=resp)
-    return post_mock
+    return Mock(return_value=resp)
 
 
 class TestFormatText:
@@ -124,22 +123,27 @@ class TestPreprocessJson:
     """Tests for _preprocess_json — strip markdown fences, extract first JSON object."""
 
     def test_plain_valid_json(self):
-        assert json.loads(_preprocess_json('{"a": 1}')) == {"a": 1}
+        result = _preprocess_json('{"a": 1}')
+        assert result is not None
+        assert json.loads(result) == {"a": 1}
 
     def test_markdown_fence_json(self):
         raw = '```json\n{"x": [1,2,3]}\n```'
         result = _preprocess_json(raw)
+        assert result is not None
         assert json.loads(result) == {"x": [1, 2, 3]}
 
     def test_no_fence_but_wrapped_with_text(self):
         raw = 'Here is the answer:\n{ "hello": "world" }'
         result = _preprocess_json(raw)
+        assert result is not None
         assert '"hello"' in result and '"world"' in result
 
     def test_balanced_braces_returns_first_object(self):
         """Balanced brace matching should return only the first complete JSON object."""
         raw = '{"a": 1} explanation {"b": 2}'
         result = _preprocess_json(raw)
+        assert result is not None
         parsed = json.loads(result)
         assert parsed == {"a": 1}, "Should stop at the first balanced }"
 
@@ -202,7 +206,7 @@ class TestFixBareQuotes:
 
 
 class TestCallLlmSchemaRetry:
-    """Regression: the schema-rejected retry branch was unreachable because
+    """Regression: the schema-rejected retry branch was unreachable because.
 
     the HTTP response was never recovered from the exception chain.
     """
@@ -212,7 +216,7 @@ class TestCallLlmSchemaRetry:
 
         The retry mutates the same dict in place, so Mock's call_args
         would alias it.
-        
+
         """
         import copy
 

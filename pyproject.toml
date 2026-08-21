@@ -38,6 +38,8 @@ py-modules = ["pipeline", "config"]
 
 [tool.mypy]
 python_version = "3.10"
+mypy_path = "src"
+explicit_package_bases = true
 warn_return_any = true
 warn_unused_configs = true
 disallow_untyped_defs = true
@@ -47,11 +49,19 @@ disallow_untyped_decorators = true
 no_implicit_optional = true
 warn_redundant_casts = true
 warn_unused_ignores = true
-exclude = ["\\.git|\\.env|venv|node_modules|dist|build|myrag_pipeline\\.egg-info"]
+exclude = ["\\.git|\\.env|venv|node_modules|dist|build|myrag_pipeline\\.egg-info", "^src/__main__\\.py$", "^src/__init__\\.py$"]
 
 [[tool.mypy.overrides]]
-module = ["markitdown.*", "trafilatura.*", "sqlite_vec.*", "bge_m3.*"]
+module = ["markitdown.*", "trafilatura.*", "sentence_transformers.*"]
 ignore_missing_imports = true
+
+# Test modules are exempt from def-level annotation requirements (production
+# code is fully annotated; tests still get full type checking on what they do
+# annotate).
+[[tool.mypy.overrides]]
+module = ["*.tests.*", "tests.*"]
+disallow_untyped_defs = false
+disallow_incomplete_defs = false
 
 [tool.ruff]
 line-length = 120
@@ -59,11 +69,14 @@ target-version = "py310"
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "N", "B", "A", "C4", "D", "DTZ", "EM", "FBT", "ICN", "ISC", "LOG", "PIE", "Q", "RSE", "RET", "SIM", "TCH", "TID", "TRY", "UP", "YTT"]
-ignore = ["E501", "D100", "D104", "D107"]
+# TRY003 (long messages in exceptions) conflicts with EM101/EM102, which this
+# project follows instead: assign the message to a variable, then raise.
+ignore = ["E501", "D100", "D104", "D107", "TRY003"]
 
 [tool.ruff.lint.per-file-ignores]
 "__init__.py" = ["F401"]
-"tests/*" = ["D103", "D104", "S101"]
+# Tests don't need docstrings on every test class/method/magic method.
+"**/tests/*" = ["D101", "D102", "D103", "D104", "D105", "D107", "S101", "SIM117", "SIM115", "FBT002"]
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]

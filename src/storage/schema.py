@@ -5,20 +5,29 @@ from __future__ import annotations
 import importlib
 import logging
 import sys
+from typing import TYPE_CHECKING, Protocol, runtime_checkable
+
+if TYPE_CHECKING:
+    import sqlite3
 
 logger = logging.getLogger(__name__)
 
 
-# Hex ranges for CJK Unified Ideographs Blocks A–D, converted to \\uXXXX regex patterns at module load time. The basic range alone misses ~1% of modern Chinese text in Extensions E/F/G which are rarely used outside specialized domains (historical/archaic).
-_CJK_RANGE_HEX = [
-    "4e00-9fff",        # CJK Unified Ideographs (basic plane)
-    "3400-4dbf",        # Block A — historical/archaic characters
-    "20000-2a6df",      # Block B — rare characters, names, place names
-    "2a700-2ebef",      # Block C — rare variants and archaic forms
-]
+@runtime_checkable
+class SQLiteVecModule(Protocol):
+    """Structural type for the dynamically loaded ``sqlite_vec`` package.
 
-# Each entry like \\u4e00-\\u9fff is a valid regex character class range with \u escapes.
-_CJK_RANGE = [f"\\u{r}" for r in _CJK_RANGE_HEX]
+    The loader returns an untyped module object; this protocol gives static
+    checkers (and readers) the subset of its API we rely on.
+    """
+
+    def serialize_float32(self, vector: list[float]) -> bytes:
+        """Pack a float vector into the little-endian float32 BLOB format."""
+        ...
+
+    def load(self, conn: sqlite3.Connection) -> None:
+        """Register the vec0 extension functions on *conn*."""
+        ...
 
 
 # ---------------------------------------------------------------------------
@@ -29,7 +38,7 @@ _CJK_RANGE = [f"\\u{r}" for r in _CJK_RANGE_HEX]
 #   ``importlib.metadata.distribution("sqlite-vec").files`` — robust across
 #   editable installs, wheels, and different Python versions.
 # ---------------------------------------------------------------------------
-_sqlite_vec: object | None = None
+_sqlite_vec: SQLiteVecModule | None = None
 
 
 def _load_sqlite_vec() -> object:
@@ -62,7 +71,7 @@ def _load_sqlite_vec() -> object:
     # across editable installs, wheels, and different Python versions.
     try:
         dist = distribution("sqlite-vec")
-    except PackageNotFoundError as exc:  # type: ignore[attr-defined]
+    except PackageNotFoundError as exc:
         _msg = ("The 'sqlite-vec' package is required but not installed.\n"
                 "Install it with: pip install sqlite-vec\n"
                 "(or: uv add --dev sqlite-vec)")
@@ -80,13 +89,31 @@ def _load_sqlite_vec() -> object:
     spec = _util.spec_from_file_location(
         "_third_party_sqlite_vec", str(dist.locate_file(init_py)),
     )
-    mod = _util.module_from_spec(spec)  # type: ignore[union-attr]
+    if spec is None or spec.loader is None:
+        _msg = "Failed to create import spec for sqlite_vec.__init__"
+        raise RuntimeError(_msg)
+    mod = _util.module_from_spec(spec)
     sys.modules["_third_party_sqlite_vec"] = mod
-    spec.loader.exec_module(mod)  # type: ignore[union-attr]
+    spec.loader.exec_module(mod)
     _sqlite_vec = mod
     return mod
 
 
 # Cached reference for convenience — callers use this instead of calling
 # ``_load_sqlite_vec()`` every time.
-_SQLITE_VEC = _load_sqlite_vec()
+_SQLITE_VEC: SQLiteVecModule = _load_sqlite_vec()  # type: ignore[assignment]
+
+
+class _StoreBase:
+    """Shared state/contract for the insert and search operation mixins.
+
+    ``SQLiteVecStore`` owns the connection lifecycle; the mixins declare the
+    attributes they rely on here so static checkers see a complete type.
+    """
+
+    conn: sqlite3.Connection
+    _schema_ready: bool
+
+    def _setup_schema(self) -> None:
+        """Create tables and triggers if needed (implemented by _InsertOps)."""
+        raise NotImplementedError

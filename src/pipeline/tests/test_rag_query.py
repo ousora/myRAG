@@ -43,7 +43,7 @@ class TestRagQuery:
         mock_embedder.__exit__ = Mock(return_value=False)
 
         with patch("pipeline.core._get_config") as cfg_mock, \
-             patch("embedders.Embedder") as embedder_cls, \
+             patch("embedders.create_embedder") as embedder_cls, \
              patch("formatters.call_llm_raw") as llm_mock:
 
             cfg_mock.return_value.format_timeout = 30
@@ -75,7 +75,7 @@ class TestRagQuery:
         mock_embedder.__exit__ = Mock(return_value=False)
 
         with patch("pipeline.core._get_config") as cfg_mock, \
-             patch("embedders.Embedder") as embedder_cls, \
+             patch("embedders.create_embedder") as embedder_cls, \
              patch("formatters.call_llm_raw") as llm_mock:
 
             cfg_mock.return_value.format_timeout = 30
@@ -92,7 +92,7 @@ class TestRagQuery:
     def test_creates_embedder_when_not_provided(self, tmp_db):
         """When embedder is None, a new one should be created."""
         with patch("pipeline.core._get_config") as cfg_mock, \
-             patch("embedders.Embedder") as embedder_cls, \
+             patch("embedders.create_embedder") as embedder_cls, \
              patch("formatters.call_llm_raw") as llm_mock:
 
             cfg_mock.return_value.format_timeout = 30
@@ -113,7 +113,7 @@ class TestRagQuery:
         """When db is None, a new SQLiteVecStore should be created."""
         with patch("pipeline.core._get_config") as cfg_mock, \
              patch("storage.sqlite_vec.SQLiteVecStore") as store_cls, \
-             patch("embedders.Embedder") as embedder_cls, \
+             patch("embedders.create_embedder") as embedder_cls, \
              patch("formatters.call_llm_raw") as llm_mock:
 
             cfg_mock.return_value.format_timeout = 30
@@ -140,7 +140,7 @@ class TestRagQuery:
         """A store created internally should be closed after use."""
         with patch("pipeline.core._get_config") as cfg_mock, \
              patch("storage.sqlite_vec.SQLiteVecStore") as store_cls, \
-             patch("embedders.Embedder") as embedder_cls, \
+             patch("embedders.create_embedder") as embedder_cls, \
              patch("formatters.call_llm_raw") as llm_mock:
 
             cfg_mock.return_value.format_timeout = 30
@@ -172,7 +172,7 @@ class TestRagQuery:
 
         with patch("pipeline.core._get_config") as cfg_mock, \
              patch("storage.sqlite_vec.SQLiteVecStore") as store_cls, \
-             patch("embedders.Embedder") as embedder_cls, \
+             patch("embedders.create_embedder") as embedder_cls, \
              patch("formatters.call_llm_raw") as llm_mock:
 
             cfg_mock.return_value.format_timeout = 30
@@ -197,7 +197,7 @@ class TestRagQuery:
         """A provided embedder should not have __exit__ called."""
         with patch("pipeline.core._get_config") as cfg_mock, \
              patch("storage.sqlite_vec.SQLiteVecStore") as store_cls, \
-             patch("embedders.Embedder") as embedder_cls, \
+             patch("embedders.create_embedder") as embedder_cls, \
              patch("formatters.call_llm_raw") as llm_mock:
 
             cfg_mock.return_value.format_timeout = 30
@@ -236,7 +236,7 @@ class TestRagQuery:
         mock_embedder.__exit__ = Mock(return_value=False)
 
         with patch("pipeline.core._get_config") as cfg_mock, \
-             patch("embedders.Embedder") as embedder_cls, \
+             patch("embedders.create_embedder") as embedder_cls, \
              patch("formatters.call_llm_raw") as llm_mock:
 
             cfg_mock.return_value.format_timeout = 30
@@ -244,7 +244,7 @@ class TestRagQuery:
             llm_mock.return_value = "RAG is cool."
 
             mod = __import__("pipeline.core", fromlist=["rag_query"])
-            result = mod.rag_query("What is RAG?", db_path=tmp_db, k=2,
+            mod.rag_query("What is RAG?", db_path=tmp_db, k=2,
                                    db=store, embedder=mock_embedder)
 
         # The LLM was called with a prompt that includes the assembled context
@@ -272,7 +272,7 @@ class TestRagQuery:
         mock_embedder.__exit__ = Mock(return_value=False)
 
         with patch("pipeline.core._get_config") as cfg_mock, \
-             patch("embedders.Embedder") as embedder_cls, \
+             patch("embedders.create_embedder") as embedder_cls, \
              patch("formatters.call_llm_raw") as llm_mock:
 
             cfg_mock.return_value.format_timeout = 30
@@ -302,7 +302,7 @@ class TestRagQuery:
         mock_embedder.__exit__ = Mock(return_value=False)
 
         with patch("pipeline.core._get_config") as cfg_mock, \
-             patch("embedders.Embedder") as embedder_cls, \
+             patch("embedders.create_embedder") as embedder_cls, \
              patch("formatters.call_llm_raw") as llm_mock:
 
             cfg_mock.return_value.format_timeout = 30
@@ -333,7 +333,7 @@ class TestRagQuery:
         mock_embedder.__exit__ = Mock(return_value=False)
 
         with patch("pipeline.core._get_config") as cfg_mock, \
-             patch("embedders.Embedder") as embedder_cls, \
+             patch("embedders.create_embedder") as embedder_cls, \
              patch("formatters.call_llm_raw") as llm_mock:
 
             cfg_mock.return_value.format_timeout = 30

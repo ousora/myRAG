@@ -5,6 +5,7 @@ Old individual parsers removed; dispatch registered at module load time.
 """
 
 import logging
+import threading
 from pathlib import Path
 from typing import Protocol, runtime_checkable
 
@@ -20,14 +21,18 @@ logger = logging.getLogger(__name__)
 class TextParser(Protocol):
     """Interface for text extractors from documents."""
 
-    def parse(self, filepath: str) -> str: ...
+    def parse(self, filepath: str) -> str:
+        """Extract plain text from *filepath*."""
+        ...
 
 
 PARSERS: dict[str, type[TextParser]] = {}
-# Thread safety: reads (resolve_parser) are safe from multiple threads.
-# Writes (register_parser) require external synchronization.
 # Parser instance cache — each parser class is instantiated once and reused.
+# Guarded by a lock because resolve_parser() runs inside the batch pipeline's
+# thread pool; without it two threads could both instantiate a parser (the GIL
+# makes this benign but wasteful).
 _PARSER_CACHE: dict[type[TextParser], TextParser] = {}
+_CACHE_LOCK = threading.Lock()
 
 # Common extension aliases — map primary name to its variants
 _ALIASES: dict[str, list[str]] = {
@@ -69,6 +74,7 @@ class MarkItDownParser(TextParser):
             ) from exc
 
     def parse(self, filepath: str) -> str:
+        """Extract text via MarkItDown's universal converter."""
         result = self._converter.convert(filepath)
         return result.text_content or ""
 
@@ -96,6 +102,7 @@ class TrafilaturaParser(TextParser):
             ) from exc
 
     def parse(self, filepath: str) -> str:
+        """Extract main content from an HTML file via Trafilatura."""
         path = Path(filepath)
 
         # Pragmatic encoding handling — try UTF-8 first, fallback to GBK for
@@ -124,10 +131,15 @@ register_parser("docx", MarkItDownParser)
 register_parser("markdown", MarkItDownParser)  # also aliases md/mkd
 register_parser("txt", MarkItDownParser)        # txt maps to MarkItDown via generic handler
 register_parser("html", TrafilaturaParser)      # also aliases htm
+# MarkItDown also converts these formats; registering them explicitly keeps
+# directory discovery (PARSERS.keys()) consistent with resolve_parser().
+register_parser("pptx", MarkItDownParser)
+register_parser("xls", MarkItDownParser)
+register_parser("xlsx", MarkItDownParser)
+register_parser("epub", MarkItDownParser)
 
 logger.debug(
-    "Registered %d parsers: pdf, docx, markdown(.md/.mkd), txt, html(.htm)",
-    len(PARSERS),
+    "Registered parsers: pdf, docx, markdown(.md/.mkd), txt, html(.htm), pptx, xls, xlsx, epub",
 )
 
 
@@ -146,19 +158,12 @@ def resolve_parser(filepath: str | Path) -> TextParser | None:
     ext = path.suffix.lstrip(".")
     cls = PARSERS.get(ext.lower())
     if cls is not None:
-        if cls not in _PARSER_CACHE:
-            _PARSER_CACHE[cls] = cls()  # type: ignore[call-arg]
-        instance = _PARSER_CACHE[cls]
-        logger.info("Using %s to parse %s (.%s)", cls.__name__, path.name, ext)
+        with _CACHE_LOCK:
+            if cls not in _PARSER_CACHE:
+                _PARSER_CACHE[cls] = cls()
+            instance = _PARSER_CACHE[cls]
+        logger.info("Using %s to parse %s (.%s)", type(instance).__name__, path.name, ext)
         return instance
-
-    # Fallback: MarkItDown also supports these formats but they're not explicitly
-    # registered (to keep PARSERS dict clean — only primary types are registered).
-    if ext.lower() in ("pptx", "xls", "xlsx", "epub"):
-        if MarkItDownParser not in _PARSER_CACHE:
-            _PARSER_CACHE[MarkItDownParser] = MarkItDownParser()
-        logger.info("Falling back to MarkItDownParser for %s (.%s)", path.name, ext)
-        return _PARSER_CACHE[MarkItDownParser]
 
     logger.warning("No parser registered for .%s — skipping %s", ext, filepath)
     return None

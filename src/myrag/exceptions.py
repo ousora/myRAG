@@ -11,7 +11,7 @@ All exceptions inherit from ``MyRagException`` for easy catching.
 """
 
 
-class MyRagException(Exception):
+class MyRagException(Exception):  # noqa: N818 — established public name
     """Base class for all myRAG pipeline exceptions."""
 
     def __init__(self, message: str = "", context: dict | None = None):

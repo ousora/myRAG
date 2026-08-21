@@ -14,17 +14,18 @@ vector + FTS hybrid search; it does not change recall.
 import logging
 import re
 
+from myrag.cjk import CJK_CHAR_RE
+
 logger = logging.getLogger(__name__)
 
 
-_CJK_RE = re.compile(r"[\u4e00-\u9fff]")
 _LATIN_RE = re.compile(r"[a-zA-Z]{2,}")
 
 
 def _tokenize(text: str) -> list[str]:
     """Tokenize into lowercase Latin words + individual CJK characters."""
     tokens = [t.lower() for t in _LATIN_RE.findall(text)]
-    tokens += list(_CJK_RE.findall(text))
+    tokens += CJK_CHAR_RE.findall(text)
     return tokens
 
 
@@ -33,7 +34,7 @@ def _lexical_score(query: str, text: str) -> float:
     q_tokens = _tokenize(query)
     if not q_tokens:
         return 0.0
-    t_freq = {}
+    t_freq: dict[str, int] = {}
     for t in _tokenize(text):
         t_freq[t] = t_freq.get(t, 0) + 1
     overlap = sum(min(q_tokens.count(t), t_freq.get(t, 0)) for t in set(q_tokens))
@@ -49,7 +50,8 @@ def _cosine(a: list[float], b: list[float]) -> float:
     nb = sum(y * y for y in b) ** 0.5
     if na == 0 or nb == 0:
         return 0.0
-    return dot / (na * nb)
+    similarity: float = dot / (na * nb)
+    return similarity
 
 
 def mmr_rerank(

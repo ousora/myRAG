@@ -45,7 +45,7 @@ class TestIngestMarkdown:
 
         try:
             with patch("chunkers.Chunker", return_value=mock_chunker):
-                with patch("embedders.Embedder", return_value=mock_embedder):
+                with patch("embedders.create_embedder", return_value=mock_embedder):
                     with patch("storage.sqlite_vec.SQLiteVecStore", return_value=mock_store):
                         result = _ingest_markdown(md_path, db_path)
                         assert result == db_path
@@ -78,7 +78,7 @@ class TestIngestMarkdown:
 
         try:
             with patch("chunkers.Chunker", return_value=mock_chunker):
-                with patch("embedders.Embedder", return_value=mock_embedder):
+                with patch("embedders.create_embedder", return_value=mock_embedder):
                     with patch("storage.sqlite_vec.SQLiteVecStore", return_value=mock_store):
                         result = _ingest_markdown(md_path, db_path)
                         assert result == db_path
@@ -110,7 +110,7 @@ class TestIngestMarkdown:
 
         try:
             with patch("chunkers.Chunker", return_value=mock_chunker):
-                with patch("embedders.Embedder", return_value=mock_embedder):
+                with patch("embedders.create_embedder", return_value=mock_embedder):
                     with patch("storage.sqlite_vec.SQLiteVecStore", return_value=mock_store):
                         _ingest_markdown(md_path, db_path, doc_id="custom_doc_123")
         finally:
@@ -141,7 +141,7 @@ class TestIngestMarkdown:
 
         try:
             with patch("chunkers.Chunker", return_value=mock_chunker):
-                with patch("embedders.Embedder", return_value=mock_embedder):
+                with patch("embedders.create_embedder", return_value=mock_embedder):
                     with patch("storage.sqlite_vec.SQLiteVecStore", return_value=mock_store):
                         _ingest_markdown(md_path, db_path, chunk_size=2048)
         finally:

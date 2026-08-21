@@ -1,11 +1,17 @@
 """Write formatted results to markdown files."""
 
+import logging
 import os
 import re
 from pathlib import Path
+from typing import Any
+
+import yaml
+
+logger = logging.getLogger(__name__)
 
 
-def _insert_wikilinks(body: str, entities: list[dict]) -> str:
+def _insert_wikilinks(body: str, entities: list[dict[str, Any]]) -> str:
     """Replace entity mentions with [[wikiname]] format for .md display.
 
     Only called from write_to_md() — never used in the chunk/embed pipeline.
@@ -22,7 +28,7 @@ def _insert_wikilinks(body: str, entities: list[dict]) -> str:
     protected_ranges = _extract_protected_ranges(body)
 
     # 2. Collect all replacements from longest to shortest entity name
-    replacements = []
+    replacements: list[tuple[int, int, str]] = []
     for e in sorted(entities, key=lambda x: -len(x["name"])):
         pattern = re.escape(e["name"])
         for match in re.finditer(pattern, body):
@@ -75,8 +81,13 @@ def _is_inside_protected(position: int, protected_ranges: list[tuple[int, int]])
     return any(start <= position < end for start, end in protected_ranges)
 
 
-def write_to_md(result, output_dir):
+def write_to_md(result: dict[str, Any], output_dir: str | Path) -> str:
     """Format structured result into markdown and save it.
+
+    Two distinct documents sharing a title never overwrite each other: when
+    the target file exists with *different* content, a numeric suffix
+    (``-1``, ``-2``, …) is appended. Re-writing identical content keeps the
+    same path, so re-running the pipeline stays idempotent.
 
     Args:
         result: Output from format_text() with title, tags, metadata, body
@@ -95,11 +106,11 @@ def write_to_md(result, output_dir):
 
     title = result["title"]
     safe_name = _safe_filename(title)
-    file_path = str(output_path / f"{safe_name}.md")
+    base_path = output_path / f"{safe_name}.md"
 
     metadata = result.get("metadata", {})
 
-    lines = []
+    lines: list[str] = []
 
     # YAML front matter (standard format for Obsidian, VS Code)
     _write_yaml_frontmatter(lines, result)
@@ -130,6 +141,8 @@ def write_to_md(result, output_dir):
 
     md_content = "\n".join(lines).rstrip() + "\n"
 
+    file_path = _resolve_output_path(base_path, md_content)
+
     try:
         with open(file_path, "w", encoding="utf-8") as f:
             f.write(md_content)
@@ -140,7 +153,27 @@ def write_to_md(result, output_dir):
     return file_path
 
 
-def _safe_filename(title):
+def _resolve_output_path(base_path: Path, md_content: str) -> str:
+    """Pick the write target for *base_path*, avoiding clobbering other docs.
+
+    - Path free → use it.
+    - Path exists with byte-identical content → reuse it (idempotent re-runs).
+    - Path exists with different content → append ``-N`` before ``.md``.
+    """
+    if not base_path.exists() or base_path.read_text(encoding="utf-8") == md_content:
+        return str(base_path)
+
+    logger.warning("Markdown collision: %s exists with different content", base_path.name)
+    stem, suffix = base_path.stem, base_path.suffix
+    for n in range(1, 1000):
+        candidate = base_path.with_name(f"{stem}-{n}{suffix}")
+        if not candidate.exists() or candidate.read_text(encoding="utf-8") == md_content:
+            return str(candidate)
+    _msg = f"Could not find a free filename for {base_path.name} (tried 999 suffixes)"
+    raise OSError(_msg)
+
+
+def _safe_filename(title: str) -> str:
     """Generate a safe filename from title.
 
     Preserves Unicode characters (UTF-8 paths are standard on modern systems).
@@ -161,8 +194,8 @@ def _safe_filename(title):
     return safe
 
 
-def _write_yaml_frontmatter(lines, result):
-    """Write YAML front matter block.
+def _write_yaml_frontmatter(lines: list[str], result: dict[str, Any]) -> None:
+    """Write a YAML front matter block.
 
     Fields written (when present and non-empty):
       - title     — document title
@@ -170,30 +203,33 @@ def _write_yaml_frontmatter(lines, result):
       - created_at  — ISO-8601 timestamp of ingestion
       - modified_date — last modification date (if available)
       - tags        — list of tag strings
+
+    Values are serialized with ``yaml.safe_dump`` so quoting/escaping follows
+    the YAML spec instead of Python ``repr()`` heuristics.
     """
     metadata = result.get("metadata", {})
-    source_file = metadata.get("source_file") or ""
-    created_at = metadata.get("created_at") or ""
-    modified_date = metadata.get("modified_date")
-    tags = result.get("tags", [])
+    fields: list[tuple[str, object]] = []
 
-    lines.append("---")
     if title := result.get("title"):
-        lines.append(f"title: {repr(title)}")
-    if source_file:
-        lines.append(f"source: {repr(source_file)}")
-    if created_at:
-        lines.append(f"created_at: {created_at}")
-    if modified_date:
-        lines.append(f"modified_date: {repr(modified_date)}")
+        fields.append(("title", title))
+    if source_file := (metadata.get("source_file") or ""):
+        fields.append(("source", source_file))
+    if created_at := (metadata.get("created_at") or ""):
+        fields.append(("created_at", created_at))
+    if modified_date := metadata.get("modified_date"):
+        fields.append(("modified_date", modified_date))
+    tags = result.get("tags", [])
     if tags:
-        # YAML list format for tags
-        lines.append("tags:")
-        for tag in tags:
-            lines.append(f'  - "{tag}"')
+        fields.append(("tags", [str(t) for t in tags]))
+
+    for key, value in fields:
+        dumped = yaml.safe_dump({key: value}, allow_unicode=True, default_flow_style=False)
+        # safe_dump of a single-key mapping emits "key: value\n" (or a block
+        # list for tags); append it verbatim, stripping the trailing newline.
+        lines.append(dumped.rstrip("\n"))
 
 
-def _write_metadata_block(lines, result):
+def _write_metadata_block(lines: list[str], result: dict[str, Any]) -> None:
     """Write a structured metadata block.
 
     Fields written (when present and non-empty):
@@ -229,7 +265,7 @@ def _write_metadata_block(lines, result):
         lines.append("")
 
 
-def _write_body_with_sections(lines, body: str, sections: list):
+def _write_body_with_sections(lines: list[str], body: str, sections: list[dict[str, Any]]) -> None:
     """Write body content to the output.
 
     The LLM formatter produces valid markdown (headings, tables, code blocks).
@@ -240,7 +276,7 @@ def _write_body_with_sections(lines, body: str, sections: list):
     lines.append(body.strip())
 
 
-def format_md(result):
+def format_md(result: dict[str, Any]) -> str:
     """Format result into markdown string (no file write)."""
     import tempfile
 

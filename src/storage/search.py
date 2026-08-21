@@ -6,20 +6,21 @@ import json
 import logging
 import re
 
-from .schema import _CJK_RANGE, _SQLITE_VEC
+from myrag.cjk import CJK_TOKEN_ALTERNATION, contains_cjk
+
+from .schema import _SQLITE_VEC, _StoreBase
 
 logger = logging.getLogger(__name__)
 
 # Characters with special meaning in FTS5 MATCH query syntax. Left in the
 # query string they are parsed as operators (e.g. "-" → AND NOT) and can raise
 # "no such column" errors. We strip them before querying.
-# Characters with special meaning in FTS5 MATCH query syntax that must be stripped:
 #   "..." phrase match, ()  grouping, - AND NOT (via *^), [] {} <> / ~ ? ! .
 #   ' single quote (term delimiter), \ backslash (escape char)
 _FTS_SPECIAL = re.compile(r"""["'*^:()\\[\]{}<>/~?!.']+""")
 
 
-def _deserialize_embedding(raw) -> list[float]:
+def _deserialize_embedding(raw: object) -> list[float]:
     """Deserialize embedding from BLOB (sqlite_vec format) or legacy string.
 
     Module-level so it isn't re-created on every ``get_chunks_by_doc`` call.
@@ -31,23 +32,27 @@ def _deserialize_embedding(raw) -> list[float]:
     # Legacy comma-separated string format
     if isinstance(raw, str):
         return [float(v) for v in raw.split(",")]
-    return list(raw)
+    if isinstance(raw, (list, tuple)):
+        return [float(v) for v in raw]
+    return []  # Unknown payload type — treat as missing embedding
 
 
 # Pre-compile CJK pattern once at module level.
-_CJK_PAT = re.compile("|".join(_CJK_RANGE))
+_CJK_PAT = re.compile(CJK_TOKEN_ALTERNATION)
 
 
 def _build_fts_query(text: str) -> str | None:
     """Turn free-text into an FTS5-safe MATCH query.
 
-    Strips all recognized FTS5 operator characters, then OR-joins the surviving tokens so any
-    query term can contribute to the fused score (recall-friendly). The CJK character class covers Blocks A–D; the basic range alone misses ~1% of modern Chinese text in Extensions E/F/G which are rarely used outside specialized domains. Returns
-    None when no usable token remains, so callers can fall back to vector-only.
+    Strips all recognized FTS5 operator characters, then OR-joins the surviving
+    tokens so any query term can contribute to the fused score
+    (recall-friendly). CJK terms are matched per-character (ideographs
+    Extensions A–F plus kana); Latin runs are kept whole. Returns None when no
+    usable token remains, so callers can fall back to vector-only.
     """
     cleaned = _FTS_SPECIAL.sub(" ", text)
-    tokens = re.findall(r"[A-Za-z0-9]+|" + "|".join(_CJK_RANGE), cleaned)
-    tokens = [t for t in tokens if len(t) > 1 or bool(_CJK_PAT.match(t))]
+    tokens = re.findall(r"[A-Za-z0-9]+" + "|" + CJK_TOKEN_ALTERNATION, cleaned)
+    tokens = [t for t in tokens if len(t) > 1 or bool(contains_cjk(t))]
     if not tokens:
         return None
     return " OR ".join(tokens)
@@ -69,7 +74,7 @@ def _parse_section_path(raw: str) -> list[str]:
         return []
 
 
-class _SearchOps:
+class _SearchOps(_StoreBase):
     """Handles all search/query operations."""
 
     def _parse_section_path(self, raw: str) -> list[str]:
@@ -103,13 +108,16 @@ class _SearchOps:
         where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
 
         sql = (f"""SELECT c.id, c.text, c.section_path,
-                          c.source_doc_id, c.chunk_index, c.word_count
+                          c.source_doc_id, c.chunk_index, c.word_count,
+                          vec_distance_cosine(c.embedding, ?) AS distance
                   FROM chunks c
                   {where}
-                  ORDER BY vec_distance_cosine(c.embedding, ?) ASC
+                  ORDER BY distance ASC
                   LIMIT ?""")
 
-        results = self.conn.execute(sql, params + [emb_str, k]).fetchall()
+        # Placeholder order follows SQL position: the distance expression in
+        # SELECT binds first, then the WHERE filters, then LIMIT.
+        results = self.conn.execute(sql, [emb_str] + params + [k]).fetchall()
 
         return [{
             "id": row[0],
@@ -118,6 +126,7 @@ class _SearchOps:
             "source_doc_id": row[3],
             "chunk_index": row[4],
             "word_count": row[5],
+            "distance": row[6],
         } for row in results]
 
     def search_documents(self, query_vector: list[float] | None = None,
@@ -189,9 +198,10 @@ class _SearchOps:
                 emb_str = _SQLITE_VEC.serialize_float32(query_vector)
                 results = self.conn.execute(
                     """SELECT c.id, c.text, c.section_path,
-                                  c.source_doc_id, c.chunk_index, c.word_count
+                                  c.source_doc_id, c.chunk_index, c.word_count,
+                                  vec_distance_cosine(c.embedding, ?) AS distance
                            FROM chunks c
-                           ORDER BY vec_distance_cosine(embedding, ?) ASC
+                           ORDER BY distance ASC
                            LIMIT ?""",
                     [emb_str, k]
                 ).fetchall()
@@ -203,6 +213,7 @@ class _SearchOps:
                     "source_doc_id": row[3],
                     "chunk_index": row[4],
                     "word_count": row[5],
+                    "distance": row[6],
                 } for row in results]
             return []
 
@@ -220,11 +231,14 @@ class _SearchOps:
         vec_results = []
         if query_vector:
             emb_str = _SQLITE_VEC.serialize_float32(query_vector)
+            # Distance is selected in the same scan that ranks the rows —
+            # no second pass over the embeddings is needed for RRF ranking.
             results = self.conn.execute(
                 """SELECT c.id, c.text, c.section_path,
-                                 c.source_doc_id, c.chunk_index, c.word_count
+                                 c.source_doc_id, c.chunk_index, c.word_count,
+                                 vec_distance_cosine(c.embedding, ?) AS distance
                           FROM chunks c
-                          ORDER BY vec_distance_cosine(embedding, ?) ASC
+                          ORDER BY distance ASC
                           LIMIT ?""",
                 [emb_str, k]
             ).fetchall()
@@ -237,6 +251,7 @@ class _SearchOps:
                     "source_doc_id": row[3],
                     "chunk_index": row[4],
                     "word_count": row[5],
+                    "_distance": row[6],
                 })
 
         combined = {}
@@ -249,24 +264,9 @@ class _SearchOps:
                 if v["id"] not in combined:
                     combined[v["id"]] = dict(v)
 
-            # Compute cosine distances once per combined ID (batched).
-            # Cap at 1000 to stay under SQLite's SQLITE_MAX_VARIABLE_NUMBER.
-            max_in_clause = 1000
-            ids_to_score = [v["id"] for v in vec_results[:max_in_clause]]
-            score_map = {}
-            if ids_to_score:
-                placeholders = ",".join("?" * len(ids_to_score))
-                emb_str = _SQLITE_VEC.serialize_float32(query_vector)
-                for row in self.conn.execute(
-                    f"SELECT id, vec_distance_cosine(embedding, ?) FROM chunks WHERE id IN ({placeholders})",
-                    [emb_str] + ids_to_score,
-                ).fetchall():
-                    score_map[row[0]] = row[1]
-
-            # Reciprocal Rank Fusion with proper integer rank assignment.
-            # Sort all vector results by distance ONCE (rank = 1 for nearest).
-            sorted_by_dist = sorted(vec_results, key=lambda x: score_map.get(x["id"], 2.0))
-            vec_rank_map = {v["id"]: i + 1 for i, v in enumerate(sorted_by_dist)}
+            # Vector rank map: rows already arrive sorted by ascending distance,
+            # so rank 1 is simply the nearest neighbor.
+            vec_rank_map = {v["id"]: i + 1 for i, v in enumerate(vec_results)}
 
             rrf_k = 60
             total_results = max(len(fts_rank_map), len(vec_results), 1)
@@ -276,7 +276,9 @@ class _SearchOps:
                 fts_rank = fts_rank_map.get(doc_id, total_results + 1)
                 vec_rank = vec_rank_map.get(doc_id, total_results + 1)
                 rrf_score = (1.0 / (fts_rank + rrf_k)) + (1.0 / (vec_rank + rrf_k))
-                result_list.append({k: v for k, v in data.items() if not k.startswith("_")} | {"_rrf_score": rrf_score})
+                result_list.append(
+                    {k: v for k, v in data.items() if not k.startswith("_")} | {"_rrf_score": rrf_score}
+                )
 
             return sorted(result_list, key=lambda x: -x["_rrf_score"])[:k]
         # Text-only query (no vector): fetch chunk details in one query, then

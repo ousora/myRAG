@@ -33,8 +33,10 @@ class SQLiteVecStore(_InsertOps, _SearchOps):
 
         import sqlite3
         conn = sqlite3.connect(self.db_path, timeout=10)
-        conn.enable_load_extension(True)
+        conn.enable_load_extension(True)  # noqa: FBT003 — stdlib API takes positional bool
         _load_sqlite_vec().load(conn)  # type: ignore[attr-defined]
+        # Hardening: disable extension loading once the vec0 extension is in.
+        conn.enable_load_extension(False)  # noqa: FBT003
 
         self.conn = conn
         self._schema_ready = False
@@ -59,14 +61,15 @@ class SQLiteVecStore(_InsertOps, _SearchOps):
             "word_count": row[6],
         } for row in results]
 
-    def __enter__(self):
+    def __enter__(self) -> SQLiteVecStore:
+        """Return self for ``with`` block usage."""
         return self
 
-    def __exit__(self, *exc_info):
+    def __exit__(self, *exc_info: object) -> None:
+        """Close the connection on context exit."""
         self.close()
-        return False
 
-    def close(self):
+    def close(self) -> None:
         """Close the database connection safely."""
         try:
             self.conn.commit()

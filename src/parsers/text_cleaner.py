@@ -171,7 +171,7 @@ class TextCleaner:
         if not lines:
             return text
 
-        merged = []
+        merged: list[str] = []
         prev_line = ""
         prev_col_count = 0
 

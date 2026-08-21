@@ -57,11 +57,11 @@ class TestResolveParser:
         assert parser is not None
 
     def test_unknown_extension(self) -> None:
-        parser = resolve_parser("test.xyz")
+        resolve_parser("test.xyz")
         # Note: if a custom parser was registered in test session, it may match
         # The key behavior is that it returns a parser or None
         # We test that it doesn't raise
-        assert parser is not None or True  # type: ignore[redundant-assertion]
+        assert True
 
 
 class TestSourceTypeFor:

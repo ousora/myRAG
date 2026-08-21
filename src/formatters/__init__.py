@@ -15,15 +15,17 @@ import httpx
 
 from ._internal import (
     _detect_cjk_ratio,
-    _fix_bare_quotes_in_body_field,
     _format_text_async_impl,
     _format_text_chunked,
     _format_text_single,
+    effective_chunk_threshold,
+    format_cached,
+)
+from ._llm import (
+    _fix_bare_quotes_in_body_field,
     _preprocess_json,
     call_llm,
     call_llm_raw,
-    effective_chunk_threshold,
-    format_cached,
 )
 from .writer import format_md, write_to_md
 
@@ -93,7 +95,8 @@ def format_text(raw: str, source_type: str = "web") -> dict[str, Any]:
 
     """
     if not raw.strip():
-        raise ValueError("Input text is empty")
+        msg = "Input text is empty"
+        raise ValueError(msg)
 
     # Auto-dispatch based on CJK-aware text length.
     raw_len = len(raw)
@@ -124,10 +127,9 @@ def format_text_async(
                        Useful for RAG queries where you want a different prompt style.
 
     """
-    future = get_executor().submit(
+    return get_executor().submit(
         _format_text_async_impl, raw, source_type, system_prompt=system_prompt,
     )
-    return future
 
 
 def format_text_with_system(
@@ -151,7 +153,8 @@ def format_text_with_system(
 
     """
     if not raw.strip():
-        raise ValueError("Input text is empty")
+        msg = "Input text is empty"
+        raise ValueError(msg)
 
     raw_len = len(raw)
     threshold = effective_chunk_threshold(raw)

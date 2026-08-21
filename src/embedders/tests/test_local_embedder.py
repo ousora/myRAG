@@ -9,7 +9,7 @@ import pytest
 
 class FakeSentenceTransformer:
     """A fake SentenceTransformer class for testing.
-    
+
     encode() returns a list with a tolist() method (simulating numpy array).
     For single string input: returns [[emb]] where emb is a list of floats.
     For list input: returns [[emb1], [emb2], ...].
@@ -21,10 +21,7 @@ class FakeSentenceTransformer:
         self.device = device
 
     def encode(self, text):
-        if isinstance(text, str):
-            data = [[0.1] * 1024]
-        else:
-            data = [[0.1] * 1024 for _ in text]
+        data = [[0.1] * 1024] if isinstance(text, str) else [[0.1] * 1024 for _ in text]
         return _NumpyLike(data, is_batch=not isinstance(text, str))
 
 
@@ -45,7 +42,7 @@ class _NumpyLike:
 def mock_sentence_transformers():
     """Provide a fake sentence_transformers module for all tests in this file."""
     st_module = types.ModuleType("sentence_transformers")
-    st_module.SentenceTransformer = FakeSentenceTransformer
+    st_module.SentenceTransformer = FakeSentenceTransformer  # type: ignore[attr-defined]
     orig = sys.modules.get("sentence_transformers")
     sys.modules["sentence_transformers"] = st_module
     yield st_module
@@ -84,16 +81,16 @@ class TestLocalEmbedderInit:
         e = LocalEmbedder()
         assert e.__enter__() is e
 
-    def test_context_manager_exit_returns_false(self):
+    def test_context_manager_exit_is_callable(self):
         from embedders.local_bge import LocalEmbedder
         e = LocalEmbedder()
-        assert e.__exit__(None, None, None) is False
+        e.__exit__(None, None, None)  # must not raise
 
     def test_close_is_callable_and_returns_none(self):
         """close() must exist to mirror Embedder's interface (pipeline calls it)."""
         from embedders.local_bge import LocalEmbedder
         e = LocalEmbedder()
-        assert e.close() is None
+        e.close()  # must not raise; mirrors Embedder.close() interface
 
     def test_close_matches_remote_embedder_interface(self):
         from embedders import Embedder
@@ -153,7 +150,8 @@ class TestLocalEmbedderEmbed:
             def encode(self, text):
                 self.calls[0] += 1
                 if isinstance(text, list) and len(text) > 1:
-                    raise RuntimeError("out of memory")
+                    msg = "out of memory"
+                    raise RuntimeError(msg)
                 if isinstance(text, str):
                     return _NumpyLike([[0.1] * 1024], is_batch=False)
                 return _NumpyLike([[0.1] * 1024 for _ in text], is_batch=True)

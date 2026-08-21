@@ -9,6 +9,10 @@ This module contains helper functions used by the main pipeline:
 from __future__ import annotations
 
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from parsers.dispatcher import TextParser
 
 
 def build_doc_summary(title: str, tags: list[str], body: str, *, head: int = 800, tail: int = 400) -> str:
@@ -30,26 +34,27 @@ def build_doc_summary(title: str, tags: list[str], body: str, *, head: int = 800
     return f"Title: {title}\nTags: {tag_str}\n{snippet}".strip()
 
 
-def resolve_parser(filepath: str):
+def resolve_parser(filepath: str) -> TextParser | None:
     """Resolve a parser for the given file path.
-    
+
     Args:
         filepath: Path to the file to parse.
-        
+
     Returns:
         Parser instance or None if no parser is available.
 
     """
     from parsers.dispatcher import resolve_parser as rp
-    return rp(filepath)
+    parser: TextParser | None = rp(filepath)
+    return parser
 
 
 def source_type_for(filepath: str) -> str:
     """Map a file extension to the formatter's source_type hint.
-    
+
     Args:
         filepath: Path to the file.
-        
+
     Returns:
         Source type string for the formatter.
 

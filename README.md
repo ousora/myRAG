@@ -164,6 +164,10 @@ python -m src process input.pdf --store data/doc.db --no-llm
 # Hybrid mode: generate .md + ingest in one command with LLM formatting
 python -m src hybrid input.pdf --store data/doc.db
 
+# Ask the indexed knowledge base (retrieval + LLM answer)
+python -m src query "What does this document say about X?" --store data/doc.db
+python -m src query "..." --store data/doc.db -k 8   # more context chunks
+
 # Traditional CLI (no LLM, no sqlite-vec)
 python -m src process-file input.txt --chunk-size 512
 ```
@@ -188,6 +192,7 @@ myrag/
 │   ├── formatters/           # LLM formatter + prompts + markdown writer + wikilinks
 │   │   ├── __init__.py
 │   │   ├── constants.py      # JSON schemas for response_format (incl. entities)
+│   │   ├── _llm.py           # LLM transport: chat calls, schema retry, JSON repair
 │   │   ├── prompts.py
 │   │   ├── writer.py
 │   │   ├── tags.py           # Tag extraction from body content
@@ -195,17 +200,18 @@ myrag/
 │   ├── chunkers/             # Pure Python markdown-it-py chunker (no LangChain)
 │   ├── embedders/            # bge-m3: remote HTTP API + local sentence-transformers
 │   │   ├── __init__.py
-│   │   ├── bge_m3.py         # Unified Embedder with mode dispatch + dimension validation
+│   │   ├── bge_m3.py         # Remote Embedder; create_embedder() factory dispatches by config
 │   │   └── local_bge.py      # LocalEmbedder via sentence-transformers
 │   ├── myrag/                # Shared utilities
 │   │   ├── __init__.py       # Package init + exception re-exports
-│   │   └── exceptions.py     # Typed exception hierarchy (ParserNotFoundError, EmbeddingError, etc.)
+│   │   ├── exceptions.py     # Typed exception hierarchy (ParserNotFoundError, EmbeddingError, etc.)
+│   │   └── cjk.py            # Canonical CJK ranges/helpers (single source of truth)
 │   └── storage/              # SQLiteVecStore with FTS5 full-text search
 │       ├── __init__.py
-│       ├── sqlite_vec.py     # Main store class (80 lines)
-│       ├── schema.py         # Table creation + schema definitions (94 lines)
-│       ├── inserts.py        # Upsert operations (234 lines)
-│       └── search.py         # Search + hybrid RRF (313 lines)
+│       ├── sqlite_vec.py     # Main store class
+│       ├── schema.py         # Table creation + schema definitions
+│       ├── inserts.py        # Upsert/delete operations
+│       └── search.py         # Search + hybrid RRF
 ├── conf/
 │   ├── config.yaml           # Your endpoints (gitignored)
 │   └── config.example.yaml   # Template (committed)

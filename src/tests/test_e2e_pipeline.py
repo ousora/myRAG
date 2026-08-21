@@ -24,7 +24,7 @@ class _FakeConfig:
 
 
 def _mock_format_future(text, source_type="pdf", **kwargs):
-    future = Future()
+    future: Future = Future()
     future.set_result({
         "title": "E2E Test Doc",
         "tags": ["e2e", "test"],

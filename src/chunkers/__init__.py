@@ -1,4 +1,4 @@
-"""Text chunking — pure Python via markdown-it-py.
+r"""Text chunking — pure Python via markdown-it-py.
 
 Uses markdown-it-py for header-aware markdown splitting with hierarchical metadata.
 Oversized chunks (> chunk_size) get a secondary recursive character split with overlap.
@@ -11,7 +11,7 @@ Output format (backward compatible with existing pipeline):
 
 import logging
 import re
-from typing import Optional
+from typing import Any
 
 from markdown_it import MarkdownIt
 
@@ -19,8 +19,6 @@ logger = logging.getLogger(__name__)
 
 
 class Chunker:
-    # Pre-compiled MarkdownIt parser — created once in __init__ and reused.
-    _MD_PARSER: MarkdownIt | None = None
     """Split markdown text into embeddable chunks using markdown-it-py.
 
     Primary split: header-aware splitting on #/##/### boundaries,
@@ -38,9 +36,11 @@ class Chunker:
         headers_to_split_on: list[tuple[str, str]] | None = None,
     ):
         if chunk_size <= 0:
-            raise ValueError(f"chunk_size must be positive (got {chunk_size})")
+            msg = f"chunk_size must be positive (got {chunk_size})"
+            raise ValueError(msg)
         if chunk_overlap < 0:
-            raise ValueError(f"chunk_overlap must be non-negative (got {chunk_overlap})")
+            msg = f"chunk_overlap must be non-negative (got {chunk_overlap})"
+            raise ValueError(msg)
 
         self.chunk_size = chunk_size
         self.chunk_overlap = min(chunk_overlap, chunk_size // 4)
@@ -53,6 +53,8 @@ class Chunker:
             ]
 
         self.headers_to_split_on = headers_to_split_on
+        # markdown-it-py's parse() is read-only on the parser instance, so a
+        # single shared instance is safe to reuse across Chunker objects.
         self._md = MarkdownIt()
 
         # Build level ↔ key mappings — H1 → 1, "H1" → 1, etc.
@@ -480,9 +482,10 @@ class Chunker:
         return result
 
     def __repr__(self) -> str:
+        """Return a compact debug representation."""
         return (f"Chunker(chunk_size={self.chunk_size}, chunk_overlap={self.chunk_overlap})")
 
 
-def chunk_text(text: str, **kwargs) -> list[dict]:
-    """Convenience wrapper."""
+def chunk_text(text: str, **kwargs: Any) -> list[dict[str, Any]]:
+    """Split *text* with a transient :class:`Chunker` built from *kwargs*."""
     return Chunker(**kwargs).chunk(text)

@@ -115,19 +115,19 @@ class TestEmbedTextsWrapper:
         original_embedder = Embedder
         try:
             import embedders.bge_m3 as mod
-            mod.Embedder = FakeEmbedder
+            mod.Embedder = FakeEmbedder  # type: ignore[misc]
             results = embed_texts(["hello", "world"])
             assert len(results) == 2
             assert all(isinstance(r, list) for r in results)
         finally:
-            mod.Embedder = original_embedder
+            mod.Embedder = original_embedder  # type: ignore[misc]
 
 
 class TestHashFallbackCache:
     """Hash-fallback vectors must not poison the embedding cache."""
 
     def test_fallback_not_cached(self, monkeypatch):
-        """After an API outage recovers, previously fallback-embedded texts
+        """After an API outage recovers, previously fallback-embedded texts.
 
         must re-embed with real semantics, not serve stale hash vectors.
         """
@@ -151,7 +151,8 @@ class TestHashFallbackCache:
         def flaky_post(path, payload):
             calls["n"] += 1
             if calls["n"] == 1:
-                raise RuntimeError("API down")
+                msg = "API down"
+                raise RuntimeError(msg)
             class FakeResp:
                 def raise_for_status(self):
                     pass

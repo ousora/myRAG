@@ -66,8 +66,8 @@ class TestFormatCached:
             call_count += 1
             return {"result": call_count}
 
-        result1 = format_cached("raw1", "web", None, compute)
-        result2 = format_cached("raw2", "web", None, compute)
+        format_cached("raw1", "web", None, compute)
+        format_cached("raw2", "web", None, compute)
 
         assert call_count == 2
 

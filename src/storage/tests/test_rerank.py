@@ -262,14 +262,14 @@ class TestMmrRerank:
 
     def test_missing_embedding_fallback(self):
         """Chunks with missing embeddings should still work (cosine returns 0)."""
-        candidates = [
+        candidates: list[dict] = [
             {"text": "hello world", "section_path": ["S"], "source_doc_id": "d",
              "chunk_index": 0, "word_count": 2, "embedding": None},
             {"text": "foo bar", "section_path": ["S"], "source_doc_id": "d",
              "chunk_index": 1, "word_count": 2, "embedding": None},
         ]
         query_vec = self._make_embedding(seed=42)
-        chunk_vectors = [c.get("embedding") for c in candidates]
+        chunk_vectors = [[float(v) for v in (c["embedding"] or [])] for c in candidates]
 
         result = mmr_rerank("hello world", query_vec, chunk_vectors, candidates, k=2)
 

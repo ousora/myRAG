@@ -15,8 +15,9 @@ import concurrent.futures
 import logging
 import re
 import sqlite3
+import threading
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import httpx
 
@@ -25,7 +26,7 @@ import parsers  # noqa: F401 — loads dispatcher (MarkItDown + Trafilatura)
 import parsers.markdown_normalizer  # noqa: F401 — registers normalize_markdown
 from chunkers import Chunker
 from config import CLEAN_RULES_PATH
-from config import get_config_lazy as _get_config
+from config import get_config as _get_config
 from parsers.text_cleaner import TextCleaner
 
 from . import markdown_utils, utils  # noqa: F401,TC001 — re-exported for test patching
@@ -33,19 +34,34 @@ from .utils import build_doc_summary as _build_doc_summary  # noqa: F401,TC001 �
 
 logger = logging.getLogger(__name__)
 
+# Serializes the sqlite-vec write section across batch-processing threads.
+# Embedding (the expensive remote part) stays fully concurrent; only the
+# short local DB transactions are single-writer to avoid lock contention.
+_DB_WRITE_LOCK = threading.Lock()
+
+
+def _empty_result(md_path: str | None = None) -> dict[str, Any]:
+    """Build the uniform failure/no-op result for process_file_hybrid."""
+    return {
+        "chunks": [],
+        "document": {},
+        "format_result": {"title": "", "tags": [], "body": ""},
+        "md_path": md_path,
+        "db_path": None,
+    }
+
 
 def _format_result(cleaned: str, filepath: str, *, use_llm: bool = True,
-                  format_text_async=None, cfg=None) -> dict | None:
+                   cfg: Any = None) -> dict[str, Any] | None:
     """Build the formatter result dict for *cleaned* text.
 
-    When *use_llm* is True, delegates to ``format_text_async`` (LLM call).
-    When False, returns a minimal dict with the parsed text as body and the
-    first ``# `` heading as title — no model call, fully deterministic.
-    Returns None on timeout/failure.
+    When *use_llm* is True, delegates to ``format_text_async`` (LLM call) and
+    waits up to ``cfg.format_timeout`` seconds. When False, returns a minimal
+    dict with the parsed text as body and the first ``# `` heading as title —
+    no model call, fully deterministic. Returns None on timeout/failure.
     """
     if not use_llm:
-        # ponytail: skip LLM — build a minimal result dict from parsed text.
-        # Title from first H1, or "Untitled"; tags/sections empty.
+        # Skip LLM — build a minimal result dict from parsed text.
         # Run the deterministic normalizer first so the body is structured
         # markdown (promoted headings, normalized lists, formatted links,
         # repaired bold/italic, aligned tables) without any model call.
@@ -59,6 +75,8 @@ def _format_result(cleaned: str, filepath: str, *, use_llm: bool = True,
             "body": normalized,
         }
 
+    from formatters import format_text_async
+
     future = format_text_async(cleaned, source_type=utils.source_type_for(filepath))
     try:
         return future.result(timeout=cfg.format_timeout)
@@ -67,8 +85,11 @@ def _format_result(cleaned: str, filepath: str, *, use_llm: bool = True,
         return None
 
 
-def process_file_hybrid(filepath: str, *, doc_id="doc_0", remove_page_breaks=True,
-                        collapse_whitespace=True, rules_config: str | None = None, chunk_size=1024, store_path=None, md_output_dir=None, md_path=None, use_llm=True):
+def process_file_hybrid(filepath: str, *, doc_id: str = "doc_0",
+                        remove_page_breaks: bool = True, collapse_whitespace: bool = True,
+                        rules_config: str | None = None, chunk_size: int = 1024,
+                        store_path: str | None = None, md_output_dir: str | None = None,
+                        md_path: str | None = None, use_llm: bool = True) -> dict[str, Any]:
     """Parse file with LLM formatter → chunker → embedder → sqlite-vec (Hybrid A+B).
 
     Args:  # noqa: D417
@@ -81,6 +102,8 @@ def process_file_hybrid(filepath: str, *, doc_id="doc_0", remove_page_breaks=Tru
         md_path: Optional path to an EXISTING .md file. When given and the file
                  exists, the LLM formatter is skipped entirely and the .md is
                  reused (two-phase: generate once, ingest many times).
+        use_llm: When False, skip the LLM formatter and use deterministic
+                 normalization instead.
 
     Returns dict with:
         chunks  — list of dicts with embedding data (A - fine-grained)
@@ -89,19 +112,28 @@ def process_file_hybrid(filepath: str, *, doc_id="doc_0", remove_page_breaks=Tru
         md_path  — path to generated/reused .md file, else None
 
     """
-    from formatters import format_text_async, write_to_md
+    from formatters import write_to_md
 
     cfg = _get_config()
 
-    md_out_path = None
+    md_out_path: str | None = None
     cleaned = ""
+    tags: list[str] = []
+    result: dict[str, Any]
     if md_path and Path(md_path).is_file():
         # Reuse an existing .md — skip the (expensive) LLM formatter entirely.
         logger.info("Reusing existing markdown: %s", md_path)
         content = Path(md_path).read_text(encoding="utf-8")
         title_match = re.search(r"^#\s+(.+)$", content, re.MULTILINE)
         title = title_match.group(1).strip() if title_match else "Untitled"
-        result = {"title": title, "body": content, "tags": [], "metadata": {"entities": []}}
+        # Front matter written by write_to_md carries the original tags —
+        # reuse them so the B index keeps tag metadata across re-ingests.
+        frontmatter = markdown_utils.parse_frontmatter(content)
+        raw_tags = frontmatter.get("tags", [])
+        if isinstance(raw_tags, str):
+            raw_tags = [raw_tags]
+        tags = [str(t) for t in raw_tags]
+        result = {"title": title, "body": content, "tags": tags, "metadata": {"entities": []}}
         md_out_path = md_path
         cleaned = content  # Provide cleaned text for summary fallback (B index)
     else:
@@ -109,13 +141,7 @@ def process_file_hybrid(filepath: str, *, doc_id="doc_0", remove_page_breaks=Tru
         parser = utils.resolve_parser(filepath)
         if parser is None:
             logger.warning("Skipped %s — no parser found", filepath)
-            return {
-                "chunks": [],
-                "document": {},
-                "format_result": {"title": "", "tags": [], "body": ""},
-                "md_path": None,
-                "db_path": None,
-            }
+            return _empty_result()
 
         raw_text = parser.parse(filepath)
         if rules_config is None:
@@ -123,16 +149,10 @@ def process_file_hybrid(filepath: str, *, doc_id="doc_0", remove_page_breaks=Tru
         cleaned = TextCleaner(remove_page_breaks=remove_page_breaks, collapse_whitespace=collapse_whitespace, rules_config=rules_config).clean(raw_text)
 
         # 2. LLM Format (async) — skip when use_llm=False
-        result = _format_result(cleaned, filepath, use_llm=use_llm,
-                                format_text_async=format_text_async, cfg=cfg)
-        if result is None:
-            return {
-                "chunks": [],
-                "document": {},
-                "format_result": {"title": "", "tags": [], "body": ""},
-                "md_path": None,
-                "db_path": None,
-            }
+        formatted = _format_result(cleaned, filepath, use_llm=use_llm, cfg=cfg)
+        if formatted is None:
+            return _empty_result()
+        result = formatted
 
         # Write structured markdown if output_dir provided (same path as process_file_with_md)
         if md_output_dir:
@@ -152,7 +172,7 @@ def process_file_hybrid(filepath: str, *, doc_id="doc_0", remove_page_breaks=Tru
 
     # Build summary text before the try block so it's always available in the except handler.
     title = result.get("title", "Untitled")
-    tags = result.get("tags", [])
+    tags = result.get("tags") or []
     # Embed the LLM-formatted body (not the raw cleaned text) so the coarse-grained
     # B index captures the document's structured semantics. Use a head+tail slice
     # so long documents still contribute their closing context to the B summary.
@@ -164,10 +184,10 @@ def process_file_hybrid(filepath: str, *, doc_id="doc_0", remove_page_breaks=Tru
 
     if store_path:
         try:
-            from embedders import Embedder
+            from embedders import create_embedder
             from storage.sqlite_vec import SQLiteVecStore
 
-            e = Embedder()
+            e = create_embedder()
             try:
                 stored_chunks = e.store_chunks(all_chunks, doc_id=doc_id)
 
@@ -181,9 +201,10 @@ def process_file_hybrid(filepath: str, *, doc_id="doc_0", remove_page_breaks=Tru
                 )
                 doc_embedding = stored_doc.get("embedding")
 
-                # Context manager guarantees the connection is closed even
-                # when an upsert fails mid-way.
-                with SQLiteVecStore(store_path) as db:
+                # The lock serializes DB writes across batch threads; the
+                # context manager closes the connection even when an upsert
+                # fails mid-way.
+                with _DB_WRITE_LOCK, SQLiteVecStore(store_path) as db:
                     # Store chunks with embeddings
                     db.upsert_chunks(stored_chunks, doc_id=doc_id)
 
@@ -208,7 +229,7 @@ def process_file_hybrid(filepath: str, *, doc_id="doc_0", remove_page_breaks=Tru
             stored_doc = {
                 "title": title,
                 "tags": tags,
-                "text_summary": summary_text[:500],
+                "text_summary": summary_text[:1000],
                 "source_file": filepath,
                 "total_chunks": len(stored_chunks),
             }
@@ -234,7 +255,8 @@ def process_file_hybrid(filepath: str, *, doc_id="doc_0", remove_page_breaks=Tru
     }
 
 
-def process_file_with_md(filepath: str, *, output_dir="./output/", use_llm=True, **kwargs):
+def process_file_with_md(filepath: str, *, output_dir: str = "./output/",
+                         use_llm: bool = True, **kwargs: Any) -> str | None:
     """Parse file → LLM formatter → write structured markdown to output/.
 
     When *use_llm* is False, skips the LLM formatting step and writes the
@@ -245,8 +267,6 @@ def process_file_with_md(filepath: str, *, output_dir="./output/", use_llm=True,
 
     Returns the path of the generated .md file, or None on failure.
     """
-    from formatters import format_text_async, write_to_md
-
     cfg = _get_config()
 
     # Parse & Clean
@@ -258,17 +278,20 @@ def process_file_with_md(filepath: str, *, output_dir="./output/", use_llm=True,
     raw_text = parser.parse(filepath)
     cleaned = TextCleaner(**kwargs).clean(raw_text)
 
-    result = _format_result(cleaned, filepath, use_llm=use_llm,
-                            format_text_async=format_text_async, cfg=cfg)
+    result = _format_result(cleaned, filepath, use_llm=use_llm, cfg=cfg)
     if result is None:
         return None
 
     # Write markdown to output_dir
+    from formatters import write_to_md
     return write_to_md(result, output_dir)
 
 
-def process_directory_hybrid(dirpath: str, *, store_path=None, md_output_dir=None,
-                             extensions=None, chunk_size=1024, max_workers=4, **kwargs) -> dict:
+def process_directory_hybrid(dirpath: str, *, store_path: str | None = None,
+                             md_output_dir: str | None = None,
+                             extensions: set[str] | list[str] | None = None,
+                             chunk_size: int = 1024, max_workers: int = 4,
+                             **kwargs: Any) -> dict[str, dict[str, Any]]:
     """Process every supported file in *dirpath* with the LLM-formatted Hybrid A+B pipeline.
 
     Files are parsed/formatted/chunked/embedded concurrently (the expensive
@@ -295,7 +318,7 @@ def process_directory_hybrid(dirpath: str, *, store_path=None, md_output_dir=Non
     path = Path(dirpath)
     if extensions is None:
         extensions = set(PARSERS.keys())
-    ext_set = {e.lower() for e in extensions}
+    ext_set = {str(e).lower() for e in extensions}
 
     files = [
         str(f) for f in sorted(path.rglob("*"))
@@ -309,7 +332,7 @@ def process_directory_hybrid(dirpath: str, *, store_path=None, md_output_dir=Non
         rel = Path(fp).relative_to(path)
         return str(rel).replace("/", "_").replace("\\", "_")
 
-    def _one(fp: str):
+    def _one(fp: str) -> tuple[str, dict[str, Any]]:
         try:
             res = process_file_hybrid(
                 fp,
@@ -326,7 +349,7 @@ def process_directory_hybrid(dirpath: str, *, store_path=None, md_output_dir=Non
             return fp, {"chunks": [], "document": {}}
         return fp, res
 
-    summary: dict = {}
+    summary: dict[str, dict[str, Any]] = {}
     with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as ex:
         for fp, res in ex.map(_one, files):
             summary[fp] = res
@@ -337,8 +360,8 @@ def process_directory_hybrid(dirpath: str, *, store_path=None, md_output_dir=Non
 
 
 def rag_query(question: str, db_path: str, *, k: int = 5,
-              db: Any = None,
-              embedder: Any = None) -> dict[str, Any]:
+              db: Any | None = None,
+              embedder: Any | None = None) -> dict[str, Any]:
     """Retrieve relevant chunks from sqlite-vec and generate an LLM answer.
 
     Args:
@@ -355,7 +378,7 @@ def rag_query(question: str, db_path: str, *, k: int = 5,
         "question": str — the original question (echoed back).
 
     """
-    from embedders import Embedder
+    from embedders import create_embedder
     from storage.sqlite_vec import SQLiteVecStore
 
     # 1. Embed the query with the retrieval instruction prefix (bge-m3 needs it).
@@ -363,14 +386,15 @@ def rag_query(question: str, db_path: str, *, k: int = 5,
     #    local backend which returns list[list[float]].
     owned_e = embedder is None
     owned_db = db is None
-    e = embedder if embedder is not None else Embedder()
+    e = embedder if embedder is not None else create_embedder()
     try:
         query_result = e.embed_query(question)
-        query_vector = (
-            query_result[0]
-            if query_result and isinstance(query_result[0], list)
-            else query_result
-        )
+        if query_result and isinstance(query_result[0], list):
+            # Local backend returned a batch — take the first vector.
+            first = query_result[0]
+            query_vector = [float(v) for v in first]
+        else:
+            query_vector = [float(v) for v in cast("list[float]", query_result)]
 
         # 2. Retrieve relevant chunks (hybrid: vector + FTS5 RRF fusion)
         store = db if db is not None else SQLiteVecStore(db_path)
@@ -407,7 +431,10 @@ def rag_query(question: str, db_path: str, *, k: int = 5,
                 missing_texts = [
                     c["text"] for c, v in zip(results, chunk_vectors, strict=True) if not v
                 ]
-                for emb in e.embed(missing_texts):
+                embedded_missing = e.embed(missing_texts)
+                for emb in embedded_missing:
+                    if not isinstance(emb, list) or not emb or isinstance(emb[0], list):
+                        continue
                     # Fill the first empty slot in order.
                     for i, v in enumerate(chunk_vectors):
                         if not v:
@@ -416,7 +443,7 @@ def rag_query(question: str, db_path: str, *, k: int = 5,
             results = mmr_rerank(question, query_vector, chunk_vectors, results, k=k)
     finally:
         if owned_e:
-            e.__exit__(None, None, None)
+            e.close()
 
     context_parts = []
     for i, chunk in enumerate(results):

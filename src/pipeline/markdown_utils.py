@@ -11,6 +11,28 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from myrag.cjk import contains_cjk
+
+_FRONTMATTER_FENCE = re.compile(r"\A---\s*\n(.*?)\n---\s*\n", re.DOTALL)
+
+
+def parse_frontmatter(md: str) -> dict[str, Any]:
+    """Extract YAML front matter fields from a markdown document.
+
+    Returns a dict of the parsed fields (possibly empty) when the document
+    starts with a ``---`` fenced block; malformed YAML yields ``{}`` rather
+    than raising, since front matter is advisory metadata.
+    """
+    m = _FRONTMATTER_FENCE.match(md)
+    if not m:
+        return {}
+    import yaml
+    try:
+        data = yaml.safe_load(m.group(1))
+    except yaml.YAMLError:
+        return {}
+    return data if isinstance(data, dict) else {}
+
 # English (word-boundary) + CJK (substring) reference-section titles to drop.
 _REFERENCE_PATTERNS = [
     re.compile(r"^(references?|reference list|bibliography|further reading|"
@@ -91,7 +113,7 @@ def strip_reference_sections(md: str) -> str:
 
 
 def is_reference_title(title: str) -> bool:
-    """True if a section heading looks like a references / bibliography block."""
+    """Return True if a section heading looks like a references/bibliography block."""
     if any(c in title for c in _REFERENCE_CJK):
         return True
     return any(p.search(title) for p in _REFERENCE_PATTERNS)
@@ -119,8 +141,8 @@ def match_entities_to_chunks(chunks: list[dict[str, Any]], entities: list[dict[s
     # Pre-classify entities: CJK names have no word boundaries, so \b never
     # matches them. For those we use a plain substring test; for Latin names we
     # keep the case-insensitive word-boundary match to avoid partial matches.
-    cjk_entities = [e["name"] for e in entities if _contains_cjk(e["name"])]
-    latin_entities = [e["name"] for e in entities if not _contains_cjk(e["name"])]
+    cjk_entities = [e["name"] for e in entities if contains_cjk(e["name"])]
+    latin_entities = [e["name"] for e in entities if not contains_cjk(e["name"])]
     latin_patterns = [
         (name, re.compile(r"\b" + re.escape(name.lower()) + r"\b")) for name in latin_entities
     ]
@@ -131,8 +153,3 @@ def match_entities_to_chunks(chunks: list[dict[str, Any]], entities: list[dict[s
         matched += [name for name, pat in latin_patterns if pat.search(chunk_text_lower)]
         chunk["entity_names"] = matched
     return chunks
-
-
-def _contains_cjk(text: str) -> bool:
-    """Return True if *text* contains any CJK Unified Ideograph."""
-    return any("\u4e00" <= ch <= "\u9fff" for ch in text)

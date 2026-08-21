@@ -1,21 +1,21 @@
-"""Embedding client — call your local bge-m3 service (vLLM / Ollama compatible).
+"""Embedding backends — remote bge-m3 service or local sentence-transformers.
 
 Usage:
-    from embedders import Embedder
-    
-    e = Embedder()
-    
+    from embedders import create_embedder
+
+    e = create_embedder()   # backend chosen by config's embedding.mode
+
     # Single text embedding
-    emb = e.embed("你好世界")  # → list[list[float]]
-    
+    emb = e.embed("你好世界")  # → list[float] (1024-d)
+
     # Chunk-level storage (recommended for RAG)
     chunks = [{"text": "chunk content", "section_path": ["Section"]}]
     docs = e.store_chunks(chunks, doc_id="my_doc_123")
 
 Mode switching:
-    Config's ``embedding.mode`` selects the backend at construction time:
-      - ``"remote"`` (default): HTTP API at ``embedding.base_url``
-      - ``"local"``: sentence-transformers with ``embedding.local_model``
+    ``create_embedder()`` selects the backend from config at construction time:
+      - ``"remote"`` (default): HTTP API at ``embedding.base_url`` → Embedder
+      - ``"local"``: sentence-transformers with ``embedding.local_model`` → LocalEmbedder
 
 Schema:
     chunk_store (fine-grained):
@@ -23,7 +23,7 @@ Schema:
         - section_path: list[str]
         - source_doc_id: str
         - vector: float[]  # bge-m3 → 1024-d
-    
+
     doc_store (coarse-grained):
         - title: str
         - tags: list[str]
@@ -33,11 +33,13 @@ Schema:
         - vector: float[]  # bge-m3 → 1024-d
 """
 
+import contextlib
 import hashlib
 import logging
 import threading
 import time
 from collections import OrderedDict
+from typing import Any
 
 import httpx
 
@@ -104,43 +106,23 @@ def _hash_embed(text: str) -> list[float]:
 
 
 class Embedder:
-    """Unified embedder — delegates to remote (HTTP) or local (sentence-transformers).
+    """Remote embedder — HTTP client for an OpenAI-compatible embeddings API.
 
-    Mode is selected by config's ``embedding.mode`` field:
-      - ``"remote"`` (default): calls HTTP API at ``embedding.base_url``
-      - ``"local"``: uses sentence-transformers with ``embedding.local_model``
+    This class always talks to the remote endpoint at ``embedding.base_url``.
+    For backend selection by config (``embedding.mode: remote|local``), use
+    :func:`create_embedder`, which returns an ``Embedder`` or a
+    ``LocalEmbedder`` accordingly.
 
-    Calling ``Embedder()`` with no arguments reads all settings from config.
-    Explicit arguments override config for remote mode only.
+    Calling ``Embedder()`` with no arguments reads settings from config;
+    explicit arguments override them.
     """
 
-    def __new__(cls, **kwargs):  # type: ignore[override]
-        cfg = get_config()
-        mode = getattr(cfg, "embedding_mode", "remote")
-
-        # Explicit base_url/model args force remote mode regardless of config.
-        if kwargs.get("base_url") or kwargs.get("model"):
-            mode = "remote"
-
-        if mode == "local":
-            from .local_bge import LocalEmbedder
-
-            local_model = getattr(cfg, "embedding_local_model", None) or "BAAI/bge-m3"
-            return LocalEmbedder(model_name=local_model)  # type: ignore[return-value]
-
-        return super().__new__(cls)
-
-    # ── Remote embedder (default) ────────────────────────────────────────
-    # __init__ and all methods below are only used when mode == "remote".
-    # In local mode, ``__new__`` returns a LocalEmbedder instance instead,
-    # so Python never calls these methods.
-
-    def __init__(self, *, base_url: str = "", model: str = ""):
+    def __init__(self, *, base_url: str = "", model: str = "") -> None:
         cfg = get_config()
         base_url = base_url or cfg.embedding_base_url
         model = model or cfg.embedding_model
 
-        self.client = httpx.Client(base_url=base_url, timeout=cfg.embedding_timeout)
+        self.client: httpx.Client | None = httpx.Client(base_url=base_url, timeout=cfg.embedding_timeout)
         self.model = model
 
     def _maybe_prepend_instruction(self, text: str | list[str]) -> str | list[str]:
@@ -165,31 +147,34 @@ class Embedder:
         """
         return self.embed(self._maybe_prepend_instruction(text))
 
-    def __enter__(self):
+    def __enter__(self) -> "Embedder":
+        """Return self so the client can be used in ``with`` blocks."""
         return self
 
-    def __exit__(self, *exc_info):
+    def __exit__(self, *exc_info: object) -> None:
+        """Close the HTTP client on context exit."""
         self.close()
 
-    def close(self):
+    def close(self) -> None:
         """Close the underlying HTTP client."""
-        if hasattr(self, "client") and self.client is not None:
-            try:
-                self.client.close()
-            except Exception:  # noqa: BLE001 — best-effort cleanup
-                pass
+        client = getattr(self, "client", None)
+        if client is not None:
+            with contextlib.suppress(Exception):  # best-effort cleanup
+                client.close()
             self.client = None
 
-    def _post_with_retry(self, url: str, payload: dict, *, max_retries: int = 3) -> httpx.Response:
+    def _post_with_retry(self, url: str, payload: dict[str, Any], *, max_retries: int = 3) -> httpx.Response:
         """POST to the embedding API with exponential backoff on transient errors.
 
         Retries on HTTP 429 (rate limit), 502/503/504 (server errors). Exponential
         backoff starts at 1s, capped at 8s. Non-transient errors raise immediately.
         """
-        last_exc = None
+        last_exc: Exception | None = None
+        client = self.client
+        assert client is not None, "Embedder.close() was called; HTTP client unavailable"
         for attempt in range(max_retries + 1):
             try:
-                resp = self.client.post(url, json=payload)
+                resp = client.post(url, json=payload)
                 if not resp.is_server_error and resp.status_code != 429:
                     return resp
                 # Transient error — retry with backoff.
@@ -198,7 +183,7 @@ class Embedder:
                     "Embedding API returned %d (attempt %d/%d), retrying in %ds",
                     resp.status_code, attempt + 1, max_retries + 1, wait,
                 )
-                last_exc = RuntimeError(f"HTTP {resp.status_code}: {resp.text[:200]}")
+                last_exc = RuntimeError(f"HTTP {resp.status_code}: {resp.text[:200]}")  # noqa: EM102
                 time.sleep(wait)
             except (httpx.TimeoutException, httpx.ReadTimeout, httpx.WriteTimeout) as exc:
                 logger.warning(
@@ -208,7 +193,8 @@ class Embedder:
                 last_exc = exc
                 time.sleep(min(2 ** attempt, 8))
 
-        raise RuntimeError(f"Embedding API failed after {max_retries} retries: {last_exc}") from last_exc
+        msg = f"Embedding API failed after {max_retries} retries: {last_exc}"
+        raise RuntimeError(msg) from last_exc
 
     def embed(self, text: str | list[str]) -> list[float] | list[list[float]]:
         """Get embeddings for one or multiple texts.
@@ -229,7 +215,7 @@ class Embedder:
         try:
             resp = self._post_with_retry("/v1/embeddings", payload)
             resp.raise_for_status()
-            data = resp.json()
+            data: dict[str, Any] = resp.json()
         except Exception as exc:
             if getattr(get_config(), "embedding_hash_fallback", False):
                 logger.warning("Embedding API failed (%s); using hash fallback", exc)
@@ -241,11 +227,11 @@ class Embedder:
             raise
 
         if isinstance(text, str):
-            emb = data["data"][0]["embedding"]
+            emb: list[float] = data["data"][0]["embedding"]
             _validate_embedding_dimension(emb)
             _embed_cache_put(text, emb)
             return emb
-        embeddings = [d["embedding"] for d in data["data"]]
+        embeddings: list[list[float]] = [d["embedding"] for d in data["data"]]
         for e in embeddings:
             _validate_embedding_dimension(e)
         return embeddings
@@ -254,10 +240,10 @@ class Embedder:
         self,
         chunk_text: str,
         *,
-        section_path=None,
-        doc_id="doc_0",
-        chunk_idx=0,
-    ) -> dict:
+        section_path: list[str] | None = None,
+        doc_id: str = "doc_0",
+        chunk_idx: int = 0,
+    ) -> dict[str, Any]:
         """Embed a single chunk and return metadata for storage."""
         embedding = self.embed(chunk_text)
 
@@ -340,12 +326,22 @@ def create_embedder(
 
     e = Embedder(base_url=base_url, model=model)
     if validate:
-        _validate_embedding_dimension(e.embed("validation"))
+        test_emb = e.embed("validation")
+        if isinstance(test_emb[0], list):
+            raise EmbeddingError(
+                message="Embedding endpoint returned nested vectors for a single string input.",
+                context={"type": type(test_emb).__name__},
+            )
+        single_vector = [float(v) for v in test_emb]
+        _validate_embedding_dimension(single_vector)
     return e
 
 
-def embed_texts(texts: list[str], **kwargs) -> list[list[float]]:
-    """Convenience wrapper."""
+def embed_texts(texts: list[str], **kwargs: Any) -> list[list[float]]:
+    """Embed *texts* with a transient embedder built from *kwargs*."""
     mode = kwargs.pop("mode", None)
     e = create_embedder(mode=mode, **kwargs)
-    return e.embed(texts)
+    vectors = e.embed(texts)
+    if vectors and isinstance(vectors[0], list):
+        return [list(v) for v in vectors]
+    return []

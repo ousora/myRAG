@@ -100,7 +100,7 @@ def extract_tags_from_body(body: str, title: str) -> list[str]:
             seen.add(tag_lower)
 
     # Phase 2: High-frequency domain words (>=3 occurrences).
-    for word, count in combined.most_common(40):
+    for word, _count in combined.most_common(40):
         if len(tags) >= 5:
             break
         if word in seen or word in stop_words:

@@ -14,6 +14,7 @@ Usage:
 """
 
 import os
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -115,9 +116,8 @@ class Config:
         elif self.embedding_mode == "remote":
             if not self.embedding_base_url:
                 errors.append("embedding.base_url required when mode=remote")
-        elif self.embedding_mode == "local":
-            if not self.embedding_local_model:
-                errors.append("embedding.local_model required when mode=local")
+        elif self.embedding_mode == "local" and not self.embedding_local_model:
+            errors.append("embedding.local_model required when mode=local")
 
         # Formatter settings must be positive
         for field in ("chunk_threshold_chars", "chunk_max_tokens", "chunk_timeout"):
@@ -134,6 +134,7 @@ class Config:
         return errors
 
     def __repr__(self) -> str:
+        """Return a compact debug representation (endpoints only, no secrets)."""
         return (
             f"Config(llm={self.llm_endpoint} [{self.llm_model}], "
             f"embed={self.embedding_base_url} [{self.embedding_model}])"
@@ -141,10 +142,11 @@ class Config:
 
 
 _config_cache: Config | None = None
+_config_lock = threading.Lock()
 
 
-def get_config(reset: bool = False) -> Config:
-    """Load and cache configuration. Safe to call repeatedly from any module.
+def get_config(*, reset: bool = False) -> Config:
+    """Load and cache configuration. Safe to call repeatedly from any thread.
 
     Args:
         reset: If True, clear the cached instance and reload from disk.
@@ -154,34 +156,25 @@ def get_config(reset: bool = False) -> Config:
 
     """
     global _config_cache
-    if reset:
-        _config_cache = None
-    if _config_cache is not None:
-        return _config_cache
+    with _config_lock:
+        if reset:
+            _config_cache = None
+        if _config_cache is not None:
+            return _config_cache
 
-    path = _resolve_config_path()
-    if path is None:
-        cfg = Config({})
-    else:
-        import yaml
-        raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-        cfg = Config(raw)
+        path = _resolve_config_path()
+        if path is None:
+            cfg = Config({})
+        else:
+            import yaml
+            raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+            cfg = Config(raw)
 
-    errors = cfg._validate()
-    if errors:
-        raise ValueError(
-            "Configuration validation failed:\n  - " + "\n  - ".join(errors)
-        )
+        errors = cfg._validate()
+        if errors:
+            raise ValueError(
+                "Configuration validation failed:\n  - " + "\n  - ".join(errors)
+            )
 
-    _config_cache = cfg
-    return cfg
-
-
-def get_config_lazy() -> Config:
-    """Lazy-loaded config — returns the cached instance on first call.
-
-    Thin wrapper around ``get_config()`` for callers that need to defer
-    configuration loading until explicitly invoked (e.g., CLI entry points).
-    Prefer calling ``get_config()`` from new code when possible.
-    """
-    return get_config()
+        _config_cache = cfg
+        return cfg

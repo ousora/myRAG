@@ -1,26 +1,28 @@
-"""Internal formatting helpers — JSON parsing, paragraph splitting, chunked processing.
+"""Internal formatting helpers — paragraph splitting, single/chunked LLM formatting.
 
 This module contains the internal implementation of text formatting:
-- JSON preprocessing and bare-quote fixing
+- CJK-aware chunk threshold calculation
 - Paragraph splitting with sentence-aware boundaries
 - Single-shot and chunked LLM formatting
-- CJK-aware threshold calculation
 
-Public API lives in `formatters/__init__.py`.
+LLM transport (HTTP calls, JSON repair) lives in ``_llm.py``; public API is
+re-exported from ``formatters/__init__.py``.
 """
 
 from __future__ import annotations
 
 import datetime
-import hashlib
-import json
 import logging
-import os
 import re
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-import httpx
+from myrag.cjk import CJK_TOKEN_ALTERNATION
 
+from ._llm import (
+    _fix_bare_quotes_in_body_field,  # noqa: F401 — re-exported for backward compat
+    _preprocess_json,  # noqa: F401 — re-exported for backward compat
+    call_llm,
+)
 from .cache import format_cached
 from .constants import CHUNKED_SCHEMA, FORMATTER_SCHEMA
 from .prompts import (
@@ -31,10 +33,13 @@ from .prompts import (
 )
 from .tags import extract_tags_from_body
 
+if TYPE_CHECKING:
+    from config import Config
+
 logger = logging.getLogger(__name__)
 
 
-def _get_config():
+def _get_config() -> Config:
     """Lazy-load config on first call."""
     from config import get_config
     return get_config()
@@ -51,6 +56,11 @@ _ENGLISH_CHARS_PER_TOKEN = 4.0
 # Pre-compiled regex for paragraph splitting.
 _PARAGRAPH_SPLIT = re.compile(r"\n\n+")
 
+# Pre-compiled token counters for CJK-ratio estimation (C-speed, no per-char
+# Python loop). Kana counts as CJK-like; ASCII alphanumerics count as English.
+_CJK_TOKEN_RE = re.compile(CJK_TOKEN_ALTERNATION)
+_LATIN_TOKEN_RE = re.compile(r"[A-Za-z0-9]")
+
 
 def _detect_cjk_ratio(text: str) -> float:
     """Estimate the proportion of CJK characters in text (0.0–1.0).
@@ -59,28 +69,13 @@ def _detect_cjk_ratio(text: str) -> float:
     as CJK; ASCII letters/digits as English-like; everything else (Cyrillic,
     Arabic, Devanagari, emoji, punctuation) is excluded from the ratio to avoid
     skewing documents that contain non-CJK multilingual content.
-    Whitespace is also excluded.
+    Whitespace is also excluded. Counting runs through compiled regexes at
+    C speed instead of a per-character Python loop.
     """
     if not text:
         return 0.0
-
-    def _is_cjk(ch: str) -> bool:
-        cp = ord(ch)
-        return (
-            (0x4E00 <= cp <= 0x9FFF) or   # CJK Unified Ideographs
-            (0x3040 <= cp <= 0x309F) or   # Hiragana
-            (0x30A0 <= cp <= 0x30FF)      # Katakana
-        )
-
-    cjk = 0
-    latin = 0
-    for ch in text:
-        if ch.isspace():
-            continue
-        if ("A" <= ch <= "Z") or ("a" <= ch <= "z") or ("0" <= ch <= "9"):
-            latin += 1
-        elif _is_cjk(ch):
-            cjk += 1
+    cjk = len(_CJK_TOKEN_RE.findall(text))
+    latin = len(_LATIN_TOKEN_RE.findall(text))
     total = cjk + latin
     return cjk / total if total > 0 else 0.0
 
@@ -116,113 +111,6 @@ def effective_chunk_threshold(text: str) -> int:
     return base
 
 
-def _preprocess_json(raw_content: str) -> str | None:
-    """Strip markdown code blocks, extract first JSON object with balanced braces.
-
-    Returns None if no JSON-like content can be found (e.g., plain English text).
-    This lets the caller distinguish "no JSON at all" from "JSON but broken."
-    """
-    if not isinstance(raw_content, str):
-        return None
-    # Strip markdown code blocks
-    stripped = re.sub(r"^```(?:json)?\s*\n", "", raw_content.strip())
-
-    brace_start = stripped.find("{")
-    if brace_start == -1:
-        return None  # No JSON-like content — let json.loads raise a clear error
-
-    depth, end = 0, -1
-    in_string = False
-    escape_next = False
-    for i in range(brace_start, len(stripped)):
-        ch = stripped[i]
-        if escape_next:
-            escape_next = False
-            continue
-        if ch == "\\":
-            escape_next = True
-            continue
-        if ch == '"':
-            in_string = not in_string
-            continue
-        if in_string:
-            continue
-        if ch == "{":
-            depth += 1
-        elif ch == "}":
-            depth -= 1
-            if depth == 0:
-                end = i
-                break
-
-    if end == -1 or end <= brace_start:
-        return None  # Unbalanced braces — not a valid JSON object start
-
-    return stripped[brace_start : end + 1]
-
-
-def _fix_bare_quotes_in_body_field(content: str) -> str | None:
-    """Find the body field value and escape unescaped quotes inside it.
-
-    Walks through the JSON string character-by-character, recognizing escaped
-    sequences (\\", \\\\, \\n, etc.) so real closing-quotes are not confused
-    with bare quotes in the content.
-
-    Returns the modified JSON string if any bare quotes were found and escaped,
-    or None if no modification is needed (valid JSON).
-    """
-    m = re.search(r'"body"\s*:\s*', content)
-    if not m:
-        return None
-
-    after_key = m.end()
-    if after_key >= len(content) or content[after_key] != '"':
-        return None
-
-    # Walk forward, skipping escaped sequences, find the real closing quote.
-    # Track whether any bare quotes were encountered (i.e., actual changes needed).
-    has_bare_quotes = False
-    j = after_key + 1
-    while j < len(content):
-        c = content[j]
-
-        if c == "\\" and j + 1 < len(content) and content[j+1] in ('"', "\\", "/", "n", "t", "r", "u"):
-            skip = 2 if content[j+1] != "u" else 6
-            j += skip
-            continue
-
-        if c == '"':
-            rest_after_quote = content[j+1:].lstrip()
-            if not rest_after_quote or rest_after_quote[0] in (",", "}"):
-                raw_body = content[after_key + 1 : j]
-                fixed_parts: list[str] = []
-                k = 0
-                while k < len(raw_body):
-                    ch = raw_body[k]
-                    if ch == "\\" and k + 1 < len(raw_body) and raw_body[k+1] in ('"', "\\", "/", "n", "t", "r", "u"):
-                        fixed_parts.append(ch)
-                        fixed_parts.append(raw_body[k+1])
-                        k += 2
-                    elif ch == '"':
-                        has_bare_quotes = True
-                        fixed_parts.append('\\"')
-                        k += 1
-                    else:
-                        fixed_parts.append(ch)
-                        k += 1
-
-                if not has_bare_quotes:
-                    # No bare quotes found — the original JSON is already valid.
-                    return None
-
-                before = content[:after_key]
-                after = content[j + 1:]  # skip past the closing quote itself
-                return before + '"' + "".join(fixed_parts) + '"' + after
-        j += 1
-
-    return None
-
-
 def _get_last_n_lines(md_parts: list[str], n: int = 10) -> str:
     """Extract the last N non-empty lines from accumulated markdown parts.
 
@@ -242,7 +130,7 @@ def _get_last_n_lines(md_parts: list[str], n: int = 10) -> str:
 
 
 def _split_by_paragraph(text: str, max_chars: int | None = None) -> list[str]:
-    """Split text at paragraph boundaries, chunk oversized paragraphs at sentences.
+    r"""Split text at paragraph boundaries, chunk oversized paragraphs at sentences.
 
     Normal paragraphs are grouped up to max_chars. If a single paragraph exceeds
     max_chars, it's split at sentence boundaries (`. `, `! `, `? `, or `\n`).
@@ -273,7 +161,7 @@ def _split_by_paragraph(text: str, max_chars: int | None = None) -> list[str]:
     current: list[str] = []
     current_len = 0
 
-    def _flush():
+    def _flush() -> None:
         """Flush accumulated paragraphs as a chunk."""
         nonlocal current, current_len
         if current:
@@ -331,7 +219,7 @@ def _format_text_single(raw: str, source_type: str = "web", *, system_prompt: st
         if isinstance(body, str):
             result.setdefault("metadata", {})["total_words"] = len(body.split())
         if "created_at" in result.get("metadata", {}):
-            result["metadata"]["created_at"] = datetime.datetime.now().isoformat()
+            result["metadata"]["created_at"] = datetime.datetime.now(tz=datetime.timezone.utc).isoformat()
 
         return result
 
@@ -355,10 +243,10 @@ def _format_text_chunked_uncached(raw: str, source_type: str = "pdf", *, system_
     cumulative_summary = ""
 
     # Determine the system prompt once — custom prompts override defaults for all chunks.
-    if system_prompt is not None:
-        base_system_prompt = system_prompt
-    else:
-        base_system_prompt = get_chunked_system_prompt(0, total)  # title will be empty until merge
+    # Custom prompts override defaults for all chunks; title stays empty until merge.
+    base_system_prompt = (
+        system_prompt if system_prompt is not None else get_chunked_system_prompt(0, total)
+    )
 
     for i, chunk_text in enumerate(chunks):
         # For non-first chunks with a document title available from metadata,
@@ -482,123 +370,10 @@ def _format_text_async_impl(
     system_prompt: str | None = None,
 ) -> dict[str, Any]:
     if not raw.strip():
-        raise ValueError("Input text is empty")
+        msg = "Input text is empty"
+        raise ValueError(msg)
     raw_len = len(raw)
     threshold = effective_chunk_threshold(raw)
     if raw_len > threshold:
         return _format_text_chunked(raw, source_type, system_prompt=system_prompt)
     return _format_text_single(raw, source_type, system_prompt=system_prompt)
-
-
-def _call_llm_api(payload: dict[str, Any], timeout: int | None) -> httpx.Response:
-    cfg = _get_config()
-    try:
-        response = httpx.post(cfg.llm_endpoint, json=payload, timeout=timeout or cfg.llm_timeout)
-        response.raise_for_status()
-        return response
-    except httpx.HTTPError as e:
-        logger.error("LLM call failed (timeout=%ss): %s", (timeout or cfg.llm_timeout), e)
-        raise RuntimeError(f"LLM API request failed: {e}") from e
-
-
-def call_llm(
-    system_prompt: str,
-    user_message: str,
-    *,
-    max_tokens: int | None = None,
-    timeout: int | None = None,
-    schema: dict | None = None,
-) -> dict:
-    cfg = _get_config()
-    payload: dict[str, Any] = {
-        "model": cfg.llm_model,
-        "messages": [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_message},
-        ],
-        "temperature": cfg.llm_temperature,
-        "max_tokens": max_tokens or cfg.llm_max_tokens,
-    }
-    if schema is not None:
-        payload["response_format"] = {"type": "json_object", "schema": schema}
-    try:
-        response = _call_llm_api(payload, timeout)
-    except RuntimeError as exc:
-        # _call_llm_api wraps the httpx error; recover the HTTP response from
-        # the cause chain so schema rejections can be detected and retried.
-        cause = exc.__cause__
-        resp_for_retry = getattr(cause, "response", None)
-        if (
-            isinstance(cause, httpx.HTTPStatusError)
-            and resp_for_retry is not None
-            and resp_for_retry.status_code in {500, 503, 429}
-        ):
-            err_body = resp_for_retry.text
-            if "peg" in err_body.lower() or "format" in err_body.lower():
-                logger.warning("Schema rejected (HTTP %d), retrying without schema", resp_for_retry.status_code)
-                payload.pop("response_format", None)
-                response = _call_llm_api(payload, timeout)
-            else:
-                raise
-        else:
-            raise
-    try:
-        raw_content = response.json()["choices"][0]["message"]["content"]
-    except (KeyError, IndexError) as e:
-        logger.error("LLM returned unexpected response structure: %s", e)
-        raise ValueError(f"LLM returned invalid format: {e}") from e
-    input_chars = len(user_message)
-    output_chars = len(raw_content)
-    logger.info("LLM call: %d chars in -> %d chars out", input_chars, output_chars)
-    if getattr(cfg, "debug_log_llm_responses", False):
-        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        input_hash = hashlib.md5(user_message.encode()).hexdigest()[:8]
-        output_path = f"tmp/raw/resp_{timestamp}_{input_hash}.txt"
-        os.makedirs(os.path.dirname(output_path), exist_ok=True)
-        with open(output_path, "w", encoding="utf-8") as f:
-            f.write(raw_content)
-    max_retries = 3
-    content = _preprocess_json(raw_content)
-    if content is None:
-        raise ValueError(f"LLM returned no JSON-like content. Raw: {raw_content[:500]!r}")
-    for attempt in range(max_retries):
-        try:
-            return json.loads(content, strict=True)
-        except json.JSONDecodeError as exc:
-            logger.warning("JSON parse attempt %d failed (%s)", attempt + 1, exc.msg)
-            if attempt == max_retries - 1:
-                raise ValueError(f"Failed to parse LLM JSON after {max_retries} attempts. Raw: {content[:500]!r}") from exc
-            try:
-                return json.loads(content, strict=False)
-            except json.JSONDecodeError:
-                fixed = _fix_bare_quotes_in_body_field(content)
-                if fixed is not None:
-                    content = fixed
-                    continue
-                break
-    raise ValueError("JSON parsing failed after all fallback strategies.")
-
-
-def call_llm_raw(
-    system_prompt: str,
-    user_message: str,
-    *,
-    max_tokens: int | None = None,
-    timeout: int | None = None,
-) -> str:
-    cfg = _get_config()
-    payload: dict[str, Any] = {
-        "model": cfg.llm_model,
-        "messages": [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_message},
-        ],
-        "temperature": cfg.llm_temperature,
-        "max_tokens": max_tokens or cfg.llm_max_tokens,
-    }
-    response = _call_llm_api(payload, timeout)
-    try:
-        return response.json()["choices"][0]["message"]["content"]
-    except (KeyError, IndexError) as e:
-        logger.error("LLM returned unexpected response structure: %s", e)
-        raise ValueError(f"LLM returned invalid format: {e}") from e

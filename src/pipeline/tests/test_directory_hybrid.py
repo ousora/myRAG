@@ -220,7 +220,8 @@ class TestProcessDirectoryHybrid:
 
             def _side_effect(fp, **kw):
                 if "bad.txt" in fp:
-                    raise ValueError("parse error")
+                    msg = "parse error"
+                    raise ValueError(msg)
                 return {"chunks": [{"text": "chunk", "section_path": ["S"]}], "document": {}}
 
             hybrid_mock.side_effect = _side_effect
@@ -319,7 +320,7 @@ class TestProcessDirectoryHybrid:
             mock_tpe = Mock()
             mock_tpe.__enter__ = Mock(return_value=mock_tpe)
             mock_tpe.__exit__ = Mock(return_value=False)
-            mock_result = [("doc.txt", {"chunks": [], "document": {}})]
+            mock_result: list[tuple[str, dict]] = [("doc.txt", {"chunks": [], "document": {}})]
             mock_tpe.map = Mock(return_value=mock_result)
             tpe_cls.return_value = mock_tpe
 
