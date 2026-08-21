@@ -49,6 +49,13 @@ class LocalEmbedder:
         # sentence-transformers holds no open network/file handles to close.
         return False
 
+    def close(self) -> None:
+        """No-op: sentence-transformers holds no open handles to release.
+
+        Mirrors ``Embedder.close`` so callers can treat both backends
+        uniformly (e.g. ``finally: e.close()`` in pipeline code).
+        """
+
     # ── Attributes that tests and callers expect on both backends ────────
     # ``model`` mirrors Embedder.model so Embedder.__new__ can return a
     # LocalEmbedder in local mode without callers needing to branch.
@@ -97,9 +104,12 @@ class LocalEmbedder:
             except Exception as exc:
                 if getattr(get_config(), "embedding_hash_fallback", False):
                     logger.warning("Local embed failed (%s); using hash fallback", exc)
+                    # Bypass the cache: fallback vectors are non-semantic and
+                    # must not outlive the model failure.
                     emb = _hash_embed(text)
-                else:
-                    raise
+                    _validate_embedding_dimension(emb)
+                    return emb
+                raise
             _validate_embedding_dimension(emb)
             _embed_cache_put(text, emb)
             return emb

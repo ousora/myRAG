@@ -90,15 +90,26 @@ class _InsertOps:
         cols = {row[1] for row in self.conn.execute("PRAGMA table_info(documents)")}
         if "embedding" not in cols:
             self.conn.execute("ALTER TABLE documents ADD COLUMN embedding BLOB")
+        # One-time FTS rebuild per database file. Historical versions wrote
+        # chunks with INSERT OR REPLACE, whose implicit DELETE does not fire
+        # the AFTER DELETE trigger under SQLite's default recursive_triggers=OFF,
+        # leaving stale ghost rows in the external-content FTS table.
+        if self.conn.execute("PRAGMA user_version").fetchone()[0] < 1:
+            logger.info("Rebuilding chunks_fts index (one-time migration)")
+            self.conn.execute("INSERT INTO chunks_fts(chunks_fts) VALUES('rebuild')")
+            self.conn.execute("PRAGMA user_version = 1")
+            self.conn.commit()
         self._schema_ready = True
 
     def upsert_chunk(self, chunk_data: dict, *, doc_id: str,
                      embedding: list[float], chunk_index: int = 0) -> dict:
-        """Insert or replace a chunk by (source_doc_id, chunk_index).
+        """Insert or update a chunk keyed by (source_doc_id, chunk_index).
 
-        Uses INSERT OR REPLACE so re-ingesting the same document overwrites
-        existing chunks instead of creating duplicates. The AFTER UPDATE trigger
-        on chunks also keeps FTS in sync.
+        Uses ``ON CONFLICT DO UPDATE`` rather than ``INSERT OR REPLACE``:
+        the conflict-update path fires the AFTER UPDATE trigger (keeping the
+        external-content FTS index in sync) and preserves the existing rowid,
+        whereas REPLACE performs an untracked DELETE+INSERT that both leaks
+        stale FTS entries and churns chunk ids.
         """
         self._setup_schema()
 
@@ -108,15 +119,23 @@ class _InsertOps:
         word_count = _count_words(text)
 
         self.conn.execute(
-            """INSERT OR REPLACE INTO chunks (text, embedding, source_doc_id, chunk_index, section_path, word_count, entity_names)
-               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            """INSERT INTO chunks (text, embedding, source_doc_id, chunk_index, section_path, word_count, entity_names)
+               VALUES (?, ?, ?, ?, ?, ?, ?)
+               ON CONFLICT(source_doc_id, chunk_index) DO UPDATE SET
+                   text=excluded.text,
+                   embedding=excluded.embedding,
+                   section_path=excluded.section_path,
+                   word_count=excluded.word_count,
+                   entity_names=excluded.entity_names""",
             (text, _SQLITE_VEC.serialize_float32(embedding), doc_id,
              chunk_index, json.dumps(section_path), word_count, json.dumps(entity_names))
         )
 
-        # INSERT OR REPLACE may DELETE+INSERT (new rowid) or UPDATE (same rowid).
-        # Use last_insert_rowid() to reliably get the current row's id.
-        rowid = self.conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+        # Fetch the id explicitly — reliable for both the insert and update paths.
+        rowid = self.conn.execute(
+            "SELECT id FROM chunks WHERE source_doc_id=? AND chunk_index=?",
+            (doc_id, chunk_index),
+        ).fetchone()[0]
 
         return {
             "id": rowid,
@@ -156,8 +175,14 @@ class _InsertOps:
         ]
 
         self.conn.executemany(
-            """INSERT OR REPLACE INTO chunks (text, embedding, source_doc_id, chunk_index, section_path, word_count, entity_names)
-                VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            """INSERT INTO chunks (text, embedding, source_doc_id, chunk_index, section_path, word_count, entity_names)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(source_doc_id, chunk_index) DO UPDATE SET
+                    text=excluded.text,
+                    embedding=excluded.embedding,
+                    section_path=excluded.section_path,
+                    word_count=excluded.word_count,
+                    entity_names=excluded.entity_names""",
             params,
         )
         self.conn.commit()

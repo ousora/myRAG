@@ -17,10 +17,10 @@ def _cli_print(*args, **kwargs):
     print(*args, **kwargs)
 
 
-def main():
-    """CLI entry point."""
+def main() -> int:
+    """CLI entry point. Returns a process exit code (0 on success)."""
     parser = argparse.ArgumentParser(description="RAG data cleanup pipeline")
-    subparsers = parser.add_subparsers(dest="command")
+    subparsers = parser.add_subparsers(dest="command", required=True)
 
     # process_file command (traditional)
     file_parser = subparsers.add_parser("process-file", help="Process a single file (traditional)")
@@ -136,8 +136,8 @@ def main():
         md_path = process_file_with_md(args.input, output_dir=args.output_dir,
                                          use_llm=not args.no_llm)
         if not md_path:
-            _cli_print("Failed to generate markdown")
-            return
+            logger.error("Failed to generate markdown for %s", args.input)
+            return 1
 
         # Step 2: ingest from .md
         from pipeline.ingest import _ingest_markdown
@@ -154,7 +154,12 @@ def main():
                                       use_llm=not args.no_llm)
         if path:
             _cli_print(f"Written to: {path}")
+        else:
+            logger.error("Failed to generate markdown for %s", args.input)
+            return 1
+
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

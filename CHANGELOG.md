@@ -1,5 +1,21 @@
 # Changelog — myRAG Pipeline
 
+## [0.7.0] — 2026-08-21
+
+### Fixed
+
+- **Text-only hybrid search lost BM25 ranking**: the FTS5 MATCH query in `hybrid_search()` had no `ORDER BY rank`, so results came back in rowid scan order. This corrupted *both* result paths: text-only search returned arbitrary rows instead of the best matches, and the RRF fusion rank map assigned wrong FTS ranks. Added `ORDER BY rank` and re-order the detail fetch to preserve it. (src/storage/search.py)
+- **FTS index desync on re-ingest**: `INSERT OR REPLACE` performs an implicit DELETE that does not fire the AFTER DELETE trigger under SQLite's default `recursive_triggers=OFF`, leaving ghost entries in the external-content `chunks_fts` table forever; AUTOINCREMENT also churned all chunk ids on every re-ingest. Both upsert paths now use `INSERT ... ON CONFLICT(source_doc_id, chunk_index) DO UPDATE` (fires the UPDATE trigger, preserves rowids). A one-time FTS rebuild migration (`PRAGMA user_version`) cleans up ghosts in existing databases on first open. (src/storage/inserts.py)
+- **Unreachable schema-retry branch in `call_llm()`**: `_call_llm_api()` raises before returning, so the "schema rejected → retry without schema" fallback for llama.cpp PEG parse errors could never fire (`getattr(response, "response", None)` read a nonexistent attribute). The HTTP response is now recovered from the exception cause chain (`exc.__cause__`). Also fixed a misleading log that reported the configured timeout as elapsed time. (src/formatters/_internal.py)
+- **URL rewriting inside fenced code blocks**: the deterministic markdown normalizer only skipped lines containing ```` ``` ````, so interior lines of multi-line fences (e.g. `curl https://...` in bash blocks) were rewritten into markdown links. Fence state is now tracked across lines. Trailing sentence punctuation is no longer swallowed into bare-URL links (`https://x.y/z.` → link excludes the period). (src/parsers/markdown_normalizer.py)
+- **Hash-fallback vectors poisoned the embedding cache**: when the embedding API failed and `embedding_hash_fallback` was enabled, non-semantic hash vectors were written into the LRU cache and kept being served after the API recovered. Fallback vectors now bypass the cache in both remote and local backends. (src/embedders/bge_m3.py, src/embedders/local_bge.py)
+- **Storage connection leak in `process_file_hybrid()`**: `SQLiteVecStore` was closed only on success; an upsert failure leaked the connection. Now uses the store's context manager, and the embedder client is closed via `try/finally`. The graceful-degradation `except` clause also catches `sqlite3.Error` so storage failures degrade to metadata-only results as documented. (src/pipeline/hybrid.py)
+- **CLI exit codes**: running with no subcommand now fails with a usage error instead of silently exiting 0 (`required=True`); `md`/`process` failures log to stderr and return exit code 1. `main()` returns an int exit code. (src/pipeline/cli.py)
+
+### Changed
+
+- **Test count**: 283 tests passing (was 270) — +13 regression tests covering the fixes above, including `LocalEmbedder.close()` interface parity with the remote backend.
+
 ## [0.6.8] — 2026-08-19
 
 ### Fixed

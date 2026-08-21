@@ -10,6 +10,7 @@ import pytest
 from formatters import (
     _fix_bare_quotes_in_body_field,
     _preprocess_json,
+    call_llm,
     format_text,
     format_text_async,
 )
@@ -198,3 +199,64 @@ class TestFixBareQuotes:
         content = '{"bo"dy": "Test"}'
         result = _fix_bare_quotes_in_body_field(content)
         assert result is None, f"Malformed body key should not trigger fix: got {result!r}"
+
+
+class TestCallLlmSchemaRetry:
+    """Regression: the schema-rejected retry branch was unreachable because
+
+    the HTTP response was never recovered from the exception chain.
+    """
+
+    def _recording_post(self, seen: list, responses: list):
+        """Mock httpx.post that snapshots each payload.
+
+        The retry mutates the same dict in place, so Mock's call_args
+        would alias it.
+        
+        """
+        import copy
+
+        def _post(url, json=None, timeout=None, **kwargs):
+            seen.append(copy.deepcopy(json))
+            return responses[len(seen) - 1]
+        return _post
+
+    def test_schema_rejection_retries_without_schema(self):
+        import httpx
+
+        req = httpx.Request("POST", "http://localhost/v1/chat")
+        err = httpx.Response(
+            500,
+            text='{"error": {"message": "failed to parse schema: PEG error at char 3"}}',
+            request=req,
+        )
+        ok = httpx.Response(
+            200,
+            json={"choices": [{"message": {"content": json.dumps(VALID_RESPONSE)}}]},
+            request=req,
+        )
+        seen: list = []
+        post_mock = self._recording_post(seen, [err, ok])
+
+        with patch("formatters.httpx.post", post_mock):
+            result = call_llm("system prompt", "user text", schema={"type": "object"})
+
+        assert result == VALID_RESPONSE
+        assert len(seen) == 2
+        # First attempt carried the schema; retry must drop it.
+        assert "response_format" in seen[0]
+        assert "response_format" not in seen[1]
+
+    def test_non_schema_500_reraises(self):
+        import httpx
+
+        req = httpx.Request("POST", "http://localhost/v1/chat")
+        err = httpx.Response(500, text='{"error": "internal server panic"}', request=req)
+        seen: list = []
+        post_mock = self._recording_post(seen, [err])
+
+        with patch("formatters.httpx.post", post_mock):
+            with pytest.raises(RuntimeError, match="LLM API request failed"):
+                call_llm("system prompt", "user text", schema={"type": "object"})
+
+        assert len(seen) == 1

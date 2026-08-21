@@ -18,9 +18,10 @@ import re
 
 # ── Pre-compiled patterns ──────────────────────────────────────────────
 
-# Bare URLs (not already inside a markdown link)
+# Bare URLs (not already inside a markdown link). Trailing sentence
+# punctuation is excluded so "See https://x.y/z." doesn't link the period.
 _URL_RE = re.compile(
-    r"(?<![\]\)])(https?://[^\s)\]]+)",
+    r"(?<![\]\)])(https?://[^\s)\]]*[^\s)\].,;:!?'\"'])",
     re.IGNORECASE,
 )
 
@@ -57,8 +58,8 @@ def normalize_markdown(text: str) -> str:
     # Phase 2: List normalization
     lines = _normalize_lists(lines)
 
-    # Phase 3: Link formatting (per-line, avoid touching code blocks)
-    lines = [_format_links(line) for line in lines]
+    # Phase 3: Link formatting (fence-aware, avoids touching code blocks)
+    lines = _format_links_per_line(lines)
 
     # Phase 4: Bold/italic repair (whole text)
     result = "\n".join(lines)
@@ -172,13 +173,33 @@ def _normalize_lists(lines: list[str]) -> list[str]:
     return result
 
 
+def _format_links_per_line(lines: list[str]) -> list[str]:
+    """Apply ``_format_links`` line-by-line, skipping fenced code blocks.
+
+    Fence state is tracked across lines so interior lines of a multi-line
+    fence (e.g. ``curl https://example.com`` in a bash block) are left
+    untouched — a per-line ``"```" in line`` check alone would only skip
+    the fence markers themselves.
+    """
+    in_fence = False
+    result: list[str] = []
+    for line in lines:
+        if line.lstrip().startswith("```"):
+            in_fence = not in_fence
+            result.append(line)
+            continue
+        result.append(line if in_fence else _format_links(line))
+    return result
+
+
 # ── Link formatting ────────────────────────────────────────────────────
 
 
 def _format_links(line: str) -> str:
     """Replace bare URLs with markdown links ``[url](url)``.
 
-    Skips lines inside code spans (single backtick pairs).
+    Skips lines inside code spans (single backtick pairs). Callers must
+    handle fenced code blocks (see ``_format_links_per_line``).
     """
     if "```" in line:
         return line  # skip fenced code blocks entirely

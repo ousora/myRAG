@@ -179,3 +179,33 @@ def test_inline_code_preserved():
     out = normalize_markdown(raw)
     assert "`code`" in out
     assert "`more`" in out
+
+def test_multiline_fence_interior_urls_untouched():
+    """Regression test for multi-line fence URL formatting.
+
+    Interior lines of a multi-line fence used to get URL formatting
+    applied because only lines containing ``` were skipped.
+    """
+    raw = """Run this:
+
+```bash
+curl https://api.example.com/v1/data
+echo done
+```
+
+Docs at https://docs.example.com/guide.
+"""
+    out = normalize_markdown(raw)
+    # Interior fence line must stay untouched
+    assert "curl https://api.example.com/v1/data\n" in out
+    assert "[https://api.example.com](https://api.example.com)" not in out
+    # URL outside the fence SHOULD be formatted
+    assert "[https://docs.example.com/guide](https://docs.example.com/guide)" in out
+
+
+def test_unclosed_fence_disables_link_formatting_to_end():
+    """An unterminated fence protects everything after it (defensive)."""
+    raw = "```bash\ncurl https://api.example.com/x\n"
+    out = normalize_markdown(raw)
+    assert "https://api.example.com/x" in out
+    assert "](" not in out

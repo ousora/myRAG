@@ -14,6 +14,7 @@ from __future__ import annotations
 import concurrent.futures
 import logging
 import re
+import sqlite3
 from pathlib import Path
 from typing import Any
 
@@ -167,37 +168,40 @@ def process_file_hybrid(filepath: str, *, doc_id="doc_0", remove_page_breaks=Tru
             from storage.sqlite_vec import SQLiteVecStore
 
             e = Embedder()
-            stored_chunks = e.store_chunks(all_chunks, doc_id=doc_id)
+            try:
+                stored_chunks = e.store_chunks(all_chunks, doc_id=doc_id)
 
-            # Document-level index (B) — only embed when we persist it.
-            stored_doc = e.store_document(
-                title=title,
-                tags=tags,
-                text_summary=summary_text,
-                source_file=filepath,
-                total_chunks=len(stored_chunks),
-            )
-            doc_embedding = stored_doc.get("embedding")
+                # Document-level index (B) — only embed when we persist it.
+                stored_doc = e.store_document(
+                    title=title,
+                    tags=tags,
+                    text_summary=summary_text,
+                    source_file=filepath,
+                    total_chunks=len(stored_chunks),
+                )
+                doc_embedding = stored_doc.get("embedding")
 
-            db = SQLiteVecStore(store_path)
+                # Context manager guarantees the connection is closed even
+                # when an upsert fails mid-way.
+                with SQLiteVecStore(store_path) as db:
+                    # Store chunks with embeddings
+                    db.upsert_chunks(stored_chunks, doc_id=doc_id)
 
-            # Store chunks with embeddings
-            db.upsert_chunks(stored_chunks, doc_id=doc_id)
-
-            # Store document-level record
-            db.upsert_document(
-                title=title,
-                tags=tags,
-                text_summary=summary_text,
-                source_file=filepath,
-                total_chunks=len(stored_chunks),
-                embedding=doc_embedding,
-            )
-            db.close()
+                    # Store document-level record
+                    db.upsert_document(
+                        title=title,
+                        tags=tags,
+                        text_summary=summary_text,
+                        source_file=filepath,
+                        total_chunks=len(stored_chunks),
+                        embedding=doc_embedding,
+                    )
+            finally:
+                e.close()
 
             db_path = store_path
             logger.info("  → Persisted %d chunks + 1 doc to %s", len(stored_chunks), store_path)
-        except (httpx.HTTPError, RuntimeError) as exc:
+        except (httpx.HTTPError, RuntimeError, sqlite3.Error) as exc:
             logger.warning("Embedding/storage failed (%s): %s", type(exc).__name__, exc)
             stored_chunks = [{"text": c["text"], "section_path": c.get("section_path", ["General"]),
                               "source_doc_id": doc_id, "chunk_index": i} for i, c in enumerate(all_chunks)]

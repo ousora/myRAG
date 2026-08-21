@@ -497,7 +497,7 @@ def _call_llm_api(payload: dict[str, Any], timeout: int | None) -> httpx.Respons
         response.raise_for_status()
         return response
     except httpx.HTTPError as e:
-        logger.error("LLM call failed after %.1fs: %s", (timeout or cfg.llm_timeout), e)
+        logger.error("LLM call failed (timeout=%ss): %s", (timeout or cfg.llm_timeout), e)
         raise RuntimeError(f"LLM API request failed: {e}") from e
 
 
@@ -521,12 +521,18 @@ def call_llm(
     }
     if schema is not None:
         payload["response_format"] = {"type": "json_object", "schema": schema}
-    response: httpx.Response | None = None
     try:
         response = _call_llm_api(payload, timeout)
-    except RuntimeError:
-        resp_for_retry = getattr(response, "response", None) if response is not None else None
-        if schema is not None and resp_for_retry is not None and resp_for_retry.status_code in {500, 503, 429}:
+    except RuntimeError as exc:
+        # _call_llm_api wraps the httpx error; recover the HTTP response from
+        # the cause chain so schema rejections can be detected and retried.
+        cause = exc.__cause__
+        resp_for_retry = getattr(cause, "response", None)
+        if (
+            isinstance(cause, httpx.HTTPStatusError)
+            and resp_for_retry is not None
+            and resp_for_retry.status_code in {500, 503, 429}
+        ):
             err_body = resp_for_retry.text
             if "peg" in err_body.lower() or "format" in err_body.lower():
                 logger.warning("Schema rejected (HTTP %d), retrying without schema", resp_for_retry.status_code)

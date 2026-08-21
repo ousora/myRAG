@@ -102,6 +102,66 @@ def test_process_file_hybrid_no_llm_fallback(monkeypatch) -> None:
         Path(path).unlink(missing_ok=True)
 
 
+def test_process_file_hybrid_store_path_local_backend(tmp_path: Path, monkeypatch) -> None:
+    """process_file_hybrid with store_path succeeds using a LocalEmbedder-shaped backend.
+
+    Regression test: the storage cleanup calls e.close() in a finally block, which
+    requires every embedder backend to expose close(). Uses a plain stub (not
+    MagicMock) so a missing interface method raises AttributeError instead of
+    being silently auto-created.
+    """
+    from unittest.mock import patch
+
+    from pipeline import process_file_hybrid
+
+    monkeypatch.setattr("formatters.format_text_async", _mock_format_future)
+
+    class StubLocalEmbedder:
+        """Mirrors LocalEmbedder's public interface — deliberately not a MagicMock."""
+
+        def store_chunks(self, chunks, doc_id="doc_0"):
+            return [{**c, "source_doc_id": doc_id, "chunk_index": i,
+                     "word_count": len(c["text"].split()), "embedding": [0.1] * 1024}
+                    for i, c in enumerate(chunks)]
+
+        def store_document(self, title, tags, text_summary, source_file, total_chunks):
+            return {"title": title, "tags": tags, "text_summary": text_summary[:1000],
+                    "source_file": source_file, "total_chunks": total_chunks,
+                    "embedding": [0.1] * 1024}
+
+        def close(self):
+            self.closed = True
+
+    class StubStore:
+        def __init__(self, path):
+            self.path = path
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc_info):
+            return False
+
+        def upsert_chunks(self, chunks, doc_id="doc_0"):
+            pass
+
+        def upsert_document(self, **kwargs):
+            pass
+
+    embedder = StubLocalEmbedder()
+    txt = tmp_path / "sample.txt"
+    txt.write_text("Short test document.\n")
+    db_path = tmp_path / "test.db"
+
+    with patch("embedders.Embedder", return_value=embedder), \
+         patch("storage.sqlite_vec.SQLiteVecStore", StubStore):
+        result = process_file_hybrid(filepath=str(txt), doc_id="test_doc",
+                                     store_path=str(db_path))
+
+    assert result["db_path"] == str(db_path)
+    assert embedder.closed is True
+
+
 def test_process_file_with_md(tmp_path: Path, monkeypatch) -> None:
     """process_file_with_md generates a markdown file."""
     monkeypatch.setattr("formatters.format_text_async", _mock_format_future)

@@ -233,12 +233,11 @@ class Embedder:
         except Exception as exc:
             if getattr(get_config(), "embedding_hash_fallback", False):
                 logger.warning("Embedding API failed (%s); using hash fallback", exc)
+                # Bypass the cache: fallback vectors are non-semantic byte
+                # patterns and must not outlive the API outage.
                 if isinstance(text, str):
-                    emb = _hash_embed(text)
-                    _embed_cache_put(text, emb)
-                    return emb
-                embeddings = [_hash_embed(t) for t in text]
-                return embeddings
+                    return _hash_embed(text)
+                return [_hash_embed(t) for t in text]
             raise
 
         if isinstance(text, str):

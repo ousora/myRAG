@@ -209,8 +209,11 @@ class _SearchOps:
         fts_query = _build_fts_query(query_text)
         fts_results: list = []
         if fts_query is not None:
+            # ORDER BY rank is mandatory: without it FTS5 returns rows in
+            # rowid scan order, so both the RRF rank map and the text-only
+            # result order would ignore BM25 relevance.
             fts_results = self.conn.execute(
-                "SELECT rowid, rank FROM chunks_fts WHERE chunks_fts MATCH ? LIMIT ?",
+                "SELECT rowid, rank FROM chunks_fts WHERE chunks_fts MATCH ? ORDER BY rank LIMIT ?",
                 (fts_query, k)
             ).fetchall()
 
@@ -276,7 +279,9 @@ class _SearchOps:
                 result_list.append({k: v for k, v in data.items() if not k.startswith("_")} | {"_rrf_score": rrf_score})
 
             return sorted(result_list, key=lambda x: -x["_rrf_score"])[:k]
-        # Text-only query (no vector): fetch all chunk details in one JOIN.
+        # Text-only query (no vector): fetch chunk details in one query, then
+        # re-order by FTS BM25 rank — the IN clause returns rows in scan order,
+        # not relevance order.
         if fts_results:
             ids = [r[0] for r in fts_results]
             placeholders = ",".join("?" * len(ids))
@@ -285,6 +290,7 @@ class _SearchOps:
                         FROM chunks WHERE id IN ({placeholders})""",
                 ids,
             ).fetchall()
+            row_by_id = {row[0]: row for row in rows}
             return [{
                 "id": row[0],
                 "text": row[1],
@@ -292,7 +298,7 @@ class _SearchOps:
                 "source_doc_id": row[3],
                 "chunk_index": row[4],
                 "word_count": row[5],
-            } for row in rows][:k]
+            } for row in (row_by_id[i] for i in ids if i in row_by_id)][:k]
         return []
 
     def get_embeddings_by_ids(self, ids: list[int]) -> list[list[float]]:

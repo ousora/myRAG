@@ -398,3 +398,135 @@ class TestResourceCleanup:
         store.close()
         with pytest.raises((sqlite3.OperationalError, sqlite3.ProgrammingError)):
             store.conn.execute("SELECT 1")
+
+
+# ---------------------------------------------------------------------------
+# Regression — FTS rank preservation + upsert/FTS sync
+# ---------------------------------------------------------------------------
+
+class TestTextOnlySearchRanking:
+    """Text-only hybrid_search must return chunks in BM25 rank order."""
+
+    def test_text_only_results_follow_fts_rank(self, store):
+        """Regression test for FTS rank order in text-only search.
+
+        The detail fetch (WHERE id IN ...) used to discard the FTS rank
+        order, returning top-k in arbitrary scan order.
+        """
+        emb = _make_embedding()
+        # Filler docs give query terms positive IDF; each shares at most one
+        # term with the query.
+        fillers = [
+            "cooking pasta requires salt",
+            "mountain hiking trails overview",
+            "classical music composers list",
+            "gardening tips for spring soil",
+            "ocean wildlife documentary series",
+        ]
+        for i, text in enumerate(fillers):
+            store.upsert_chunk(
+                {"text": text, "section_path": ["S"]},
+                doc_id=f"doc_fill{i}", embedding=emb, chunk_index=0,
+            )
+        # Weak match inserted second-to-last; strong match LAST so scan order
+        # (rowid) is the reverse of relevance order.
+        store.upsert_chunk(
+            {"text": "alpha retrieval study", "section_path": ["S"]},
+            doc_id="doc_weak", embedding=emb, chunk_index=0,
+        )
+        store.upsert_chunk(
+            {"text": "alpha beta gamma delta retrieval pipeline evaluation",
+             "section_path": ["S"]},
+            doc_id="doc_strong", embedding=emb, chunk_index=0,
+        )
+
+        results = store.hybrid_search("alpha beta gamma delta retrieval")
+        assert len(results) >= 2
+        # The chunk containing all query terms must rank first — under the old
+        # bug it came back near the end (highest rowid, scan order).
+        assert "alpha beta gamma delta" in results[0]["text"]
+
+    def test_text_only_results_truncated_to_k(self, store):
+        for i in range(5):
+            store.upsert_chunk(
+                {"text": f"keyword alpha_{i}", "section_path": ["S"]},
+                doc_id=f"doc_k{i}", embedding=_make_embedding(), chunk_index=0,
+            )
+        results = store.hybrid_search("keyword", k=3)
+        assert len(results) == 3
+
+
+class TestUpsertFtsSync:
+    """Re-ingesting a document must not leave ghost entries in chunks_fts."""
+
+    def test_reingest_updates_fts_no_ghosts(self, store):
+        """Regression test for FTS sync on re-ingest.
+
+        INSERT OR REPLACE skipped the AFTER DELETE trigger
+        (recursive_triggers=OFF), leaving stale FTS entries forever.
+        """
+        emb = _make_embedding()
+        store.upsert_chunk(
+            {"text": "obsolete fuzzy wobble content", "section_path": ["S"]},
+            doc_id="doc_sync", embedding=emb, chunk_index=0,
+        )
+        # Re-ingest the same (doc_id, chunk_index) with new content.
+        store.upsert_chunk(
+            {"text": "brand new shiny content", "section_path": ["S"]},
+            doc_id="doc_sync", embedding=emb, chunk_index=0,
+        )
+
+        # Old text must be gone from the FTS index...
+        ghosts = store.conn.execute(
+            "SELECT rowid FROM chunks_fts WHERE chunks_fts MATCH 'wobble'"
+        ).fetchall()
+        assert len(ghosts) == 0, "stale FTS entry survived re-ingest"
+        # ...and the new text must be searchable.
+        results = store.hybrid_search("shiny content")
+        assert any("brand new shiny" in r["text"] for r in results)
+
+    def test_reingest_preserves_chunk_id(self, store):
+        """Upsert must UPDATE in place, not churn AUTOINCREMENT ids."""
+        emb = _make_embedding()
+        first = store.upsert_chunk(
+            {"text": "version one", "section_path": ["S"]},
+            doc_id="doc_stable", embedding=emb, chunk_index=0,
+        )
+        second = store.upsert_chunk(
+            {"text": "version two", "section_path": ["S"]},
+            doc_id="doc_stable", embedding=emb, chunk_index=0,
+        )
+        assert first["id"] == second["id"]
+
+    def test_fts_rebuild_migration_clears_preexisting_ghosts(self, tmp_path):
+        """Opening a legacy DB (user_version=0) rebuilds the FTS index."""
+        from storage.sqlite_vec import SQLiteVecStore
+
+        db_path = tmp_path / "legacy.db"
+        db = SQLiteVecStore(str(db_path))
+        emb = _make_embedding()
+        db.upsert_chunk(
+            {"text": "ghost words here", "section_path": ["S"]},
+            doc_id="doc_legacy", embedding=emb, chunk_index=0,
+        )
+        # Simulate legacy corruption directly in the FTS index, then roll the
+        # schema version back so the next open sees an unmigrated database.
+        # (Note: index-only ghost rows are visible via MATCH, not plain scans.)
+        db.conn.execute(
+            "INSERT INTO chunks_fts(rowid, text) VALUES (999999, 'phantom orphan entry')"
+        )
+        db.conn.execute("PRAGMA user_version = 0")
+        db.conn.commit()
+        db.close()
+
+        # Reopen: the one-time rebuild must drop the ghost row.
+        db2 = SQLiteVecStore(str(db_path))
+        results = db2.hybrid_search("ghost words")
+        ghosts = db2.conn.execute(
+            "SELECT rowid FROM chunks_fts WHERE chunks_fts MATCH 'phantom'"
+        ).fetchall()
+        assert len(ghosts) == 0
+        assert db2.conn.execute("PRAGMA user_version").fetchone()[0] == 1
+        # Real content survives the rebuild.
+        assert any("ghost words here" in r["text"] for r in results)
+        db2.close()

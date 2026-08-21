@@ -121,3 +121,53 @@ class TestEmbedTextsWrapper:
             assert all(isinstance(r, list) for r in results)
         finally:
             mod.Embedder = original_embedder
+
+
+class TestHashFallbackCache:
+    """Hash-fallback vectors must not poison the embedding cache."""
+
+    def test_fallback_not_cached(self, monkeypatch):
+        """After an API outage recovers, previously fallback-embedded texts
+
+        must re-embed with real semantics, not serve stale hash vectors.
+        """
+        from embedders import bge_m3
+
+        class FakeConfig:
+            embedding_hash_fallback = True
+            embedding_base_url = "http://example.com"
+            embedding_model = "test-model"
+            embedding_timeout = 5
+
+        monkeypatch.setattr("embedders.bge_m3.get_config", lambda: FakeConfig())
+
+        with bge_m3._EMBED_CACHE_LOCK:
+            bge_m3._EMBED_CACHE.clear()
+
+        e = bge_m3.Embedder(base_url="http://example.com", model="test-model")
+
+        calls = {"n": 0}
+
+        def flaky_post(path, payload):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise RuntimeError("API down")
+            class FakeResp:
+                def raise_for_status(self):
+                    pass
+                def json(self):
+                    return {"data": [{"embedding": [0.5] * 1024}]}
+            return FakeResp()
+
+        monkeypatch.setattr(e, "_post_with_retry", flaky_post)
+
+        first = e.embed("cache poisoning probe")
+        assert first == bge_m3._hash_embed("cache poisoning probe")
+
+        # API recovered — the same text must now get the real embedding.
+        second = e.embed("cache poisoning probe")
+        assert second == [0.5] * 1024
+        assert calls["n"] == 2, "fallback vector was served from cache"
+
+        with bge_m3._EMBED_CACHE_LOCK:
+            bge_m3._EMBED_CACHE.clear()

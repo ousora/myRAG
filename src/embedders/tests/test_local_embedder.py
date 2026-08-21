@@ -89,6 +89,18 @@ class TestLocalEmbedderInit:
         e = LocalEmbedder()
         assert e.__exit__(None, None, None) is False
 
+    def test_close_is_callable_and_returns_none(self):
+        """close() must exist to mirror Embedder's interface (pipeline calls it)."""
+        from embedders.local_bge import LocalEmbedder
+        e = LocalEmbedder()
+        assert e.close() is None
+
+    def test_close_matches_remote_embedder_interface(self):
+        from embedders import Embedder
+        from embedders.local_bge import LocalEmbedder
+        assert callable(getattr(LocalEmbedder, "close", None))
+        assert callable(getattr(Embedder, "close", None))
+
 
 class TestLocalEmbedderEmbed:
     """Test the embed() method."""
