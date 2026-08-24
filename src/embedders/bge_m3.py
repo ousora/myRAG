@@ -222,7 +222,7 @@ class Embedder:
             data: dict[str, Any] = resp.json()
         except Exception as exc:
             if getattr(get_config(), "embedding_hash_fallback", False):
-                logger.warning("Embedding API failed (%s); using hash fallback", exc)
+                logger.warning("Embedding API failed (%s); using hash fallback", exc, exc_info=True)
                 # Bypass the cache: fallback vectors are non-semantic byte
                 # patterns and must not outlive the API outage.
                 if isinstance(text, str):

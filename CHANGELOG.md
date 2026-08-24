@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### Added
+
+- **vec0 ANN virtual table for chunk retrieval (v2 schema)**: chunk vector search now uses a `chunks_vec` vec0 KNN table (`distance_metric=cosine`, `source_doc_id`/`chunk_index` as METADATA columns) instead of brute-force `ORDER BY vec_distance_cosine(...)` full scans. Legacy databases migrate automatically on open (`user_version` 0 → 1 → 2, with idempotent backfill of the ANN mirror); all writes keep the mirror in sync (upserts, tail-chunk cleanup, `delete_doc_chunks`). Section-filtered queries and any vec0 failure transparently fall back to the original brute-force scan. Six new regression tests cover mirror sync, the KNN fast path, doc filtering, and migration backfill. (src/storage/inserts.py, src/storage/search.py)
+- **Offline mode for local embeddings**: `LocalEmbedder` accepts `local_files_only=` (defaulting to the `HF_HUB_OFFLINE` env var) so cached models load without HuggingFace Hub HEAD requests — CI / air-gapped environments no longer hang on network timeouts. (src/embedders/local_bge.py)
+
 ### Fixed
 
 - **Mixed-language chunk threshold had a 3.7x cliff and underestimated tokens**: `effective_chunk_threshold()` used piecewise linear interpolation that jumped from ~18.6K chars to exactly `base/4` at the 50% CJK boundary, and its mixed-ratio formula ignored that a half-CJK/half-English document consumes ~1.6x more tokens per char than pure English. Replaced with harmonic-mean scaling — `threshold(r) = (base/EN_CPT) / (r/CJK_CPT + (1−r)/EN_CPT)` — which is continuous, monotonically decreasing, and keeps the underlying token budget (`base/4` tokens) exactly constant at every ratio. (src/formatters/_internal.py)
@@ -19,7 +24,21 @@
 - **`render_markdown_with_sections()` renamed to `render_markdown()`**: the function has not rendered headers from `metadata.sections` for several versions; old name kept as a deprecated alias for backward compatibility. Call sites and tests updated. (src/pipeline/markdown_utils.py, src/pipeline/hybrid.py)
 - **LLM debug responses anchor to repo root**: `debug_log_llm_responses` output goes to `<PROJECT_ROOT>/tmp/raw/` instead of CWD-relative `tmp/raw/`, matching the config loader's path strategy; exposed `config.PROJECT_ROOT`. (src/formatters/_llm.py, src/config.py)
 - **Local token estimator counts digits**: `LocalEmbedder._estimate_tokens()` previously bucketed digits into the 0.5-token "other" class, underestimating numeric-heavy texts and skewing adaptive batch sizes. Digits now count as ASCII alphanumerics (~4 chars/token). (src/embedders/local_bge.py)
-- **Test count**: 299 tests passing.
+- **Test count**: 305 tests passing.
+
+## [0.8.0] — 2026-08-22
+
+### Changed
+
+- **Refactored `process_file_hybrid()`**: markdown reuse logic extracted to `_load_existing_md()`, parse→clean→format extracted to `_parse_and_format()` — the main function now reads as orchestration only. No behavior change. (src/pipeline/hybrid.py)
+- **Broad exception handlers log tracebacks**: hash-fallback embedding paths and batch-processing error recovery now pass `exc_info=True`, so root causes survive in logs. (src/embedders/bge_m3.py, src/embedders/local_bge.py, src/pipeline/hybrid.py)
+- **Removed legacy `.test/` scratch directory**: one-off manual scripts superseded by the pytest suite under `src/**/tests/`.
+
+### Fixed
+
+
+- **`test_embed_texts_wrapper` hit the network**: it patched only the `Embedder` class, but `create_embedder()` builds a `LocalEmbedder` when config selects local mode — triggering a real model download/verification. The factory is now patched instead; tests never construct remote/local backends. (src/embedders/tests/test_embedder.py)
+- **FakeSentenceTransformer signature drift**: added `local_files_only` kwarg so the fake matches the updated `LocalEmbedder` constructor. (src/embedders/tests/test_local_embedder.py)
 
 ## [0.7.1] — 2026-08-21
 

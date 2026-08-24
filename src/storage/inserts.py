@@ -70,6 +70,14 @@ class _InsertOps(_StoreBase):
 
             CREATE INDEX IF NOT EXISTS idx_documents_source ON documents(source_file);
 
+            -- ANN index for chunks (sqlite-vec vec0). Mirrors rows of ``chunks``
+            -- keyed by rowid; cosine distance so rankings match brute-force scans.
+            CREATE VIRTUAL TABLE IF NOT EXISTS chunks_vec USING vec0(
+                embedding float[1024] distance_metric=cosine,
+                source_doc_id TEXT METADATA,
+                chunk_index INTEGER METADATA
+            );
+
             -- Keep FTS index in sync with chunks table on INSERT/UPDATE/DELETE.
             CREATE TRIGGER IF NOT EXISTS chunks_ai AFTER INSERT ON chunks BEGIN
                 INSERT INTO chunks_fts(rowid, text) VALUES (new.id, new.text);
@@ -89,16 +97,38 @@ class _InsertOps(_StoreBase):
         cols = {row[1] for row in self.conn.execute("PRAGMA table_info(documents)")}
         if "embedding" not in cols:
             self.conn.execute("ALTER TABLE documents ADD COLUMN embedding BLOB")
-        # One-time FTS rebuild per database file. Historical versions wrote
-        # chunks with INSERT OR REPLACE, whose implicit DELETE does not fire
-        # the AFTER DELETE trigger under SQLite's default recursive_triggers=OFF,
-        # leaving stale ghost rows in the external-content FTS table.
-        if self.conn.execute("PRAGMA user_version").fetchone()[0] < 1:
+        # One-time migrations, versioned via PRAGMA user_version.
+        #   v0 → v1: rebuild external-content FTS after ghost-row fix.
+        #   v1 → v2: backfill the vec0 ANN table (chunks_vec) from chunks.
+        version = self.conn.execute("PRAGMA user_version").fetchone()[0]
+        if version < 1:
             logger.info("Rebuilding chunks_fts index (one-time migration)")
             self.conn.execute("INSERT INTO chunks_fts(chunks_fts) VALUES('rebuild')")
             self.conn.execute("PRAGMA user_version = 1")
+        if version < 2:
+            self._backfill_chunks_vec()
+            self.conn.execute("PRAGMA user_version = 2")
+        if version < 2:
             self.conn.commit()
         self._schema_ready = True
+
+    def _backfill_chunks_vec(self) -> None:
+        """Populate chunks_vec from existing chunks rows (v1 → v2 migration)."""
+        rows = self.conn.execute(
+            "SELECT id, embedding, source_doc_id, chunk_index FROM chunks"
+        ).fetchall()
+        if not rows:
+            return
+        logger.info("Backfilling %d rows into chunks_vec ANN table", len(rows))
+        for cid, emb, source_doc_id, chunk_index in rows:
+            # Delete-then-insert: idempotent even if the mirror already has
+            # this rowid (e.g. a partially applied prior migration).
+            self.conn.execute("DELETE FROM chunks_vec WHERE rowid = ?", (cid,))
+            self.conn.execute(
+                "INSERT INTO chunks_vec(rowid, embedding, source_doc_id, chunk_index) "
+                "VALUES (?, ?, ?, ?)",
+                (cid, emb, source_doc_id, chunk_index),
+            )
 
     def upsert_chunk(self, chunk_data: dict, *, doc_id: str,
                      embedding: list[float], chunk_index: int = 0) -> dict:
@@ -135,6 +165,14 @@ class _InsertOps(_StoreBase):
             "SELECT id FROM chunks WHERE source_doc_id=? AND chunk_index=?",
             (doc_id, chunk_index),
         ).fetchone()[0]
+
+        # Keep the ANN mirror in sync (delete-then-insert covers both paths).
+        self.conn.execute("DELETE FROM chunks_vec WHERE rowid = ?", (rowid,))
+        self.conn.execute(
+            "INSERT INTO chunks_vec(rowid, embedding, source_doc_id, chunk_index) "
+            "VALUES (?, ?, ?, ?)",
+            (rowid, _SQLITE_VEC.serialize_float32(embedding), doc_id, chunk_index),
+        )
 
         return {
             "id": rowid,
@@ -191,6 +229,8 @@ class _InsertOps(_StoreBase):
             "DELETE FROM chunks WHERE source_doc_id = ? AND chunk_index >= ?",
             (doc_id, len(chunks)),
         )
+        # Rebuild this document's ANN mirror entries after the tail cleanup.
+        self.conn.execute("DELETE FROM chunks_vec WHERE source_doc_id = ?", (doc_id,))
         self.conn.commit()
 
         id_by_index = {
@@ -198,6 +238,17 @@ class _InsertOps(_StoreBase):
                 "SELECT id, chunk_index FROM chunks WHERE source_doc_id=?", (doc_id,)
             ).fetchall()
         }
+
+        self.conn.executemany(
+            "INSERT INTO chunks_vec(rowid, embedding, source_doc_id, chunk_index) "
+            "VALUES (?, ?, ?, ?)",
+            [
+                (id_by_index[i], params[i][1], doc_id, i)
+                for i in range(len(chunks))
+                if id_by_index.get(i) is not None
+            ],
+        )
+        self.conn.commit()
 
         return [
             {
@@ -266,6 +317,8 @@ class _InsertOps(_StoreBase):
         """
         self._setup_schema()
         cur = self.conn.execute("DELETE FROM chunks WHERE source_doc_id = ?", (doc_id,))
+        self.conn.execute("DELETE FROM chunks_vec WHERE source_doc_id = ?", (doc_id,))
+        self.conn.commit()
         self.conn.commit()
         if cur.rowcount:
             logger.info("Deleted %d chunks for doc_id=%s", cur.rowcount, doc_id)

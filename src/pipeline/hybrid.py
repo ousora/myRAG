@@ -85,6 +85,57 @@ def _format_result(cleaned: str, filepath: str, *, use_llm: bool = True,
         return None
 
 
+def _load_existing_md(md_path: str) -> dict[str, Any] | None:
+    """Build a formatter-style result dict from an existing .md file.
+
+    Reuses the front-matter tags written by ``write_to_md`` so the B index
+    keeps tag metadata across re-ingests. Returns None when the file cannot
+    be read.
+    """
+    try:
+        content = Path(md_path).read_text(encoding="utf-8")
+    except OSError as exc:
+        logger.warning("Cannot read markdown %s: %s", md_path, exc)
+        return None
+    title_match = re.search(r"^#\s+(.+)$", content, re.MULTILINE)
+    title = title_match.group(1).strip() if title_match else "Untitled"
+    frontmatter = markdown_utils.parse_frontmatter(content)
+    raw_tags = frontmatter.get("tags", [])
+    if isinstance(raw_tags, str):
+        raw_tags = [raw_tags]
+    return {
+        "title": title,
+        "body": content,
+        "tags": [str(t) for t in raw_tags],
+        "metadata": {"entities": []},
+        "_cleaned": content,  # summary fallback text for the B index
+    }
+
+
+def _parse_and_format(filepath: str, *, use_llm: bool, cfg: Any,
+                      remove_page_breaks: bool, collapse_whitespace: bool,
+                      rules_config: str | None) -> tuple[dict[str, Any], str] | None:
+    """Run parser → cleaner → formatter for *filepath*.
+
+    Returns ``(format_result, cleaned_text)``, or None when no parser exists
+    or the LLM formatting failed/timed out.
+    """
+    parser = utils.resolve_parser(filepath)
+    if parser is None:
+        logger.warning("Skipped %s — no parser found", filepath)
+        return None
+    raw_text = parser.parse(filepath)
+    if rules_config is None:
+        rules_config = str(CLEAN_RULES_PATH)
+    cleaned = TextCleaner(remove_page_breaks=remove_page_breaks,
+                          collapse_whitespace=collapse_whitespace,
+                          rules_config=rules_config).clean(raw_text)
+    formatted = _format_result(cleaned, filepath, use_llm=use_llm, cfg=cfg)
+    if formatted is None:
+        return None
+    return formatted, cleaned
+
+
 def process_file_hybrid(filepath: str, *, doc_id: str = "doc_0",
                         remove_page_breaks: bool = True, collapse_whitespace: bool = True,
                         rules_config: str | None = None, chunk_size: int = 1024,
@@ -117,42 +168,26 @@ def process_file_hybrid(filepath: str, *, doc_id: str = "doc_0",
     cfg = _get_config()
 
     md_out_path: str | None = None
-    cleaned = ""
     tags: list[str] = []
     result: dict[str, Any]
     if md_path and Path(md_path).is_file():
         # Reuse an existing .md — skip the (expensive) LLM formatter entirely.
         logger.info("Reusing existing markdown: %s", md_path)
-        content = Path(md_path).read_text(encoding="utf-8")
-        title_match = re.search(r"^#\s+(.+)$", content, re.MULTILINE)
-        title = title_match.group(1).strip() if title_match else "Untitled"
-        # Front matter written by write_to_md carries the original tags —
-        # reuse them so the B index keeps tag metadata across re-ingests.
-        frontmatter = markdown_utils.parse_frontmatter(content)
-        raw_tags = frontmatter.get("tags", [])
-        if isinstance(raw_tags, str):
-            raw_tags = [raw_tags]
-        tags = [str(t) for t in raw_tags]
-        result = {"title": title, "body": content, "tags": tags, "metadata": {"entities": []}}
+        reused = _load_existing_md(md_path)
+        if reused is None:
+            return _empty_result()
+        result = reused
+        tags = result["tags"]
         md_out_path = md_path
-        cleaned = content  # Provide cleaned text for summary fallback (B index)
+        cleaned = result.pop("_cleaned", "")
     else:
-        # 1. Parse & Clean
-        parser = utils.resolve_parser(filepath)
-        if parser is None:
-            logger.warning("Skipped %s — no parser found", filepath)
+        parsed = _parse_and_format(filepath, use_llm=use_llm, cfg=cfg,
+                                   remove_page_breaks=remove_page_breaks,
+                                   collapse_whitespace=collapse_whitespace,
+                                   rules_config=rules_config)
+        if parsed is None:
             return _empty_result()
-
-        raw_text = parser.parse(filepath)
-        if rules_config is None:
-            rules_config = str(CLEAN_RULES_PATH)
-        cleaned = TextCleaner(remove_page_breaks=remove_page_breaks, collapse_whitespace=collapse_whitespace, rules_config=rules_config).clean(raw_text)
-
-        # 2. LLM Format (async) — skip when use_llm=False
-        formatted = _format_result(cleaned, filepath, use_llm=use_llm, cfg=cfg)
-        if formatted is None:
-            return _empty_result()
-        result = formatted
+        result, cleaned = parsed
 
         # Write structured markdown if output_dir provided (same path as process_file_with_md)
         if md_output_dir:
@@ -345,7 +380,7 @@ def process_directory_hybrid(dirpath: str, *, store_path: str | None = None,
         except (KeyboardInterrupt, SystemExit):
             raise
         except Exception as exc:  # noqa: BLE001 — one bad file shouldn't abort the batch
-            logger.warning("Failed to process %s: %s", fp, exc)
+            logger.warning("Failed to process %s: %s", fp, exc, exc_info=True)
             return fp, {"chunks": [], "document": {}}
         return fp, res
 

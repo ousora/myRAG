@@ -32,12 +32,20 @@ class LocalEmbedder:
         device: str | None = None,
         batch_size: int = 32,
         max_tokens_per_batch: int | None = None,
+        local_files_only: bool | None = None,
     ):
         from sentence_transformers import SentenceTransformer
 
+        # Avoid HuggingFace Hub HEAD requests when the model is already cached
+        # locally (or when running offline). Defaults to the HF_HUB_OFFLINE env
+        # var so CI / air-gapped environments skip network verification entirely.
+        if local_files_only is None:
+            import os
+            local_files_only = os.environ.get("HF_HUB_OFFLINE", "").lower() in {"1", "true", "yes"}
         self._model = SentenceTransformer(
             model_name,
             device=device or "cpu",
+            local_files_only=local_files_only,
         )
         self.batch_size = batch_size
         self.max_tokens_per_batch = max_tokens_per_batch or 512 * 32  # ~16K tokens
@@ -103,7 +111,7 @@ class LocalEmbedder:
                 emb: list[float] = self._model.encode(text).tolist()
             except Exception as exc:
                 if getattr(get_config(), "embedding_hash_fallback", False):
-                    logger.warning("Local embed failed (%s); using hash fallback", exc)
+                    logger.warning("Local embed failed (%s); using hash fallback", exc, exc_info=True)
                     # Bypass the cache: fallback vectors are non-semantic and
                     # must not outlive the model failure.
                     fallback = _hash_embed(text)
@@ -155,7 +163,7 @@ class LocalEmbedder:
                 all_embeddings.extend(embeddings.tolist())
         except Exception as exc:
             if getattr(get_config(), "embedding_hash_fallback", False):
-                logger.warning("Local batch embed failed (%s); using hash fallback", exc)
+                logger.warning("Local batch embed failed (%s); using hash fallback", exc, exc_info=True)
                 return [_hash_embed(t) for t in text]
             raise
 

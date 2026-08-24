@@ -16,7 +16,7 @@ class FakeSentenceTransformer:
     tolist() returns the first embedding for str input, or full list for list input.
     """
 
-    def __init__(self, model_name, device="cpu"):
+    def __init__(self, model_name, device="cpu", local_files_only=False):
         self.model_name = model_name
         self.device = device
 

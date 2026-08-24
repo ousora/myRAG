@@ -131,23 +131,28 @@ class TestStoreDocument:
 class TestEmbedTextsWrapper:
     """Test the convenience wrapper function."""
 
-    def test_embed_texts_wrapper(self):
+    def test_embed_texts_wrapper(self, monkeypatch):
         from embedders.bge_m3 import Embedder, embed_texts
 
         class FakeEmbedder(Embedder):
             def embed(self, text):
                 return [0.1] * 1024 if isinstance(text, str) else [[0.1] * 1024 for _ in text]
 
-        # Patch the Embedder constructor to use our fake class
-        original_embedder = Embedder
-        try:
-            import embedders.bge_m3 as mod
-            mod.Embedder = FakeEmbedder  # type: ignore[misc]
-            results = embed_texts(["hello", "world"])
-            assert len(results) == 2
-            assert all(isinstance(r, list) for r in results)
-        finally:
-            mod.Embedder = original_embedder  # type: ignore[misc]
+            def close(self):
+                pass
+
+        # Patch the factory (not just the class): create_embedder() may build a
+        # LocalEmbedder when config selects local mode, which must never be
+        # constructed in tests — it would download/verify the model online.
+        import embedders.bge_m3 as mod
+
+        def fake_create_embedder(mode=None, **kwargs):
+            return FakeEmbedder()
+
+        monkeypatch.setattr(mod, "create_embedder", fake_create_embedder)
+        results = embed_texts(["hello", "world"])
+        assert len(results) == 2
+        assert all(isinstance(r, list) for r in results)
 
 
 class TestHashFallbackCache:

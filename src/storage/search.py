@@ -81,6 +81,57 @@ class _SearchOps(_StoreBase):
         """Parse section path from JSON or empty string."""
         return _parse_section_path(raw)
 
+    def _knn_chunk_ids(self, query_vector: list[float], k: int,
+                       source_doc_id: str | None = None) -> list[tuple[int, float]] | None:
+        """ANN lookup via the vec0 KNN virtual table.
+
+        Returns ``[(chunk_id, distance), ...]`` ordered by ascending distance,
+        or None when KNN is unavailable and callers must fall back to a
+        brute-force scan (e.g. legacy/corrupt index). Metadata filters use
+        sqlite-vec's METADATA column syntax (supported since 0.1.6).
+        """
+        emb_str = _SQLITE_VEC.serialize_float32(query_vector)
+        sql = (
+            "SELECT rowid, distance FROM chunks_vec "
+            "WHERE embedding MATCH ? AND k = ?"
+        )
+        params: list[object] = [emb_str, k]
+        if source_doc_id is not None:
+            sql += " AND source_doc_id MATCH ?"
+            params.append(source_doc_id)
+        try:
+            return [(row[0], row[1]) for row in self.conn.execute(sql, params)]
+        except Exception as exc:  # noqa: BLE001 — fall back to brute force on any vec0 failure
+            logger.warning("KNN query failed (%s); falling back to brute force", exc)
+            return None
+
+    def _fetch_chunks_by_ids(self, ids_with_distance: list[tuple[int, float]]) -> list[dict]:
+        """Fetch full chunk rows for ``(id, distance)`` pairs, preserving order."""
+        if not ids_with_distance:
+            return []
+        placeholders = ",".join("?" * len(ids_with_distance))
+        rows = self.conn.execute(
+            f"""SELECT id, text, section_path, source_doc_id, chunk_index, word_count
+                    FROM chunks WHERE id IN ({placeholders})""",
+            [cid for cid, _ in ids_with_distance],
+        ).fetchall()
+        row_by_id = {row[0]: row for row in rows}
+        results = []
+        for cid, distance in ids_with_distance:
+            row = row_by_id.get(cid)
+            if row is None:
+                continue  # ANN mirror out of sync for this row — skip it
+            results.append({
+                "id": row[0],
+                "text": row[1],
+                "section_path": self._parse_section_path(row[2]),
+                "source_doc_id": row[3],
+                "chunk_index": row[4],
+                "word_count": row[5],
+                "distance": distance,
+            })
+        return results
+
     def search_chunks(self, query_vector: list[float], *, k: int = 10,
                       source_doc_id: str | None = None, section_filter: list[str] | None = None) -> list[dict]:
         """Search chunks by vector similarity (cosine distance)."""
@@ -107,6 +158,13 @@ class _SearchOps(_StoreBase):
 
         where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
 
+        # Fast path: unfiltered (or doc-only filtered) queries hit the vec0
+        # ANN table; only section-filtered queries need the brute-force scan
+        # because JSON membership can't be expressed as a METADATA filter.
+        if not section_filter:
+            knn = self._knn_chunk_ids(query_vector, k, source_doc_id=source_doc_id)
+            if knn is not None:
+                return self._fetch_chunks_by_ids(knn)
         sql = (f"""SELECT c.id, c.text, c.section_path,
                           c.source_doc_id, c.chunk_index, c.word_count,
                           vec_distance_cosine(c.embedding, ?) AS distance
@@ -206,6 +264,9 @@ class _SearchOps(_StoreBase):
         # Empty queries fall back to pure vector search if a vector is provided.
         if not query_text.strip():
             if query_vector:
+                knn = self._knn_chunk_ids(query_vector, k)
+                if knn is not None:
+                    return self._fetch_chunks_by_ids(knn)
                 emb_str = _SQLITE_VEC.serialize_float32(query_vector)
                 results = self.conn.execute(
                     """SELECT c.id, c.text, c.section_path,
@@ -242,28 +303,37 @@ class _SearchOps(_StoreBase):
         vec_results = []
         if query_vector:
             emb_str = _SQLITE_VEC.serialize_float32(query_vector)
-            # Distance is selected in the same scan that ranks the rows —
-            # no second pass over the embeddings is needed for RRF ranking.
-            results = self.conn.execute(
-                """SELECT c.id, c.text, c.section_path,
-                                 c.source_doc_id, c.chunk_index, c.word_count,
-                                 vec_distance_cosine(c.embedding, ?) AS distance
-                          FROM chunks c
-                          ORDER BY distance ASC
-                          LIMIT ?""",
-                [emb_str, k]
-            ).fetchall()
+            # Fast path via the vec0 ANN table; falls back to the ordered
+            # brute-force scan when KNN is unavailable.
+            knn = self._knn_chunk_ids(query_vector, k)
+            if knn is not None:
+                fetched = self._fetch_chunks_by_ids(knn)
+                for r in fetched:
+                    r["_distance"] = r.pop("distance")
+                    vec_results.append(r)
+            else:
+                # Distance is selected in the same scan that ranks the rows —
+                # no second pass over the embeddings is needed for RRF ranking.
+                results = self.conn.execute(
+                    """SELECT c.id, c.text, c.section_path,
+                                     c.source_doc_id, c.chunk_index, c.word_count,
+                                     vec_distance_cosine(c.embedding, ?) AS distance
+                              FROM chunks c
+                              ORDER BY distance ASC
+                              LIMIT ?""",
+                    [emb_str, k]
+                ).fetchall()
 
-            for row in results:
-                vec_results.append({
-                    "id": row[0],
-                    "text": row[1],
-                    "section_path": self._parse_section_path(row[2]),
-                    "source_doc_id": row[3],
-                    "chunk_index": row[4],
-                    "word_count": row[5],
-                    "_distance": row[6],
-                })
+                for row in results:
+                    vec_results.append({
+                        "id": row[0],
+                        "text": row[1],
+                        "section_path": self._parse_section_path(row[2]),
+                        "source_doc_id": row[3],
+                        "chunk_index": row[4],
+                        "word_count": row[5],
+                        "_distance": row[6],
+                    })
 
         combined = {}
 
