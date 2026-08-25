@@ -7,7 +7,7 @@ from embedders.bge_m3 import EXPECTED_EMBEDDING_DIMENSION, _hash_embed
 
 
 def _cosine(a, b):
-    return sum(x * y for x, y in zip(a, b))
+    return sum(x * y for x, y in zip(a, b, strict=True))
 
 
 def main() -> None:
