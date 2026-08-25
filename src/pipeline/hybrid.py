@@ -219,22 +219,32 @@ def process_file_hybrid(filepath: str, *, doc_id: str = "doc_0",
 
     if store_path:
         try:
-            from embedders import create_embedder
+            from embedders import maybe_create_embedder
             from storage.sqlite_vec import SQLiteVecStore
 
-            e = create_embedder()
+            e = maybe_create_embedder()
             try:
-                stored_chunks = e.store_chunks(all_chunks, doc_id=doc_id)
+                if e is None:
+                    # Embedding disabled (mode="none"): persist without vectors;
+                    # retrieval runs keyword-only. upsert_chunks defaults to a
+                    # zero-vector placeholder when "embedding" is missing.
+                    stored_chunks = [
+                        {**c, "source_doc_id": doc_id, "chunk_index": i}
+                        for i, c in enumerate(all_chunks)
+                    ]
+                    doc_embedding = None
+                else:
+                    stored_chunks = e.store_chunks(all_chunks, doc_id=doc_id)
 
-                # Document-level index (B) — only embed when we persist it.
-                stored_doc = e.store_document(
-                    title=title,
-                    tags=tags,
-                    text_summary=summary_text,
-                    source_file=filepath,
-                    total_chunks=len(stored_chunks),
-                )
-                doc_embedding = stored_doc.get("embedding")
+                    # Document-level index (B) — only embed when we persist it.
+                    stored_doc = e.store_document(
+                        title=title,
+                        tags=tags,
+                        text_summary=summary_text,
+                        source_file=filepath,
+                        total_chunks=len(stored_chunks),
+                    )
+                    doc_embedding = stored_doc.get("embedding")
 
                 # The lock serializes DB writes across batch threads; the
                 # context manager closes the connection even when an upsert
@@ -253,7 +263,8 @@ def process_file_hybrid(filepath: str, *, doc_id: str = "doc_0",
                         embedding=doc_embedding,
                     )
             finally:
-                e.close()
+                if e is not None:
+                    e.close()
 
             db_path = store_path
             logger.info("  → Persisted %d chunks + 1 doc to %s", len(stored_chunks), store_path)

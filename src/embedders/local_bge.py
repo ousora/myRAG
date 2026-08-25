@@ -40,7 +40,15 @@ class LocalEmbedder:
         max_tokens_per_batch: int | None = None,
         local_files_only: bool | None = None,
     ):
-        from sentence_transformers import SentenceTransformer
+        try:
+            from sentence_transformers import SentenceTransformer
+        except ImportError as exc:
+            msg = (
+                "sentence-transformers is not installed. Either run "
+                "'uv sync --extra local-embeddings', switch embedding.mode to "
+                "'remote', or set it to 'none' for keyword-only offline retrieval."
+            )
+            raise RuntimeError(msg) from exc
 
         # Avoid HuggingFace Hub HEAD requests when the model is already cached
         # locally (or when running offline). Defaults to the HF_HUB_OFFLINE env

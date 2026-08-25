@@ -326,6 +326,22 @@ class Embedder:
         }
 
 
+def maybe_create_embedder(
+    mode: str | None = None, *, base_url: str = "", model: str = ""
+) -> "Embedder | None":
+    """Create an embedder unless embedding is disabled by config.
+
+    Returns ``None`` when *mode* (default: config's ``embedding.mode``) is
+    ``"none"`` — callers should then persist chunks/documents WITHOUT vectors
+    and rely on keyword-only retrieval.
+    """
+    if mode is None:
+        mode = getattr(get_config(), "embedding_mode", "remote")
+    if mode == "none":
+        return None
+    return create_embedder(mode=mode, base_url=base_url, model=model)
+
+
 def create_embedder(
     mode: str | None = None, *, base_url: str = "", model: str = "", validate: bool = False
 ) -> "Embedder":

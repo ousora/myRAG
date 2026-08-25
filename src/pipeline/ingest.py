@@ -59,34 +59,52 @@ def _ingest_markdown(md_path: str, store_path: str, *,
     all_chunks = chunker.chunk(md_content)
     logger.info("  → %d chunks from %s", len(all_chunks), md_file.name)
 
-    # Embed + store
-    from embedders import create_embedder
+    # Embed + store. With embedding disabled (mode="none"), persist without
+    # vectors — upsert_chunks defaults to a zero-vector placeholder and the
+    # document record accepts embedding=None; retrieval runs keyword-only.
+    from embedders import maybe_create_embedder
     from storage.sqlite_vec import SQLiteVecStore
 
-    with create_embedder() as e:
-        stored_chunks = e.store_chunks(all_chunks, doc_id=doc_id)
-
-        summary_text = _build_doc_summary(title, tags, md_content)
-        stored_doc = e.store_document(
-            title=title,
-            tags=tags,
-            text_summary=summary_text,
-            source_file=str(md_file.resolve()),
-            total_chunks=len(stored_chunks),
-        )
+    summary_text = _build_doc_summary(title, tags, md_content)
+    e = maybe_create_embedder()
+    try:
+        if e is None:
+            stored_chunks: list[dict] = [
+                {**c, "source_doc_id": doc_id, "chunk_index": i}
+                for i, c in enumerate(all_chunks)
+            ]
+            stored_doc: dict = {
+                "title": title,
+                "tags": tags,
+                "text_summary": summary_text[:1000],
+                "source_file": str(md_file.resolve()),
+                "total_chunks": len(stored_chunks),
+                "embedding": None,
+            }
+        else:
+            stored_chunks = e.store_chunks(all_chunks, doc_id=doc_id)
+            stored_doc = e.store_document(
+                title=title,
+                tags=tags,
+                text_summary=summary_text,
+                source_file=str(md_file.resolve()),
+                total_chunks=len(stored_chunks),
+            )
 
         with SQLiteVecStore(store_path) as db:
             db.upsert_chunks(stored_chunks, doc_id=doc_id)
 
-            doc_embedding = stored_doc.get("embedding")
             db.upsert_document(
                 title=title,
                 tags=tags,
                 text_summary=summary_text,
                 source_file=str(md_file.resolve()),
                 total_chunks=len(stored_chunks),
-                embedding=doc_embedding,
+                embedding=stored_doc.get("embedding"),
             )
+    finally:
+        if e is not None:
+            e.close()
 
     logger.info("  → Persisted %d chunks + 1 doc to %s", len(stored_chunks), store_path)
     return store_path
