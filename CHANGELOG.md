@@ -1,8 +1,18 @@
 # Changelog — myRAG Pipeline
 
-## [Unreleased]
+## [0.9.0] — 2026-08-23
 
 ### Added
+
+- **Keyword-only retrieval mode (`embedding.mode: "none"`)**: fully offline retrieval with zero embedding dependency. `rag_query()` skips the embedder entirely and runs `hybrid_search(query_vector=None)` — FTS5 + BM25 ranking, lexical-only MMR, no document-summary fallback (which requires a query vector). `create_embedder(mode="none")` raises a descriptive `EmbeddingError`. Config validation accepts the new mode. (src/config.py, src/pipeline/hybrid.py, src/embedders/bge_m3.py)
+- **CJK-segmented FTS index (v3 schema)**: FTS5's default unicode61 tokenizer merges CJK runs into ONE token, so single-character Chinese queries never matched — Chinese full-text search was effectively broken. Chunks now carry a pre-segmented `text_seg` column (`segment_for_fts()` inserts boundary spaces between CJK chars and at CJK↔Latin transitions); the external-content `chunks_fts` table and its sync triggers are recreated against that column. Legacy DBs migrate automatically on open (`user_version` → 3): add column, backfill, drop/recreate FTS + triggers, `'rebuild'` repopulation (also covers the old v0→v1 ghost-row fix). Query-side `_build_fts_query()` needed no change — it already OR-joins individual CJK chars. (src/myrag/cjk.py, src/storage/inserts.py)
+- **Section-path context in chunk embeddings**: `chunk_embed_text()` prepends the header path (`"A > B\n<body>"`) to the embedding input in both backends' `store_chunks()`, grounding sub-chunks whose body alone lacks context; stored `text` stays unprefixed so FTS still matches raw content. The MMR missing-vector fallback uses the same scheme. Requires re-ingest of existing stores to benefit. (src/embedders/bge_m3.py, src/pipeline/hybrid.py)
+
+### Fixed
+
+- **Hash-fallback vectors no longer pollute hybrid ranking**: hash pseudo-vectors are byte-pattern noise; while `hash_fallback: true`, `rag_query()` now skips the vector side entirely (pure keyword search) instead of fusing noise ranks via RRF. Re-ingest is required after switching back to a real model. (src/pipeline/hybrid.py)
+- **Local batch encoding bypassed the embedding cache**: `LocalEmbedder.embed(list)` re-encoded every text on every call, so re-ingesting unchanged chunks paid full CPU inference again. Batch path now resolves per-text cache hits first and encodes only misses. OOM handling replaced with recursive bisection (`_encode_with_oom_fallback`), which is simpler than the previous triple-nested retry loop and can no longer double-count or skip items. (src/embedders/local_bge.py)
+- **`get_chunks_by_doc()` broke by the new `text_seg` column**: it used positional indices over `SELECT *`; now selects explicit columns. (src/storage/sqlite_vec.py)
 
 - **vec0 ANN virtual table for chunk retrieval (v2 schema)**: chunk vector search now uses a `chunks_vec` vec0 KNN table (`distance_metric=cosine`, `source_doc_id`/`chunk_index` as METADATA columns) instead of brute-force `ORDER BY vec_distance_cosine(...)` full scans. Legacy databases migrate automatically on open (`user_version` 0 → 1 → 2, with idempotent backfill of the ANN mirror); all writes keep the mirror in sync (upserts, tail-chunk cleanup, `delete_doc_chunks`). Section-filtered queries and any vec0 failure transparently fall back to the original brute-force scan. Six new regression tests cover mirror sync, the KNN fast path, doc filtering, and migration backfill. (src/storage/inserts.py, src/storage/search.py)
 - **Offline mode for local embeddings**: `LocalEmbedder` accepts `local_files_only=` (defaulting to the `HF_HUB_OFFLINE` env var) so cached models load without HuggingFace Hub HEAD requests — CI / air-gapped environments no longer hang on network timeouts. (src/embedders/local_bge.py)
@@ -24,7 +34,8 @@
 - **`render_markdown_with_sections()` renamed to `render_markdown()`**: the function has not rendered headers from `metadata.sections` for several versions; old name kept as a deprecated alias for backward compatibility. Call sites and tests updated. (src/pipeline/markdown_utils.py, src/pipeline/hybrid.py)
 - **LLM debug responses anchor to repo root**: `debug_log_llm_responses` output goes to `<PROJECT_ROOT>/tmp/raw/` instead of CWD-relative `tmp/raw/`, matching the config loader's path strategy; exposed `config.PROJECT_ROOT`. (src/formatters/_llm.py, src/config.py)
 - **Local token estimator counts digits**: `LocalEmbedder._estimate_tokens()` previously bucketed digits into the 0.5-token "other" class, underestimating numeric-heavy texts and skewing adaptive batch sizes. Digits now count as ASCII alphanumerics (~4 chars/token). (src/embedders/local_bge.py)
-- **Test count**: 305 tests passing.
+
+- **Test count**: 315 tests passing.
 
 ## [0.8.0] — 2026-08-22
 

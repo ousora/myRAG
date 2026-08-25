@@ -102,14 +102,17 @@ bge-m3 embeddings → sqlite-vec database with FTS5 full-text index + entity_nam
 **Dual embedding mode** — set `embedding.mode` in config to switch:
 - `"remote"` (default): calls HTTP API at `embedding.base_url` (vLLM / Ollama compatible)
 - `"local"`: uses sentence-transformers (`uv sync --extra local-embeddings`), CPU inference, no network dependency
+- `"none"`: fully offline retrieval — no embedding backend at all; queries run keyword-only via FTS5 + BM25
 
-**Hash fallback** (`embedding.hash_fallback: true`): when the endpoint is unreachable, embedders fall back to a deterministic SHA-256 → 1024-d vector. Same text → same vector, so retrieval is stable across runs, but vectors carry no semantic signal. Offline/dev only — not a replacement for a real model.
+**Hash fallback** (`embedding.hash_fallback: true`): when the endpoint is unreachable, embedders fall back to a deterministic SHA-256 → 1024-d vector so ingestion still works offline. Hash vectors carry no semantic signal, so while this flag is set, retrieval runs keyword-only (pure FTS) instead of fusing noise into vector ranking. Re-ingest after switching to a real model.
 
 **Dimension validation**: Both remote and local backends validate embedding dimension on every call. Mismatched dimensions raise `EmbeddingError` with context about expected vs actual size.
 
 **HTTP retry + resource cleanup**: Remote embedder retries transient failures (429/502/503/504) with exponential backoff. Use as a context manager for deterministic connection cleanup: `with Embedder() as e: ...`.
 
 **CJK-aware token estimation**: Local embedder uses multi-language heuristic (`len//2` → character-class-aware counting) so batch sizing stays accurate for Chinese/Japanese/Korean text that SentencePiece tokenizes at ~1 char/token.
+
+**Schema migrations & re-ingest**: databases auto-migrate on open (`user_version` → 3: CJK-segmented FTS index); keyword search works immediately after reopening an old store, no manual steps. Chunk embeddings written before the section-path context change remain compatible with vector search — re-ingest only to gain the retrieval-quality improvement.
 
 **Entity search** — `entity_names` column stores entity mentions per chunk for cross-doc entity lookup:
 
@@ -129,7 +132,7 @@ e = create_embedder()  # or: from myrag.exceptions import EmbeddingError
 hits = db.search_chunks(e.embed("your question"), k=5)
 ```
 
-**Hybrid search** — `search_chunks()` performs vector similarity search; for combined vector + FTS5 full-text use `hybrid_search()`, with results fused using Reciprocal Rank Fusion (RRF) for fair ranking of both signals. **Section filter** uses exact JSON array element matching via `json_each`: `db.search_chunks(..., section_filter=["Services"])` matches chunks whose `section_path` contains the literal string "Services" (no wildcard false-positives). **Empty query fallback**: when `query_text=""` but `query_vector` is provided, returns pure vector results (avoids FTS5 MATCH '' syntax error).
+**Hybrid search** — `search_chunks()` performs vector similarity search; for combined vector + FTS5 full-text use `hybrid_search()`, with results fused using Reciprocal Rank Fusion (RRF) for fair ranking of both signals. Passing `query_vector=None` runs pure keyword search (FTS5 + BM25), which is what the offline `embedding.mode: "none"` path uses. **CJK full-text**: Chinese/Japanese text is indexed per-character via the pre-segmented `text_seg` column (schema v3, migrated automatically) so single-character and word-level CJK queries match correctly. **Section filter** uses exact JSON array element matching via `json_each`: `db.search_chunks(..., section_filter=["Services"])` matches chunks whose `section_path` contains the literal string "Services" (no wildcard false-positives). **Empty query fallback**: when `query_text=""` but `query_vector` is provided, returns pure vector results (avoids FTS5 MATCH '' syntax error).
 
 ## Quick Start
 
@@ -236,7 +239,7 @@ llm:
   timeout: 300
 
 embedding:
-  mode: "remote"                  # "remote" (HTTP API) or "local" (sentence-transformers)
+  mode: "remote"                  # "remote", "local" or "none" (keyword-only offline retrieval)
 
   # When mode == "remote":
   base_url: "http://your-embedder:11435"
@@ -244,6 +247,11 @@ embedding:
 
   # When mode == "local":
   # local_model: "BAAI/bge-m3"    # Auto-downloaded on first use (~1.1GB)
+
+  # Offline ingestion without any embedding backend: hash_fallback writes
+  # deterministic placeholder vectors so ingest succeeds; retrieval then runs
+  # keyword-only (pure FTS). Re-ingest after switching to a real model.
+  # hash_fallback: false
 ```
 
 Resolution chain: `$MYRAG_CONFIG` → `conf/config.yaml` → `conf/config.example.yaml`.

@@ -13,7 +13,13 @@ import logging
 
 from config import get_config
 
-from .bge_m3 import _embed_cache_get, _embed_cache_put, _hash_embed, _validate_embedding_dimension
+from .bge_m3 import (
+    _embed_cache_get,
+    _embed_cache_put,
+    _hash_embed,
+    _validate_embedding_dimension,
+    chunk_embed_text,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -122,52 +128,51 @@ class LocalEmbedder:
             _embed_cache_put(text, emb)
             return emb
 
-        # Batch encoding with memory protection
-        all_embeddings: list[list[float]] = []
-        effective_bs = self._adaptive_batch_size(text)
+        # Per-text cache lookups first: only uncached texts reach the model,
+        # so re-ingesting unchanged chunks costs nothing.
+        slot_by_idx: dict[int, list[float]] = {}
+        pending_idx: list[int] = []
+        for i, t in enumerate(text):
+            cached = _embed_cache_get(t)
+            if cached is not None:
+                slot_by_idx[i] = cached
+            else:
+                pending_idx.append(i)
+
+        effective_bs = self._adaptive_batch_size([text[i] for i in pending_idx])
 
         try:
-            for i in range(0, len(text), effective_bs):
-                batch = text[i:i + effective_bs]
-                try:
-                    embeddings = self._model.encode(batch)  # (batch_n, EXPECTED_EMBEDDING_DIMENSION) numpy
-                except RuntimeError as e:
-                    if "out of memory" in str(e).lower():
-                        logger.warning(
-                            "OOM on batch %d–%d (%d items), progressively reducing to single-item encoding",
-                            i, i + effective_bs, len(batch),
-                        )
-                        # Retry with smaller batches; fall back to single-item on persistent OOM.
-                        sub_batch_size = max(1, len(batch) // 2)
-                        if sub_batch_size == 0:
-                            sub_batch_size = 1
-                        for j in range(i, i + len(batch), sub_batch_size):
-                            sub_batch = text[j:j + sub_batch_size]
-                            try:
-                                sub_emb = self._model.encode(sub_batch).tolist()
-                                all_embeddings.extend(sub_emb)
-                            except RuntimeError as e2:
-                                if "out of memory" in str(e2).lower():
-                                    # Absolute fallback: encode one item at a time.
-                                    logger.warning("OOM persists; encoding remaining items individually")
-                                    for single_item in text[j:j + sub_batch_size]:
-                                        emb = self._model.encode(single_item).tolist()
-                                        _validate_embedding_dimension(emb)
-                                        all_embeddings.append(emb)
-                                else:
-                                    raise
-                        continue
-                    raise
-                for vec in embeddings.tolist():
+            for start in range(0, len(pending_idx), effective_bs):
+                idxs = pending_idx[start:start + effective_bs]
+                batch = [text[i] for i in idxs]
+                embeddings = self._encode_with_oom_fallback(batch)
+                for j, vec in zip(idxs, embeddings, strict=True):
                     _validate_embedding_dimension(vec)
-                all_embeddings.extend(embeddings.tolist())
+                    _embed_cache_put(text[j], vec)
+                    slot_by_idx[j] = vec
         except Exception as exc:
             if getattr(get_config(), "embedding_hash_fallback", False):
                 logger.warning("Local batch embed failed (%s); using hash fallback", exc, exc_info=True)
                 return [_hash_embed(t) for t in text]
             raise
 
-        return all_embeddings
+        return [slot_by_idx[i] for i in range(len(text))]
+
+    def _encode_with_oom_fallback(self, batch: list[str]) -> list[list[float]]:
+        """Encode *batch*; on GPU/CPU OOM, bisect down to single items."""
+        try:
+            result: list[list[float]] = self._model.encode(batch).tolist()
+        except RuntimeError as exc:
+            if "out of memory" not in str(exc).lower() or len(batch) == 1:
+                raise
+            logger.warning("OOM on %d-item batch; splitting", len(batch))
+            mid = max(1, len(batch) // 2)
+            return (
+                self._encode_with_oom_fallback(batch[:mid])
+                + self._encode_with_oom_fallback(batch[mid:])
+            )
+        else:
+            return result
 
     def _maybe_prepend_instruction(self, text: str | list[str]) -> str | list[str]:
         """Prepend the retrieval query instruction for query texts only.
@@ -199,7 +204,7 @@ class LocalEmbedder:
         Returns the same chunks augmented with ``embedding``, ``source_doc_id``,
         ``chunk_index``, and ``word_count``.
         """
-        texts = [c["text"] for c in chunks]
+        texts = [chunk_embed_text(c) for c in chunks]
         embeddings = self.embed(texts) if texts else []
 
         results = []

@@ -59,6 +59,32 @@ _KANA_ALTERNATION: str = _alternation(KANA_RANGES)
 CJK_TOKEN_ALTERNATION: str = f"{IDEOGRAPH_ALTERNATION}|{_KANA_ALTERNATION}"
 
 
+# Single char class covering ideographs + kana — used by the FTS segmenter.
+_CJK_CLASS: str = _char_class(IDEOGRAPH_RANGES + KANA_RANGES)
+
+# Boundaries where unicode61 would otherwise merge a CJK run into ONE token:
+#   CJK|CJK, CJK|Latin/digit, Latin/digit|CJK.
+_FTS_SEGMENT_RE: re.Pattern[str] = re.compile(
+    f"(?<={_CJK_CLASS})(?={_CJK_CLASS})"
+    f"|(?<={_CJK_CLASS})(?=[A-Za-z0-9])"
+    f"|(?<=[A-Za-z0-9])(?={_CJK_CLASS})"
+)
+
+
+def segment_for_fts(text: str) -> str:
+    """Insert spaces at CJK boundaries so FTS5 unicode61 indexes per-char tokens.
+
+    FTS5's default tokenizer has no CJK word segmentation: "风险管控" becomes a
+    single token and single-character queries never match. Storing the segmented
+    form ("风 险 管 控") in the indexed column makes character-level matching work.
+    Apply the SAME function to query text (``_build_fts_query`` already tokenizes
+    to individual CJK chars, so it is compatible without changes).
+    """
+    if not text:
+        return ""
+    return _FTS_SEGMENT_RE.sub(" ", text)
+
+
 def contains_cjk(text: str) -> bool:
     """Return True if *text* contains any CJK ideograph or kana character."""
     return CJK_CHAR_RE.search(text) is not None

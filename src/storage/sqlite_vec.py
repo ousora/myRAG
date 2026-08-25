@@ -47,7 +47,9 @@ class SQLiteVecStore(_InsertOps, _SearchOps):
         self._setup_schema()
 
         results = self.conn.execute(
-            "SELECT * FROM chunks WHERE source_doc_id = ? ORDER BY chunk_index",
+            """SELECT id, text, embedding, source_doc_id, chunk_index,
+                      section_path, word_count
+                   FROM chunks WHERE source_doc_id = ? ORDER BY chunk_index""",
             (doc_id,)
         ).fetchall()
 

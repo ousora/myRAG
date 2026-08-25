@@ -77,8 +77,10 @@ class Config:
         self.embedding_mode: str       = emb.get("mode", "remote")
         self.embedding_local_model: str | None = emb.get("local_model")
         # When the remote/local endpoint is unavailable, fall back to a
-        # deterministic hash-based pseudo-embedding. Useful for offline
-        # development or when no embedding service is reachable.
+        # deterministic hash-based pseudo-embedding so ingestion still works
+        # offline. Hash vectors carry no semantics: while this flag is set,
+        # retrieval runs keyword-only (pure FTS) instead of fusing noise into
+        # vector ranking. Requires re-ingest after switching to a real model.
         self.embedding_hash_fallback: bool = emb.get("hash_fallback", False)
         # Instruction prepended to *queries* (not documents) for retrieval-trained
         # models like bge-m3. Empty string disables the prefix.
@@ -112,8 +114,10 @@ class Config:
             errors.append("llm.model is required")
 
         # Embedding mode validation
-        if self.embedding_mode not in ("remote", "local"):
-            errors.append(f"embedding.mode must be 'remote' or 'local' (got {self.embedding_mode!r})")
+        if self.embedding_mode not in ("remote", "local", "none"):
+            errors.append(
+                f"embedding.mode must be 'remote', 'local' or 'none' (got {self.embedding_mode!r})"
+            )
         elif self.embedding_mode == "remote":
             if not self.embedding_base_url:
                 errors.append("embedding.base_url required when mode=remote")

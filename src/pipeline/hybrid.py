@@ -413,37 +413,62 @@ def rag_query(question: str, db_path: str, *, k: int = 5,
         "question": str — the original question (echoed back).
 
     """
+    from config import get_config
     from embedders import create_embedder
     from storage.sqlite_vec import SQLiteVecStore
 
-    # 1. Embed the query with the retrieval instruction prefix (bge-m3 needs it).
-    #    embed_query returns a single vector for str input; normalize for the
-    #    local backend which returns list[list[float]].
+    # Keyword-only retrieval: no embedding backend configured (mode=none) or
+    # hash fallback active (its pseudo-vectors are byte-pattern noise — fusing
+    # them into RRF would pollute ranking, so the vector side is skipped).
+    cfg = get_config()
+    keyword_only = (
+        getattr(cfg, "embedding_mode", "remote") == "none"
+        or cfg.embedding_hash_fallback
+    )
+
     owned_e = embedder is None
     owned_db = db is None
-    e = embedder if embedder is not None else create_embedder()
-    try:
-        query_result = e.embed_query(question)
-        if query_result and isinstance(query_result[0], list):
-            # Local backend returned a batch — take the first vector.
-            first = query_result[0]
-            query_vector = [float(v) for v in first]
-        else:
-            query_vector = [float(v) for v in cast("list[float]", query_result)]
+    query_vector: list[float] | None = None
+    e = None
+    if not keyword_only:
+        # Embed the query with the retrieval instruction prefix (bge-m3 needs it).
+        # embed_query returns a single vector for str input; normalize for the
+        # local backend which returns list[list[float]].
+        e = embedder if embedder is not None else create_embedder()
+        try:
+            query_result = e.embed_query(question)
+            if query_result and isinstance(query_result[0], list):
+                # Local backend returned a batch — take the first vector.
+                first = query_result[0]
+                query_vector = [float(v) for v in first]
+            else:
+                query_vector = [float(v) for v in cast("list[float]", query_result)]
+        except Exception:
+            if owned_e:
+                e.close()
+            raise
 
-        # 2. Retrieve relevant chunks (hybrid: vector + FTS5 RRF fusion)
+    try:
+        # Retrieve relevant chunks. With query_vector=None this degrades to
+        # FTS5 full-text + BM25 ranking.
         store = db if db is not None else SQLiteVecStore(db_path)
         try:
-            # A: fine-grained chunk retrieval (vector + full-text).
+            # A: fine-grained chunk retrieval.
             results = store.hybrid_search(question, query_vector=query_vector, k=k)
 
             # B: coarse-grained document-level fallback for broad context.
-            doc_results = store.search_documents(query_vector=query_vector, k=1)
+            doc_results = (
+                store.search_documents(query_vector=query_vector, k=1)
+                if query_vector is not None
+                else []
+            )
 
             # Pre-fetch stored chunk embeddings for MMR — reuse what's already
             # in the index instead of re-embedding every retrieved chunk.
             chunk_vectors = (
-                store.get_embeddings_by_ids([c["id"] for c in results]) if results else []
+                store.get_embeddings_by_ids([c["id"] for c in results])
+                if results and query_vector is not None
+                else []
             )
         finally:
             if owned_db:
@@ -457,16 +482,18 @@ def rag_query(question: str, db_path: str, *, k: int = 5,
             }
 
         # 3. Re-rank chunks (MMR) for diversity, then assemble context.
-        if len(results) > 1:
+        if len(results) > 1 and e is not None:
             from rerank import mmr_rerank
 
             # Fall back to embedding only the chunks whose vectors are missing
             # from the store (e.g. legacy rows written before the embedding col).
             if any(not v for v in chunk_vectors):
-                missing_texts = [
-                    c["text"] for c, v in zip(results, chunk_vectors, strict=True) if not v
-                ]
-                embedded_missing = e.embed(missing_texts)
+                from embedders.bge_m3 import chunk_embed_text
+
+                embedded_missing: list[list[float]] | list[float] = e.embed([
+                    chunk_embed_text(c)
+                    for c, v in zip(results, chunk_vectors, strict=True) if not v
+                ])
                 for emb in embedded_missing:
                     if not isinstance(emb, list) or not emb or isinstance(emb[0], list):
                         continue
@@ -475,9 +502,10 @@ def rag_query(question: str, db_path: str, *, k: int = 5,
                         if not v:
                             chunk_vectors[i] = emb
                             break
+            assert query_vector is not None  # MMR block only runs with an embedder
             results = mmr_rerank(question, query_vector, chunk_vectors, results, k=k)
     finally:
-        if owned_e:
+        if owned_e and e is not None:
             e.close()
 
     context_parts = []

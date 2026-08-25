@@ -7,11 +7,37 @@ import logging
 import re
 from datetime import datetime, timezone
 
-from myrag.cjk import CJK_CHAR_RE, count_cjk
+from myrag.cjk import CJK_CHAR_RE, count_cjk, segment_for_fts
 
 from .schema import _SQLITE_VEC, _StoreBase
 
 logger = logging.getLogger(__name__)
+
+# FTS5 virtual table indexes the PRE-SEGMENTED ``text_seg`` column, not raw
+# ``text``: unicode61 has no CJK word segmentation (a Chinese run becomes ONE
+# token), so single-character queries would never match. ``segment_for_fts``
+# inserts boundary spaces at index time; queries tokenize to individual CJK
+# chars on the search side. Kept as constants so the v3 migration can drop and
+# recreate the exact same objects.
+_FTS_TABLE_DDL = """CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(
+                text_seg, content='chunks', content_rowid='id'
+            );"""
+
+_FTS_TRIGGER_DDL = """
+            -- Keep FTS index in sync with chunks table on INSERT/UPDATE/DELETE.
+            CREATE TRIGGER IF NOT EXISTS chunks_ai AFTER INSERT ON chunks BEGIN
+                INSERT INTO chunks_fts(rowid, text_seg) VALUES (new.id, new.text_seg);
+            END;
+            CREATE TRIGGER IF NOT EXISTS chunks_au AFTER UPDATE ON chunks BEGIN
+                INSERT INTO chunks_fts(chunks_fts, rowid, text_seg)
+                    VALUES('delete', old.id, old.text_seg);
+                INSERT INTO chunks_fts(rowid, text_seg) VALUES (new.id, new.text_seg);
+            END;
+            CREATE TRIGGER IF NOT EXISTS chunks_ad AFTER DELETE ON chunks BEGIN
+                INSERT INTO chunks_fts(chunks_fts, rowid, text_seg)
+                    VALUES('delete', old.id, old.text_seg);
+            END;
+        """
 
 
 def _count_words(text: str) -> int:
@@ -39,10 +65,11 @@ class _InsertOps(_StoreBase):
         """
         if self._schema_ready:
             return
-        self.conn.executescript("""
+        self.conn.executescript(f"""
             CREATE TABLE IF NOT EXISTS chunks (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 text TEXT NOT NULL,
+                text_seg TEXT NOT NULL DEFAULT '',
                 embedding BLOB NOT NULL,
                 source_doc_id TEXT NOT NULL,
                 chunk_index INTEGER DEFAULT 0,
@@ -53,9 +80,7 @@ class _InsertOps(_StoreBase):
             );
 
             CREATE INDEX IF NOT EXISTS idx_chunks_source ON chunks(source_doc_id);
-            CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(
-                text, content='chunks', content_rowid='id'
-            );
+{_FTS_TABLE_DDL}
 
             CREATE TABLE IF NOT EXISTS documents (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -77,20 +102,7 @@ class _InsertOps(_StoreBase):
                 source_doc_id TEXT METADATA,
                 chunk_index INTEGER METADATA
             );
-
-            -- Keep FTS index in sync with chunks table on INSERT/UPDATE/DELETE.
-            CREATE TRIGGER IF NOT EXISTS chunks_ai AFTER INSERT ON chunks BEGIN
-                INSERT INTO chunks_fts(rowid, text) VALUES (new.id, new.text);
-            END;
-            CREATE TRIGGER IF NOT EXISTS chunks_au AFTER UPDATE ON chunks BEGIN
-                INSERT INTO chunks_fts(chunks_fts, rowid, text)
-                    VALUES('delete', old.id, old.text);
-                INSERT INTO chunks_fts(rowid, text) VALUES (new.id, new.text);
-            END;
-            CREATE TRIGGER IF NOT EXISTS chunks_ad AFTER DELETE ON chunks BEGIN
-                INSERT INTO chunks_fts(chunks_fts, rowid, text)
-                    VALUES('delete', old.id, old.text);
-            END;
+{_FTS_TRIGGER_DDL}
         """)
         # Backward-compat migration: existing DBs created before the document-level
         # embedding column existed won't have it. Add it without dropping data.
@@ -100,17 +112,49 @@ class _InsertOps(_StoreBase):
         # One-time migrations, versioned via PRAGMA user_version.
         #   v0 → v1: rebuild external-content FTS after ghost-row fix.
         #   v1 → v2: backfill the vec0 ANN table (chunks_vec) from chunks.
+        #   v2 → v3: CJK-segmented FTS — add chunks.text_seg, backfill, and
+        #            recreate chunks_fts + triggers against the new column.
+        #            A v3 recreate also covers the v0→v1 ghost-row fix.
         version = self.conn.execute("PRAGMA user_version").fetchone()[0]
-        if version < 1:
+        if version < 3:
+            self._migrate_v3_cjk_fts()
+        elif version < 1:
             logger.info("Rebuilding chunks_fts index (one-time migration)")
             self.conn.execute("INSERT INTO chunks_fts(chunks_fts) VALUES('rebuild')")
-            self.conn.execute("PRAGMA user_version = 1")
         if version < 2:
             self._backfill_chunks_vec()
-            self.conn.execute("PRAGMA user_version = 2")
-        if version < 2:
-            self.conn.commit()
+        if version != 3:
+            self.conn.execute("PRAGMA user_version = 3")
+        self.conn.commit()
         self._schema_ready = True
+
+    def _migrate_v3_cjk_fts(self) -> None:
+        """v2 → v3: switch FTS to the CJK-segmented ``text_seg`` column."""
+        logger.info("Migrating FTS to CJK-segmented text_seg column (one-time)")
+        cols = {row[1] for row in self.conn.execute("PRAGMA table_info(chunks)")}
+        if "text_seg" not in cols:
+            self.conn.execute(
+                "ALTER TABLE chunks ADD COLUMN text_seg TEXT NOT NULL DEFAULT ''"
+            )
+            rows = self.conn.execute("SELECT id, text FROM chunks").fetchall()
+            for cid, text in rows:
+                self.conn.execute(
+                    "UPDATE chunks SET text_seg=? WHERE id=?",
+                    (segment_for_fts(text), cid),
+                )
+        # Old triggers reference ``old/new.text`` which no longer matches the
+        # recreated FTS column name — drop them along with the old table.
+        self.conn.executescript("""
+            DROP TRIGGER IF EXISTS chunks_ai;
+            DROP TRIGGER IF EXISTS chunks_au;
+            DROP TRIGGER IF EXISTS chunks_ad;
+            DROP TABLE IF EXISTS chunks_fts;
+        """)
+        self.conn.execute(_FTS_TABLE_DDL)
+        self.conn.executescript(_FTS_TRIGGER_DDL)
+        # Repopulate from the external content table ('rebuild' also clears any
+        # pre-existing ghost rows, covering the old v0→v1 fix).
+        self.conn.execute("INSERT INTO chunks_fts(chunks_fts) VALUES('rebuild')")
 
     def _backfill_chunks_vec(self) -> None:
         """Populate chunks_vec from existing chunks rows (v1 → v2 migration)."""
@@ -148,15 +192,16 @@ class _InsertOps(_StoreBase):
         word_count = _count_words(text)
 
         self.conn.execute(
-            """INSERT INTO chunks (text, embedding, source_doc_id, chunk_index, section_path, word_count, entity_names)
-               VALUES (?, ?, ?, ?, ?, ?, ?)
+            """INSERT INTO chunks (text, text_seg, embedding, source_doc_id, chunk_index, section_path, word_count, entity_names)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                ON CONFLICT(source_doc_id, chunk_index) DO UPDATE SET
                    text=excluded.text,
+                   text_seg=excluded.text_seg,
                    embedding=excluded.embedding,
                    section_path=excluded.section_path,
                    word_count=excluded.word_count,
                    entity_names=excluded.entity_names""",
-            (text, _SQLITE_VEC.serialize_float32(embedding), doc_id,
+            (text, segment_for_fts(text), _SQLITE_VEC.serialize_float32(embedding), doc_id,
              chunk_index, json.dumps(section_path), word_count, json.dumps(entity_names))
         )
 
@@ -201,6 +246,7 @@ class _InsertOps(_StoreBase):
         params = [
             (
                 chunk["text"],
+                segment_for_fts(chunk["text"]),
                 _SQLITE_VEC.serialize_float32(chunk.get("embedding") or [0.0] * 1024),
                 doc_id,
                 i,
@@ -212,10 +258,11 @@ class _InsertOps(_StoreBase):
         ]
 
         self.conn.executemany(
-            """INSERT INTO chunks (text, embedding, source_doc_id, chunk_index, section_path, word_count, entity_names)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+            """INSERT INTO chunks (text, text_seg, embedding, source_doc_id, chunk_index, section_path, word_count, entity_names)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(source_doc_id, chunk_index) DO UPDATE SET
                     text=excluded.text,
+                    text_seg=excluded.text_seg,
                     embedding=excluded.embedding,
                     section_path=excluded.section_path,
                     word_count=excluded.word_count,
@@ -243,7 +290,7 @@ class _InsertOps(_StoreBase):
             "INSERT INTO chunks_vec(rowid, embedding, source_doc_id, chunk_index) "
             "VALUES (?, ?, ?, ?)",
             [
-                (id_by_index[i], params[i][1], doc_id, i)
+                (id_by_index[i], params[i][2], doc_id, i)
                 for i in range(len(chunks))
                 if id_by_index.get(i) is not None
             ],

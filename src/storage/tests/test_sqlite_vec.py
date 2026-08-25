@@ -565,7 +565,7 @@ class TestUpsertFtsSync:
         # schema version back so the next open sees an unmigrated database.
         # (Note: index-only ghost rows are visible via MATCH, not plain scans.)
         db.conn.execute(
-            "INSERT INTO chunks_fts(rowid, text) VALUES (999999, 'phantom orphan entry')"
+            "INSERT INTO chunks_fts(rowid, text_seg) VALUES (999999, 'phantom orphan entry')"
         )
         db.conn.execute("PRAGMA user_version = 0")
         db.conn.commit()
@@ -578,9 +578,10 @@ class TestUpsertFtsSync:
             "SELECT rowid FROM chunks_fts WHERE chunks_fts MATCH 'phantom'"
         ).fetchall()
         assert len(ghosts) == 0
-        # v2 is current: legacy DBs are migrated through v1 (FTS rebuild) and
-        # v2 (chunks_vec ANN backfill) in one open.
-        assert db2.conn.execute("PRAGMA user_version").fetchone()[0] == 2
+        # v3 is current: legacy DBs are migrated through the CJK-segmented FTS
+        # rebuild (which also covers the old v1 ghost-row fix) and the v2
+        # chunks_vec ANN backfill in one open.
+        assert db2.conn.execute("PRAGMA user_version").fetchone()[0] == 3
         # Real content survives the rebuild.
         assert any("ghost words here" in r["text"] for r in results)
         db2.close()
@@ -674,4 +675,58 @@ class TestVec0AnnTable:
         assert len(rows) == 1 and rows[0][1] == "doc_legacy"
         # And retrieval works through the ANN path.
         assert len(db2.search_chunks(emb, k=5)) == 1
+        db2.close()
+
+
+# ---------------------------------------------------------------------------
+# CJK-segmented FTS (v3): Chinese text must be findable via keyword search
+# ---------------------------------------------------------------------------
+
+class TestCjkSegmentedFts:
+    """unicode61 merges CJK runs into one token.
+
+    The segmented text_seg column makes per-character matching work for
+    Chinese queries.
+    """
+
+    def test_chinese_keyword_search_finds_chunk(self, store):
+        store.upsert_chunks([
+            {"text": "风险管控是项目管理的核心内容", "section_path": ["管理"]},
+            {"text": "plain english body", "section_path": ["S"]},
+        ], doc_id="d1")
+        # Text-only path (no vector): FTS5 + BM25
+        results = store.hybrid_search("管控")
+        assert len(results) == 1
+        assert results[0]["text"].startswith("风险管控")
+
+    def test_single_char_query_matches(self, store):
+        store.upsert_chunks([{"text": "风险管控", "section_path": ["S"]}],
+                            doc_id="d1")
+        assert len(store.hybrid_search("险")) == 1
+
+    def test_mixed_cjk_latin_token(self, store):
+        store.upsert_chunks([{"text": "部署AI系统提升效率", "section_path": ["S"]}],
+                            doc_id="d1")
+        assert len(store.hybrid_search("AI")) == 1
+
+    def test_v2_to_v3_migration_preserves_chinese_search(self, tmp_path):
+        """A v2-era DB (with a v2-era FTS table) gains CJK search on reopen."""
+        import os as _os
+        fd, path = tempfile.mkstemp(suffix=".db", dir=tmp_path)
+        _os.close(fd)
+        from storage.sqlite_vec import SQLiteVecStore
+
+        db = SQLiteVecStore(path)
+        db.upsert_chunks(
+            [{"text": "风险管控是项目管理的核心内容", "section_path": ["S"]}],
+            doc_id="doc_legacy",
+        )
+        db.conn.execute("PRAGMA user_version = 2")
+        db.conn.commit()
+        db.close()
+
+        db2 = SQLiteVecStore(path)
+        # Schema setup (and migration) runs lazily on first operation.
+        assert len(db2.hybrid_search("核心")) == 1
+        assert db2.conn.execute("PRAGMA user_version").fetchone()[0] == 3
         db2.close()

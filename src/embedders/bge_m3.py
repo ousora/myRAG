@@ -75,6 +75,19 @@ def _embed_cache_put(text: str, embedding: list[float]) -> None:
             _EMBED_CACHE.popitem(last=False)
 
 
+def chunk_embed_text(chunk: dict[str, Any]) -> str:
+    """Embedding input for a chunk: section-path context + body text.
+
+    Prepending the header path ("A > B") grounds sub-chunks whose body alone
+    lacks context. The stored ``text`` stays unprefixed — FTS search still
+    matches raw content. Changing the prefix scheme invalidates stored vectors
+    (re-ingest required).
+    """
+    path = " > ".join(p for p in (chunk.get("section_path") or []) if p)
+    text = chunk.get("text", "")
+    return f"{path}\n{text}" if path else text
+
+
 def _validate_embedding_dimension(embedding: list[float]) -> None:
     """Assert that the returned embedding has the expected dimensionality."""
     if len(embedding) != EXPECTED_EMBEDDING_DIMENSION:
@@ -278,7 +291,7 @@ class Embedder:
         all_results: list[dict] = []
         for i in range(0, len(chunks), batch_size):
             batch = chunks[i:i + batch_size]
-            texts = [c["text"] for c in batch]
+            texts = [chunk_embed_text(c) for c in batch]
             embeddings = self.embed(texts) if texts else []
 
             for j, chunk in enumerate(batch):
@@ -332,6 +345,13 @@ def create_embedder(
     if mode is None:
         cfg = get_config()
         mode = getattr(cfg, "embedding_mode", "remote")
+
+    if mode == "none":
+        msg = (
+            "embedding.mode is 'none' — no embedding backend. Check config "
+            "before creating an embedder and run retrieval keyword-only."
+        )
+        raise EmbeddingError(message=msg, context={"mode": mode})
 
     if mode == "local":
         from .local_bge import LocalEmbedder
