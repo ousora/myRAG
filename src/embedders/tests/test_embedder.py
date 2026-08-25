@@ -158,7 +158,7 @@ class TestEmbedTextsWrapper:
 class TestHashFallbackCache:
     """Hash-fallback vectors must not poison the embedding cache."""
 
-    def test_fallback_not_cached(self, monkeypatch):
+    def test_fallback_not_cached_and_breaker_trips(self, monkeypatch):
         """After an API outage recovers, previously fallback-embedded texts.
 
         must re-embed with real semantics, not serve stale hash vectors.
@@ -197,10 +197,11 @@ class TestHashFallbackCache:
         first = e.embed("cache poisoning probe")
         assert first == bge_m3._hash_embed("cache poisoning probe")
 
-        # API recovered — the same text must now get the real embedding.
-        second = e.embed("cache poisoning probe")
-        assert second == [0.5] * 1024
-        assert calls["n"] == 2, "fallback vector was served from cache"
+        # Circuit breaker: once tripped, later calls skip the API entirely and
+        # serve lexical hash vectors — no retry storm while the endpoint is down.
+        second = e.embed("another probe")
+        assert second == bge_m3._hash_embed("another probe")
+        assert calls["n"] == 1, "breaker must suppress further API attempts"
 
         with bge_m3._EMBED_CACHE_LOCK:
             bge_m3._EMBED_CACHE.clear()

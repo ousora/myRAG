@@ -33,10 +33,10 @@ embedding:
   # local_model: "BAAI/bge-m3"   # HF model name, auto-downloads on first use
 
   # When the configured endpoint is unreachable, fall back to a deterministic
-  # hash-based pseudo-embedding (1024-d) so ingestion still works offline.
-  # Hash vectors carry no semantic signal, so while this is on, retrieval runs
-  # keyword-only (pure FTS) instead of fusing noise into vector ranking.
-  # Re-ingest after switching back to a real model.
+  # LEXICAL embedding: signed feature hashing of CJK n-grams + Latin words into
+  # the same 1024-d space. Cosine similarity approximates token overlap, so
+  # vector retrieval keeps working offline (no synonymy though). Re-ingest
+  # after switching between fallback and a real model.
   # hash_fallback: false
 
 # ── Formatter Settings ───────────────────────────────────────────────

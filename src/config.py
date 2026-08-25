@@ -77,10 +77,11 @@ class Config:
         self.embedding_mode: str       = emb.get("mode", "remote")
         self.embedding_local_model: str | None = emb.get("local_model")
         # When the remote/local endpoint is unavailable, fall back to a
-        # deterministic hash-based pseudo-embedding so ingestion still works
-        # offline. Hash vectors carry no semantics: while this flag is set,
-        # retrieval runs keyword-only (pure FTS) instead of fusing noise into
-        # vector ranking. Requires re-ingest after switching to a real model.
+        # deterministic LEXICAL embedding (signed feature hashing of CJK
+        # n-grams + Latin words): cosine similarity approximates token overlap,
+        # so offline retrieval keeps working through the normal hybrid path.
+        # Not equivalent to a neural model — no synonymy. Re-ingest after
+        # switching to/from a real model (vector spaces differ).
         self.embedding_hash_fallback: bool = emb.get("hash_fallback", False)
         # Instruction prepended to *queries* (not documents) for retrieval-trained
         # models like bge-m3. Empty string disables the prefix.

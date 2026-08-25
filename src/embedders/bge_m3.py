@@ -36,6 +36,7 @@ Schema:
 import contextlib
 import hashlib
 import logging
+import re
 import threading
 import time
 from collections import OrderedDict
@@ -101,21 +102,41 @@ def _validate_embedding_dimension(embedding: list[float]) -> None:
 
 
 def _hash_embed(text: str) -> list[float]:
-    """Deterministic pseudo-embedding from SHA-256.
+    """Deterministic lexical embedding via signed feature hashing.
 
-    ponytail: global fallback for when the embedding endpoint is down.
-    Vectors are deterministic (same text → same vector) so retrieval is
-    stable across runs, but they carry no semantic signal — similarity is
-    byte-pattern based, not meaning based. Upgrade: real model when
-    endpoint is reachable; this only covers offline/dev mode.
+    ponytail: dependency-free offline "embedding". Tokens are CJK unigrams +
+    bigrams and lowercase Latin words, hashed into 1024 dims with random sign;
+    cosine similarity then approximates weighted token overlap. Meaningful for
+    keyword-level matching, but no synonymy — below neural models like bge-m3.
+    Same dimension as bge-m3 so stores stay schema-compatible; re-ingest
+    required after switching between backends.
     """
+    import math
+    from collections import Counter
+
+    from myrag.cjk import CJK_CHAR_RE
+
+    tokens = [m.group(0).lower() for m in re.finditer(r"[A-Za-z0-9]+", text)]
+    cjk = CJK_CHAR_RE.findall(text)
+    tokens.extend(cjk)
+    tokens.extend(a + b for a, b in zip(cjk, cjk[1:], strict=False))
+
+    vec = [0.0] * EXPECTED_EMBEDDING_DIMENSION
+    if tokens:
+        for tok, n in Counter(tokens).items():
+            h = int.from_bytes(
+                hashlib.blake2b(tok.encode("utf-8"), digest_size=16).digest(), "big"
+            )
+            sign = 1.0 if (h >> 127) & 1 else -1.0
+            vec[h % EXPECTED_EMBEDDING_DIMENSION] += sign * (1.0 + math.log(n))
+        norm = math.sqrt(sum(v * v for v in vec))
+        return [v / norm for v in vec]
+
+    # Token-free text (empty/punctuation-only): legacy whole-string byte hash
+    # keeps output deterministic and non-zero.
     digest = hashlib.sha256(text.encode("utf-8")).digest()
-    # Convert 32 bytes → 1024 floats in [-1, 1) via byte→float mapping.
-    out: list[float] = []
-    for i in range(EXPECTED_EMBEDDING_DIMENSION):
-        b = digest[i % len(digest)]
-        out.append((b / 255.0) * 2 - 1)
-    return out
+    return [(digest[i % len(digest)] / 255.0) * 2 - 1
+            for i in range(EXPECTED_EMBEDDING_DIMENSION)]
 
 
 class Embedder:
@@ -137,6 +158,10 @@ class Embedder:
 
         self.client: httpx.Client | None = httpx.Client(base_url=base_url, timeout=cfg.embedding_timeout)
         self.model = model
+        # Circuit breaker: tripped after the first endpoint failure (with
+        # hash_fallback enabled) so later calls skip the ~7s retry/backoff and
+        # go straight to lexical hash vectors. Reset only on process restart.
+        self._offline = False
 
     def _maybe_prepend_instruction(self, text: str | list[str]) -> str | list[str]:
         """Prepend the retrieval query instruction for query texts only.
@@ -229,6 +254,11 @@ class Embedder:
         else:
             payload = {"model": self.model, "input": text}
 
+        if self._offline:
+            if isinstance(text, str):
+                return _hash_embed(text)
+            return [_hash_embed(t) for t in text]
+
         try:
             resp = self._post_with_retry("/v1/embeddings", payload)
             resp.raise_for_status()
@@ -236,8 +266,7 @@ class Embedder:
         except Exception as exc:
             if getattr(get_config(), "embedding_hash_fallback", False):
                 logger.warning("Embedding API failed (%s); using hash fallback", exc, exc_info=True)
-                # Bypass the cache: fallback vectors are non-semantic byte
-                # patterns and must not outlive the API outage.
+                self._offline = True  # trip the breaker — no more retries this run
                 if isinstance(text, str):
                     return _hash_embed(text)
                 return [_hash_embed(t) for t in text]

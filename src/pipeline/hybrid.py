@@ -428,14 +428,12 @@ def rag_query(question: str, db_path: str, *, k: int = 5,
     from embedders import create_embedder
     from storage.sqlite_vec import SQLiteVecStore
 
-    # Keyword-only retrieval: no embedding backend configured (mode=none) or
-    # hash fallback active (its pseudo-vectors are byte-pattern noise — fusing
-    # them into RRF would pollute ranking, so the vector side is skipped).
+    # Keyword-only retrieval when no embedding backend is configured (mode=none).
+    # hash_fallback now produces deterministic LEXICAL vectors (signed feature
+    # hashing of CJK n-grams + Latin words), so the vector side stays meaningful
+    # and participates in ranking even during an endpoint outage.
     cfg = get_config()
-    keyword_only = (
-        getattr(cfg, "embedding_mode", "remote") == "none"
-        or cfg.embedding_hash_fallback
-    )
+    keyword_only = getattr(cfg, "embedding_mode", "remote") == "none"
 
     owned_e = embedder is None
     owned_db = db is None
@@ -447,7 +445,13 @@ def rag_query(question: str, db_path: str, *, k: int = 5,
         # local backend which returns list[list[float]].
         e = embedder if embedder is not None else create_embedder()
         try:
-            query_result = e.embed_query(question)
+            if cfg.embedding_hash_fallback:
+                # Skip the bge retrieval-instruction prefix so that, when the
+                # endpoint fails over to lexical hash vectors, the query hashes
+                # the same raw token stream as document chunks.
+                query_result = e.embed(question)
+            else:
+                query_result = e.embed_query(question)
             if query_result and isinstance(query_result[0], list):
                 # Local backend returned a batch — take the first vector.
                 first = query_result[0]
