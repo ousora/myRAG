@@ -1,5 +1,16 @@
 # Changelog — myRAG Pipeline
 
+## [Unreleased]
+
+### Fixed
+
+- **CJK counting now uses the canonical range**: `tags._detect_body_script()` and `LocalEmbedder._estimate_tokens()` hard-coded the basic-plane range `\u4e00-\u9fff`, silently excluding CJK Extensions A–F and kana from script detection and token estimation. Both now route through `myrag.cjk.count_cjk()` (the single source of truth), so Japanese kana and rare-extension characters are counted consistently. No behavior change for the common pure-Chinese case. (src/formatters/tags.py, src/embedders/local_bge.py)
+
+### Changed
+
+- **`delete_doc_chunks()` no longer commits twice**: the redundant second `conn.commit()` was removed. (src/storage/inserts.py)
+- **Stale internal references cleaned**: docstrings/comments in `formatters/constants.py` and `formatters/writer.py` pointed at renamed/removed helpers (`_format_text_chunked_merged`, `_render_markdown_with_sections`); updated to the current names. `formatters/prompts.py` hoists the `copy` import to module level. (src/formatters/constants.py, src/formatters/writer.py, src/formatters/prompts.py)
+
 ## [0.9.0] — 2026-08-23
 
 ### Added
