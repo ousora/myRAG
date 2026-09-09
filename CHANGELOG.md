@@ -4,6 +4,8 @@
 
 ### Fixed
 
+- **`process_file_hybrid` degradation path missed typed embedding errors**: the embed-or-persist try/except caught `(httpx.HTTPError, RuntimeError, sqlite3.Error)` but not `MyRagException`, so a dimension/count validation failure (`EmbeddingError`, e.g. an endpoint serving the wrong model dimension) propagated out of the function instead of degrading to keyword-only storage. Added `MyRagException` to the caught tuple; embedding/storage failures now reliably fall back to persisting chunks without vectors. (src/pipeline/hybrid.py)
+
 - **CJK counting now uses the canonical range**: `tags._detect_body_script()` and `LocalEmbedder._estimate_tokens()` hard-coded the basic-plane range `\u4e00-\u9fff`, silently excluding CJK Extensions A–F and kana from script detection and token estimation. Both now route through `myrag.cjk.count_cjk()` (the single source of truth), so Japanese kana and rare-extension characters are counted consistently. No behavior change for the common pure-Chinese case. (src/formatters/tags.py, src/embedders/local_bge.py)
 
 ### Changed
@@ -49,7 +51,7 @@
 - **LLM debug responses anchor to repo root**: `debug_log_llm_responses` output goes to `<PROJECT_ROOT>/tmp/raw/` instead of CWD-relative `tmp/raw/`, matching the config loader's path strategy; exposed `config.PROJECT_ROOT`. (src/formatters/_llm.py, src/config.py)
 - **Local token estimator counts digits**: `LocalEmbedder._estimate_tokens()` previously bucketed digits into the 0.5-token "other" class, underestimating numeric-heavy texts and skewing adaptive batch sizes. Digits now count as ASCII alphanumerics (~4 chars/token). (src/embedders/local_bge.py)
 
-- **Test count**: 315 tests passing.
+- **Test count**: 317 tests passing.
 
 ## [0.8.0] — 2026-08-22
 

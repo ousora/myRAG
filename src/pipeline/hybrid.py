@@ -27,6 +27,7 @@ import parsers.markdown_normalizer  # noqa: F401 — registers normalize_markdow
 from chunkers import Chunker
 from config import CLEAN_RULES_PATH
 from config import get_config as _get_config
+from myrag.exceptions import MyRagException
 from parsers.text_cleaner import TextCleaner
 
 from . import markdown_utils, utils  # noqa: F401,TC001 — re-exported for test patching
@@ -268,7 +269,7 @@ def process_file_hybrid(filepath: str, *, doc_id: str = "doc_0",
 
             db_path = store_path
             logger.info("  → Persisted %d chunks + 1 doc to %s", len(stored_chunks), store_path)
-        except (httpx.HTTPError, RuntimeError, sqlite3.Error) as exc:
+        except (httpx.HTTPError, RuntimeError, sqlite3.Error, MyRagException) as exc:
             logger.warning("Embedding/storage failed (%s): %s", type(exc).__name__, exc)
             stored_chunks = [{"text": c["text"], "section_path": c.get("section_path", ["General"]),
                               "source_doc_id": doc_id, "chunk_index": i} for i, c in enumerate(all_chunks)]
