@@ -270,7 +270,7 @@ print(cfg.llm_endpoint)  # from your config file
 ```bash
 cd myrag
 uv run pytest -v
-# 280 tests: chunkers 12 + formatters 53 + storage 57 + config 11 + parsers 50 + embedders 32 + pipeline 55 + integration/e2e 10
+# 315 tests: chunkers 15 + formatters 60 + storage 70 + config 11 + parsers 50 + embedders 35 + myrag 6 + pipeline 57 + integration/e2e 11
 ```
 
 ### Linting
@@ -283,7 +283,7 @@ uv run ruff check . --fix   # auto-fix most issues
 ### Type Checking
 
 ```bash
-uv run mypy src/       # ~355 errors — internal module typing incomplete; add src/py.typed marker
+uv run mypy src/       # 0 issues (strict mode: disallow_untyped_defs = true)
 ```
 
 `get_config()` validates required fields (LLM endpoint, model name) on every call. Invalid configs raise `ValueError` with descriptive messages before any pipeline work begins. Debug logging of LLM responses controlled by `debug_log_llm_responses: true` in config (gated by `logging.debug`).
