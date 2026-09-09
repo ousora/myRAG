@@ -366,7 +366,6 @@ class _InsertOps(_StoreBase):
         cur = self.conn.execute("DELETE FROM chunks WHERE source_doc_id = ?", (doc_id,))
         self.conn.execute("DELETE FROM chunks_vec WHERE source_doc_id = ?", (doc_id,))
         self.conn.commit()
-        self.conn.commit()
         if cur.rowcount:
             logger.info("Deleted %d chunks for doc_id=%s", cur.rowcount, doc_id)
         return cur.rowcount

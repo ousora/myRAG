@@ -275,8 +275,8 @@ def _write_body_with_sections(lines: list[str], body: str, sections: list[dict[s
     """Write body content to the output.
 
     The LLM formatter produces valid markdown (headings, tables, code blocks).
-    We write it as-is without splitting — any header manipulation is handled
-    by ``_render_markdown_with_sections`` in pipeline.core when needed.
+    We write it as-is without splitting — header rendering (title + body) is
+    handled by ``pipeline.markdown_utils.render_markdown`` before chunking.
     """
     lines.append("")
     lines.append(body.strip())

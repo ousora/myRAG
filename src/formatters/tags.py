@@ -9,6 +9,8 @@ from __future__ import annotations
 import re
 from collections import Counter
 
+from myrag.cjk import count_cjk
+
 # Multi-language stopword sets keyed by detected script family.
 _STOP_WORDS_BY_SCRIPT: dict[str, frozenset[str]] = {
     "latin": frozenset({
@@ -124,7 +126,7 @@ def extract_tags_from_body(body: str, title: str) -> list[str]:
 
 def _detect_body_script(text: str) -> str:
     """Detect the dominant writing script of *text* ('latin' | 'cjk')."""
-    cjk_chars = sum(1 for ch in text if "\u4e00" <= ch <= "\u9fff")
+    cjk_chars = count_cjk(text)
     latin_chars = sum(1 for ch in text if ("A" <= ch <= "Z") or ("a" <= ch <= "z"))
     total = cjk_chars + latin_chars
     if total == 0:

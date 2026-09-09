@@ -1,5 +1,6 @@
 """System prompts for the text formatter module."""
 
+import copy
 
 SYSTEM_PROMPT = """\
 You are a document structure extractor. The user provides raw text from a {source_type} that may contain content mixed with navigation chrome, UI labels, footers, and other non-content artifacts.
@@ -336,7 +337,6 @@ def validate_format_output(result: dict) -> list[str]:
 
 def try_fix_common_issues(result: dict) -> dict:
     """Attempt to fix common formatting issues without re-calling the LLM."""
-    import copy
     fixed = copy.deepcopy(result)
 
     # Ensure tags is a list of strings

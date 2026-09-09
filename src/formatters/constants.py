@@ -10,7 +10,7 @@ Note for llama.cpp users:
 """
 
 # ── Formatter (single-shot) schema ────────────────────────────────────────
-# Matches the dict shape returned by format_text_single / _format_text_chunked_merged.
+# Matches the dict shape returned by format_text_single / _format_text_chunked_uncached.
 FORMATTER_SCHEMA = {
     "type": "object",
     "required": ["title", "tags", "metadata", "body"],

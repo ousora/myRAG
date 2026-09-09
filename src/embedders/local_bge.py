@@ -12,6 +12,7 @@ from __future__ import annotations
 import logging
 
 from config import get_config
+from myrag.cjk import count_cjk
 
 from .bge_m3 import (
     _embed_cache_get,
@@ -258,7 +259,7 @@ class LocalEmbedder:
         more accurate than the naive ``len // 2`` which underestimates Chinese
         text by ~50%.
         """
-        cjk = sum(1 for ch in text if "\u4e00" <= ch <= "\u9fff")
+        cjk = count_cjk(text)
         ascii_alnum = sum(1 for ch in text if ch.isascii() and ch.isalnum())
         other_ascii = len(text) - cjk - ascii_alnum
 
