@@ -441,20 +441,14 @@ def rag_query(question: str, db_path: str, *, k: int = 5,
     e = None
     if not keyword_only:
         # Embed the query with the retrieval instruction prefix (bge-m3 needs it).
-        # embed_query returns a single vector for str input; normalize for the
-        # local backend which returns list[list[float]].
         e = embedder if embedder is not None else create_embedder()
         try:
             # Skip the bge retrieval-instruction prefix when fallback is on so
             # that, if the endpoint fails over to lexical hash vectors, the
             # query hashes the same raw token stream as document chunks.
             query_result = e.embed(question) if cfg.embedding_hash_fallback else e.embed_query(question)
-            if query_result and isinstance(query_result[0], list):
-                # Local backend returned a batch — take the first vector.
-                first = query_result[0]
-                query_vector = [float(v) for v in first]
-            else:
-                query_vector = [float(v) for v in cast("list[float]", query_result)]
+            # question is always a str, so embed returns a single list[float].
+            query_vector = [float(v) for v in cast("list[float]", query_result)]
         except Exception:
             if owned_e:
                 e.close()
