@@ -323,7 +323,12 @@ def process_file_with_md(filepath: str, *, output_dir: str = "./output/",
         return None
 
     raw_text = parser.parse(filepath)
-    cleaned = TextCleaner(**kwargs).clean(raw_text)
+    # Use the absolute CLEAN_RULES_PATH by default (matching _parse_and_format)
+    # so conf/clean_rules.yaml is applied regardless of CWD. Callers may still
+    # override rules_config via kwargs.
+    cleaned_kwargs = dict(kwargs)
+    cleaned_kwargs.setdefault("rules_config", str(CLEAN_RULES_PATH))
+    cleaned = TextCleaner(**cleaned_kwargs).clean(raw_text)
 
     result = _format_result(cleaned, filepath, use_llm=use_llm, cfg=cfg)
     if result is None:
