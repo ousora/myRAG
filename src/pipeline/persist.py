@@ -25,11 +25,12 @@ def persist_to_db(
     summary_text: str,
     filepath: str,
     db_write_lock: Any,
-) -> tuple[list[dict[str, Any]], dict[str, Any], str]:
+) -> tuple[list[dict[str, Any]], dict[str, Any], str | None]:
     """Embed chunks and persist to sqlite-vec.
 
-    Returns ``(stored_chunks, stored_doc, db_path)`` on success, or the
-    fallback ``(stored_chunks, stored_doc, store_path)`` on exception.
+    Returns ``(stored_chunks, stored_doc, store_path)`` on success, or
+    ``(stored_chunks, stored_doc, None)`` when embedding/storage failed and
+    the result degraded to in-memory, vector-less chunks.
 
     The lock serializes DB writes across batch threads; the context manager
     closes the connection even when an upsert fails mid-way.
@@ -37,16 +38,16 @@ def persist_to_db(
     from embedders import maybe_create_embedder
     from storage.sqlite_vec import SQLiteVecStore
 
-    e = maybe_create_embedder()
+    e: Any = None
     try:
+        e = maybe_create_embedder()
         if e is None:
             # Embedding disabled (mode="none"): persist without vectors;
             # retrieval runs keyword-only. upsert_chunks defaults to a
             # zero-vector placeholder when "embedding" is missing.
-            stored_chunks: list[dict] = [
-                {**c, "source_doc_id": doc_id, "chunk_index": i}
-                for i, c in enumerate(all_chunks)
-            ]
+            stored_chunks, stored_doc = _build_stored_result(
+                all_chunks, doc_id, title, tags, summary_text, filepath,
+            )
             doc_embedding: list[float] | None = None
         else:
             stored_chunks = e.store_chunks(all_chunks, doc_id=doc_id)
@@ -73,12 +74,12 @@ def persist_to_db(
             )
     except (httpx.HTTPError, RuntimeError, sqlite3.Error, MyRagException) as exc:
         logger.warning("Embedding/storage failed (%s): %s", type(exc).__name__, exc)
-        from pipeline.hybrid import _build_stored_result
-
         stored_chunks, stored_doc = _build_stored_result(
             all_chunks, doc_id, title, tags, summary_text, filepath, truncate_summary=True,
         )
-        return stored_chunks, stored_doc, store_path
+        # Nothing was persisted (or only partial writes landed before the
+        # failure), so report no DB path — matching the pre-refactor contract.
+        return stored_chunks, stored_doc, None
     finally:
         if e is not None:
             e.close()
@@ -95,7 +96,6 @@ def _build_stored_result(
     summary_text: str,
     filepath: str,
     *,
-    embedding: list[float] | None = None,
     truncate_summary: bool = False,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """Build the ``(stored_chunks, stored_doc)`` pair for persistence or fallback.
@@ -114,6 +114,4 @@ def _build_stored_result(
         "source_file": filepath,
         "total_chunks": len(stored_chunks),
     }
-    if embedding is not None:
-        stored_doc["embedding"] = embedding
     return stored_chunks, stored_doc
