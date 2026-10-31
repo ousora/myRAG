@@ -14,12 +14,9 @@ from __future__ import annotations
 import concurrent.futures
 import logging
 import re
-import sqlite3
 import threading
 from pathlib import Path
 from typing import Any, cast
-
-import httpx
 
 # Trigger parser registration at module load time
 import parsers  # noqa: F401 — loads dispatcher (MarkItDown + Trafilatura)
@@ -27,10 +24,14 @@ import parsers.markdown_normalizer  # noqa: F401 — registers normalize_markdow
 from chunkers import Chunker
 from config import CLEAN_RULES_PATH
 from config import get_config as _get_config
-from myrag.exceptions import MyRagException
 from parsers.text_cleaner import TextCleaner
 
 from . import markdown_utils, utils  # noqa: F401,TC001 — re-exported for test patching
+from .persist import _build_stored_result, persist_to_db  # noqa: F401,TC001 — re-exported for test patching
+from .rerank_utils import (  # noqa: F401,TC001 — re-exported for test patching
+    fill_missing_chunk_vectors,
+    rerank_with_mmr,
+)
 from .utils import build_doc_summary as _build_doc_summary  # noqa: F401,TC001 — re-exported for test import
 
 logger = logging.getLogger(__name__)
@@ -216,82 +217,18 @@ def process_file_hybrid(filepath: str, *, doc_id: str = "doc_0",
     summary_text = _build_doc_summary(title, tags, body_for_summary)
 
     # 4. Embed + optionally persist to sqlite-vec
-    db_path = None
-
     if store_path:
-        try:
-            from embedders import maybe_create_embedder
-            from storage.sqlite_vec import SQLiteVecStore
-
-            e = maybe_create_embedder()
-            try:
-                if e is None:
-                    # Embedding disabled (mode="none"): persist without vectors;
-                    # retrieval runs keyword-only. upsert_chunks defaults to a
-                    # zero-vector placeholder when "embedding" is missing.
-                    stored_chunks = [
-                        {**c, "source_doc_id": doc_id, "chunk_index": i}
-                        for i, c in enumerate(all_chunks)
-                    ]
-                    doc_embedding = None
-                else:
-                    stored_chunks = e.store_chunks(all_chunks, doc_id=doc_id)
-
-                    # Document-level index (B) — only embed when we persist it.
-                    stored_doc = e.store_document(
-                        title=title,
-                        tags=tags,
-                        text_summary=summary_text,
-                        source_file=filepath,
-                        total_chunks=len(stored_chunks),
-                    )
-                    doc_embedding = stored_doc.get("embedding")
-
-                # The lock serializes DB writes across batch threads; the
-                # context manager closes the connection even when an upsert
-                # fails mid-way.
-                with _DB_WRITE_LOCK, SQLiteVecStore(store_path) as db:
-                    # Store chunks with embeddings
-                    db.upsert_chunks(stored_chunks, doc_id=doc_id)
-
-                    # Store document-level record
-                    db.upsert_document(
-                        title=title,
-                        tags=tags,
-                        text_summary=summary_text,
-                        source_file=filepath,
-                        total_chunks=len(stored_chunks),
-                        embedding=doc_embedding,
-                    )
-            finally:
-                if e is not None:
-                    e.close()
-
-            db_path = store_path
-            logger.info("  → Persisted %d chunks + 1 doc to %s", len(stored_chunks), store_path)
-        except (httpx.HTTPError, RuntimeError, sqlite3.Error, MyRagException) as exc:
-            logger.warning("Embedding/storage failed (%s): %s", type(exc).__name__, exc)
-            stored_chunks = [{"text": c["text"], "section_path": c.get("section_path", ["General"]),
-                              "source_doc_id": doc_id, "chunk_index": i} for i, c in enumerate(all_chunks)]
-            stored_doc = {
-                "title": title,
-                "tags": tags,
-                "text_summary": summary_text[:1000],
-                "source_file": filepath,
-                "total_chunks": len(stored_chunks),
-            }
+        stored_chunks, stored_doc, db_path = persist_to_db(
+            all_chunks, store_path, doc_id, title, tags, summary_text, filepath,
+            _DB_WRITE_LOCK,
+        )
     else:
         # No persistence requested — skip all embedding (the most expensive
         # remote step) and return lightweight metadata only.
-        stored_chunks = [{"text": c["text"], "section_path": c.get("section_path", ["General"]),
-                          "source_doc_id": doc_id, "chunk_index": i} for i, c in enumerate(all_chunks)]
-        stored_doc = {
-            "title": title,
-            "tags": tags,
-            "text_summary": summary_text,
-            "source_file": filepath,
-            "total_chunks": len(stored_chunks),
-        }
+        stored_chunks, stored_doc = _build_stored_result(
+            all_chunks, doc_id, title, tags, summary_text, filepath,
+        )
+        db_path = None
 
     return {
         "chunks": stored_chunks,       # A - fine-grained index
@@ -495,27 +432,12 @@ def rag_query(question: str, db_path: str, *, k: int = 5,
 
         # 3. Re-rank chunks (MMR) for diversity, then assemble context.
         if len(results) > 1 and e is not None:
-            from rerank import mmr_rerank
-
             # Fall back to embedding only the chunks whose vectors are missing
             # from the store (e.g. legacy rows written before the embedding col).
             if any(not v for v in chunk_vectors):
-                from embedders.bge_m3 import chunk_embed_text
-
-                embedded_missing: list[list[float]] | list[float] = e.embed([
-                    chunk_embed_text(c)
-                    for c, v in zip(results, chunk_vectors, strict=True) if not v
-                ])
-                for emb in embedded_missing:
-                    if not isinstance(emb, list) or not emb or isinstance(emb[0], list):
-                        continue
-                    # Fill the first empty slot in order.
-                    for i, v in enumerate(chunk_vectors):
-                        if not v:
-                            chunk_vectors[i] = emb
-                            break
+                chunk_vectors = fill_missing_chunk_vectors(chunk_vectors, results, e)
             assert query_vector is not None  # MMR block only runs with an embedder
-            results = mmr_rerank(question, query_vector, chunk_vectors, results, k=k)
+            results = rerank_with_mmr(question, query_vector, chunk_vectors, results, k=k)
     finally:
         if owned_e and e is not None:
             e.close()

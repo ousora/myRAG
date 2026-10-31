@@ -186,8 +186,11 @@ myrag/
 │   │   ├── __init__.py       # Package init
 │   │   ├── core.py           # Core functions: process_file, process_directory, process_file_hybrid, rag_query
 │   │   ├── cli.py            # CLI entry point with argparse subcommands
+│   │   ├── hybrid.py         # LLM-powered pipeline functions
 │   │   ├── ingest.py         # _ingest_markdown function
 │   │   ├── markdown_utils.py # Markdown rendering + reference section stripping
+│   │   ├── persist.py        # DB persistence helpers (extracted from hybrid.py)
+│   │   ├── rerank_utils.py   # MMR re-ranking helpers (extracted from hybrid.py)
 │   │   └── utils.py          # Parser resolution + doc summary helpers
 │   ├── parsers/              # MarkItDown + Trafilatura dispatcher
 │   │   ├── dispatcher.py
@@ -270,7 +273,7 @@ print(cfg.llm_endpoint)  # from your config file
 ```bash
 cd myrag
 uv run pytest -v
-# 315 tests: chunkers 15 + formatters 60 + storage 70 + config 11 + parsers 50 + embedders 35 + myrag 6 + pipeline 57 + integration/e2e 11
+# 319 tests: chunkers 15 + formatters 60 + storage 70 + config 11 + parsers 50 + embedders 35 + myrag 6 + pipeline 57 + integration/e2e 11
 ```
 
 ### Linting

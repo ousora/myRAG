@@ -85,9 +85,9 @@ class TestProcessFileHybridEmbeddingFallback:
             assert chunk["source_doc_id"] == "doc_0"
         # Document record is persisted without an embedding too.
         assert result["document"]["source_file"] == "doc.txt"
-        # Nothing was written to the store (the failure preceded the DB write),
-        # so the returned chunks are in-memory and db_path stays None.
-        assert result["db_path"] is None
+        # The failure path persists chunks without vectors to the DB,
+        # so db_path is set (data was written via fallback).
+        assert result["db_path"] == "/tmp/fallback.db"
 
     def test_store_document_error_degrades_to_keyword_only(self):
         """An EmbeddingError from store_document (after chunks embedded) also degrades instead of propagating."""

@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+### Changed
+
+- **`pipeline.hybrid` refactored into three modules**: `persist.py` (DB persistence logic), `rerank_utils.py` (MMR re-ranking helpers), keeping `hybrid.py` at 483 lines (under the 500-line limit). No behavior change.
+- **`chunkers/__init__.py` restructured**: canonical implementation moved to `chunkers/chunker.py`; `__init__.py` now does clean re-export. All import paths unchanged.
+- **`cli.py` log directory uses `PROJECT_ROOT`**: log files now created at `<repo>/logs/` instead of CWD-relative `logs/`, matching the rest of the codebase's CWD-independent path strategy.
+- **`test_sqlite_vec.py` split into eight focused modules**: `test_upsert.py`, `test_search.py`, `test_hybrid.py`, `test_documents.py`, `test_fts5.py`, `test_vec0.py`, `test_cjk.py`, `test_misc.py`. Shared fixtures consolidated in `conftest.py`. All 42 original tests preserved. No behavior change.
+
 ### Fixed
 
 - **`process_file_hybrid` degradation path missed typed embedding errors**: the embed-or-persist try/except caught `(httpx.HTTPError, RuntimeError, sqlite3.Error)` but not `MyRagException`, so a dimension/count validation failure (`EmbeddingError`, e.g. an endpoint serving the wrong model dimension) propagated out of the function instead of degrading to keyword-only storage. Added `MyRagException` to the caught tuple; embedding/storage failures now reliably fall back to persisting chunks without vectors. (src/pipeline/hybrid.py)

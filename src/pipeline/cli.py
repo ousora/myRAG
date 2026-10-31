@@ -5,7 +5,6 @@ import json
 import logging
 import logging.handlers
 import sys
-from pathlib import Path
 from typing import Any
 
 from config import get_config as _get_config
@@ -70,7 +69,9 @@ def main() -> int:
     args = parser.parse_args()
 
     # Setup logging: console + file
-    log_dir = Path("logs")
+    from config import PROJECT_ROOT
+
+    log_dir = PROJECT_ROOT / "logs"
     if log_dir.is_file():
         _msg = f"'{log_dir}' exists as a file, not a directory"
         raise OSError(_msg)
